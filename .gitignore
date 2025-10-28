@@ -1,0 +1,9 @@
+.pio/
+.vscode/.browse.VC.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+.DS_Store
+__pycache__/
+*.code-workspace
+*.zip
