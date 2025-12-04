@@ -1,0 +1,34 @@
+{
+  "terminals": [
+    {
+      "splitTerminals": [
+        {
+          "name": "er1-logging",
+          "commands": [
+            "mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v | ts"
+          ]
+        }
+      ]
+    },
+    {
+      "splitTerminals": [
+        {
+          "name": "room1-images",
+          "commands": [
+            "mosquitto_sub -h 192.168.0.10 -t 'esc/room1/images_piano/#' -v | ts"
+          ]
+        }
+      ]
+    },
+    {
+      "splitTerminals": [
+        {
+          "name": "room3-knocking",
+          "commands": [
+            "mosquitto_sub -h 192.168.0.10 -t 'esc/room3/knocking/#' -v | ts"
+          ]
+        }
+      ]
+    }
+  ]
+}

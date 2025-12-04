@@ -5,8 +5,8 @@
 #include <Update.h>
 
 // ======================= FIRMWARE INFO =======================
-// bumped version for debug build
-static const char *FW_VERSION = "images_piano_v1.5_4btn_eth_ota_solved_open_debug";
+// bumped version for new solve logic
+static const char *FW_VERSION = "images_piano_v1.6_4btn_eth_ota_solved_open_edge";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -60,7 +60,7 @@ struct ButtonState {
 
 ButtonState btn[N_BTNS];
 
-// Track "all 4 pressed" edge
+// Track "all 4 pressed" state to detect rising edge
 bool allPressedPrev = false;
 
 // ======================= GLOBALS =============================
@@ -234,7 +234,12 @@ void handleButtonEdge(int idx, bool newState) {
 }
 
 // ======================= IMAGES SOLVE LOGIC ==================
+// SOLVED only when:
+//  - all 4 buttons are pressed at the same time (all LOW)
+//  - we *just* transitioned from "not all pressed" to "all pressed"
+//  - that gives exactly one SOLVED per "all-pressed" episode
 void checkImagesSolved() {
+  // Check current "all pressed" state using debounced values
   bool allPressedNow = true;
   for (int i = 0; i < N_BTNS; i++) {
     if (btn[i].cur != LOW) {  // INPUT_PULLUP: LOW = pressed
@@ -243,9 +248,9 @@ void checkImagesSolved() {
     }
   }
 
-  // Edge: previously not all pressed, now all pressed
+  // Rising edge: previously not all pressed, now all pressed
   if (!allPressedPrev && allPressedNow) {
-    publishLog("INFO", "ALL 4 BUTTONS PRESSED -> SOLVED (images)");
+    publishLog("INFO", "ALL 4 BUTTONS PRESSED EDGE -> SOLVED (images)");
     if (enabled) {
       publishSolvedEvent("images");
       openImagesMaglock();
@@ -254,6 +259,7 @@ void checkImagesSolved() {
     }
   }
 
+  // Remember for next loop
   allPressedPrev = allPressedNow;
 }
 
@@ -316,7 +322,16 @@ void setup() {
     btn[i].cur  = lvl;
     btn[i].prev = lvl;
   }
-  allPressedPrev = false;
+
+  // Initialise allPressedPrev to the *current* state so we don't
+  // fire a SOLVED immediately on boot if all 4 are already held.
+  allPressedPrev = true;
+  for (int i = 0; i < N_BTNS; i++) {
+    if (btn[i].cur != LOW) {
+      allPressedPrev = false;
+      break;
+    }
+  }
 
   // Ethernet reset
   pinMode(ETH_RST, OUTPUT);
@@ -354,7 +369,7 @@ void loop() {
     }
   }
 
-  // Check images riddle solve condition
+  // Check images riddle solve condition (all 4 pressed edge)
   checkImagesSolved();
 
   // Metrics + heartbeat

@@ -1,0 +1,157 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build+ota maglock_ctrl",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "maglock_ctrl"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room1_images_piano",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "images_piano"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room2_chess",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "chess"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room3_knocking",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "knocking"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room3_candles",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "candle"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room3_star_sky",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "star_sky"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room3_star_slider",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "star_slider"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "build+ota room3_stop_timer",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "ota.ps1",
+                "-Target",
+                "stop_timer"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+
+        {
+            "label": "er1: mqtt last2min",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\er1_logs\\er1_mqtt_logs.ps1"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        }
+    ]
+}

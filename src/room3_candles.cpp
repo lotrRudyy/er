@@ -33,7 +33,7 @@ PubSubClient mqtt(ethClient);
 
 static const char* ROOT = "esc";
 static const char* ROOM = "room3";
-static const char* DEV  = "candle";
+static const char* DEV  = "candles";
 String topic_hb  = String(ROOT)+"/"+ROOM+"/"+DEV+"/hb";
 String topic_evt = String(ROOT)+"/"+ROOM+"/"+DEV+"/event";
 String topic_cmd = String(ROOT)+"/"+ROOM+"/"+DEV+"/cmd";
@@ -50,7 +50,7 @@ static void setupEthernet(){
   Ethernet.init(ETH_CS);
   genMac(MAC);
   if (Ethernet.begin(MAC) == 0) {
-    IPAddress ip(192,168,4,54), dns(192,168,4,1), gw(192,168,4,1), sn(255,255,255,0);
+    IPAddress ip(192,168,0,15), dns(0,0,0,0), gw(0,0,0,0), sn(255,255,255,0);
     Ethernet.begin(MAC, ip, dns, gw, sn);
   }
 }
