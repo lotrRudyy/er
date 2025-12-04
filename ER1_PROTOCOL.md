@@ -1,8 +1,9 @@
-# ER1 Protocol (Rudy × ChatGPT) — v1.2.1
+# ER1 Protocol (Rudy × ChatGPT) v1.2.3
 
 ## 0. Purpose
 
 This protocol defines how all development for the ER1 escape-room project is done:
+
 - Firmware
 - Logging
 - Node-RED
@@ -22,16 +23,16 @@ Apply to every ESP32 node unless explicitly overridden:
 
 - Transport: Ethernet-only with W5500 (no WiFi unless explicitly requested).
 - Static IPs: must follow the ER1 IP plan.
-- MQTT topics:  
+- MQTT topics:
   esc/<room>/<device>/{hb,event,cmd,log,metric}
-- Device IDs (<device>):  
+- Device IDs (<device>):
   Must be snake_case and consistent across:
   - Firmware
   - MQTT
   - OTA paths
   - Node-RED
   - Scripts
-- OTA path:  
+- OTA path:
   /firmware/<dev>.bin
 - Pattern:
   - FSM
@@ -41,7 +42,7 @@ Apply to every ESP32 node unless explicitly overridden:
   - Retained heartbeat and retained critical state
   - Local fallback logic where required (e.g. verifyAll())
 
-Maglocks may be controlled only by maglock_ctrl.  
+Maglocks may be controlled only by maglock_ctrl.
 Riddle nodes never drive maglocks directly.
 
 If a sketch violates these rules, fix it and explicitly state what was corrected.
@@ -53,26 +54,28 @@ If a sketch violates these rules, fix it and explicitly state what was corrected
 - Always start from the last confirmed working sketch unless a newer one is provided.
 - Only change what Rudy explicitly asks for.
 - Always bump FW_VERSION on every change.
-- After Rudy confirms stability, always ask:  
+- After Rudy confirms stability, always ask:
   “Should I store this as the new working version?”
 
 ---
 
 ## 3. Logging Rules (ts with milliseconds)
 
-All MQTT log commands must use:
+- All MQTT log commands must run through the exact pipeline below and no alternatives:
 
-    mosquitto_sub -h <IP> -t '<topic>' -v | ts '[%d.%m.%Y %H:%M:%.S]'
+      mosquitto_sub -h <IP> -t '<topic>' -v \
+        | ts '[%d.%m.%Y %H:%M:%S.%N]' \
+        | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
 
-Log lines must look like:
-
-    [04.12.2025 05:39:29.924] esc/... {...}
-
-Any other timestamp style is incorrect.
-
-JSON in chat must always be compact inline, for example:
-
-    {"lvl":"INFO","msg":"BTN idx=2 pin=14 state=RELEASED dt=30ms presses=288"}
+- Log lines must look like `[04.12.2025 05:39:29.924] esc/... {...}`.
+- Logging is centralized on the Pi under `/home/rudyy/er/logs/YYYY-MM-DD.log`. `scripts/mqtt-logs.sh live` maintains the rolling logfile and also prints live output.
+- To view logs, source `scripts/aliases.er1.sh` and use:
+  - `log_live` to start the aggregator (LOCAL broker only).
+  - `log_tail` to follow today’s file.
+  - `log_grep <pattern>` to grep today’s file.
+- Remote broker access is for control commands only; logging always uses the local broker.
+- JSON in chat must always be compact inline, e.g. `{"lvl":"INFO","msg":"BTN idx=2 pin=14 state=RELEASED dt=30ms presses=288"}`.
+- `docs/mqtt_commands.md` holds the current lock and logging cheatsheet plus references to `scripts/mqtt-logs.sh` and `scripts/mqtt-locks.sh`.
 
 ---
 
@@ -119,10 +122,59 @@ Codex is mandatory when:
 - JSON structure changes.
 - VS Code config changes.
 - PlatformIO config changes.
-- Large logs (>30–50 lines) need analysis.
+- Large logs (>30-50 lines) need analysis.
 - Any non-trivial change.
 
 Codex is the default. Chat patching is the exception.
+
+### 4.4 Codex change application & confirmation
+
+Codex must not constantly ask for permission for individual edits once a prompt has been given.
+- Rudy already approved single-confirmation workflow: when a command is clearly required but blocked by sandboxing, Codex must immediately retry it with the needed escalation instead of asking again.
+- When requesting Rudy's confirmation, include a Markdown link to the updated `ER1_CODEX_REPORT.md` once so he can review details, and do not repeat the confirmation request unless he explicitly asks.
+
+For each prompt, Codex should:
+
+- Apply all changes that are clearly implied by the prompt and by this protocol (across all required files).
+- Write a single, well-formatted report file in the repo, e.g. ER1_CODEX_REPORT.md (or update the existing one) that includes:
+  - List of all modified files.
+  - For each file: short summary of what changed.
+  - Short before/after snippets for the most important edits.
+
+In its chat response, Codex must explicitly tell Rudy:
+
+- That the changes have been applied.
+- That the report file was updated.
+- That Rudy should review and confirm whether to keep these changes or revert them with git.
+
+Codex must assume changes are tentative until Rudy confirms. It must not act as if they are "final" (e.g. by updating protocol references or telling future tools they are stable) until Rudy has explicitly confirmed.
+
+### 4.5 No-Confirmation Execution (Mandatory)
+
+Codex must NEVER ask Rudy for confirmation before applying changes.  
+A Codex prompt is ALWAYS treated as full authorization.  
+Codex must:
+
+1. Apply ALL changes described in the prompt across ALL relevant files.
+2. Write a full change log into ER1_CODEX_REPORT.md.
+3. Provide a compact summary in chat.
+4. Never pause execution to request human approval.
+
+If ambiguity exists, Codex must choose the **most consistent, protocol-aligned interpretation**, apply it, and clearly document what it chose and why in ER1_CODEX_REPORT.md.
+
+Rollbacks are handled via Git; Codex must not implement interactive approval flows.
+
+### 4.6 Formatting + Markdown linting
+
+- `.editorconfig` is the single source of truth for whitespace: LF endings, UTF-8, final newline, trailing whitespace trimming, and space indentation (2 spaces for source + docs, with overrides defined per file type). Keep the EditorConfig VS Code extension enabled so these rules apply automatically.
+- Markdown is linted via `.markdownlint.json`. MD013 (line length) stays disabled so shell commands remain readable, and MD033 (inline HTML) stays off for flexibility. Install `DavidAnson.vscode-markdownlint` so every doc edit surfaces issues locally.
+- If formatting rules need to change, update `.editorconfig` or `.markdownlint.json` instead of overriding settings locally, so the entire team stays aligned.
+
+### 4.7 ER1 Terminal Workflow (tmux session)
+
+- The standard Pi workflow is: `cd /home/rudyy/er && ./scripts/er1-tmux.sh`.
+- If the `er1` tmux session already exists, the script simply attaches; otherwise it creates a three-pane layout (main shell, live MQTT logs, and a grep-ready shell with `scripts/mqtt-logs.sh grep ERROR` prefilled). Pane titles are `er1-main`, `er1-pi-log-mqtt`, and `er1-pi-log-grep`.
+- tmux auto-starts `scripts/mqtt-logs.sh live` so the daily logfile is always running in the background. Use pane 3 or `log_grep` / `log_tail` for investigations without touching the live capture.
 
 ---
 
@@ -152,7 +204,7 @@ ChatGPT must automatically store all new ER1 information Rudy gives, including:
 - Naming conventions.
 - Debug insights and lessons learned.
 
-Rudy does not need to say “save this”.  
+Rudy does not need to say “save this”.
 Latest information always overrides older information.
 
 ---
@@ -162,7 +214,7 @@ Latest information always overrides older information.
 When ChatGPT sees a pattern that should be a rule, it must:
 
 1. Propose exact text to add or change in this protocol.
-2. Explicitly ask:  
+2. Explicitly ask:
    “Do you want to add this to the ER1 Protocol?”
 
 No silent protocol changes.
@@ -177,7 +229,7 @@ To keep the entire ER1 project consistent:
 
 - Use lowercase with underscores.
 - Examples:
-  - restore_terminals.json
+  - mqtt_snapshot.json
   - er1_logs
   - ota_script.ps1
 
@@ -247,6 +299,9 @@ Invalid forms that must be eliminated:
 
 Existing code using invalid forms must be migrated to these canonical IDs via Codex.
 
+**8.6.1 Tooling/UI labels for devices**
+Any label, button text, or task name that directly represents a device (VS Code tasks, Task Button labels, OTA script targets, Node-RED control buttons, etc.) must use the canonical device ID string exactly (snake_case, as in the canonical list). No abbreviations or alternate spellings are allowed.
+
 ---
 
 ## 9. Project Scope
@@ -267,7 +322,7 @@ This protocol governs:
 
 ## 10. Future Versions
 
-This file is ER1 Protocol v1.2.1.
+This file is ER1 Protocol v1.2.3.
 
 - Any changes to workflow, naming, architecture, or tooling that are meant to be permanent must be added here.
 - New versions must update the version number at the top.

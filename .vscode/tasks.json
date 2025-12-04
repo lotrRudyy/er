@@ -1,155 +1,166 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "build+ota room0_maglock_ctrl",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "maglock_ctrl"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room1_images_piano",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "er1\\ota.ps1",
-                "-Target",
-                "images_piano"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room2_chess",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "chess"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room3_knocking",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "knocking"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room3_candles",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "candles"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room3_star_sky",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "star_sky"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room3_star_slider",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "star_slider"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "build+ota room3_stop_timer",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\ota.ps1",
-                "-Target",
-                "stop_timer"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "er1: mqtt last2min",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "er1\\logs\\er1_mqtt_logs.ps1"
-            ],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "OTA: maglock_ctrl",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "maglock_ctrl"
+      ]
+    },
+    {
+      "label": "OTA: images_piano",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "images_piano"
+      ]
+    },
+    {
+      "label": "OTA: chess",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "chess"
+      ]
+    },
+    {
+      "label": "OTA: knocking",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "knocking"
+      ]
+    },
+    {
+      "label": "OTA: candles",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "candles"
+      ]
+    },
+    {
+      "label": "OTA: star_sky",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "star_sky"
+      ]
+    },
+    {
+      "label": "OTA: star_slider",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "star_slider"
+      ]
+    },
+    {
+      "label": "OTA: stop_timer",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "er1\\ota.ps1",
+        "-Target",
+        "stop_timer"
+      ]
+    },
+    {
+      "label": "ER1: Open Terminal 1 (SSH)",
+      "type": "shell",
+      "command": "ssh rudyy@er1-pi",
+      "presentation": {
+        "panel": "new",
+        "group": "er1term"
+      }
+    },
+    {
+      "label": "ER1: Open Terminal 2 (Live Log)",
+      "type": "shell",
+      "command": "ssh rudyy@er1-pi \"cd ~/er; scripts/mqtt-logs.sh live\"",
+      "presentation": {
+        "panel": "new",
+        "group": "er1term"
+      }
+    },
+    {
+      "label": "ER1: Open Terminal 3 (Grep Ready)",
+      "type": "shell",
+      "command": "ssh rudyy@er1-pi \"cd ~/er; bash\"",
+      "presentation": {
+        "panel": "new",
+        "group": "er1term"
+      }
+    },
+    {
+      "label": "ER1: Open All Terminals",
+      "type": "shell",
+      "command": "echo Opening ER1 terminals...",
+      "dependsOn": [
+        "ER1: Open Terminal 1 (SSH)",
+        "ER1: Open Terminal 2 (Live Log)",
+        "ER1: Open Terminal 3 (Grep Ready)"
+      ],
+      "presentation": {
+        "reveal": "never"
+      },
+      "problemMatcher": []
+    }
+  ]
 }

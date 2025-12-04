@@ -1,10 +1,15 @@
 param(
+    [ValidateSet("maglock_ctrl","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
     [string]$Target,
     [string]$Env,
     [string]$Dev,
     [string]$Room,
     [switch]$NoBuild
 )
+
+$scriptDir = Split-Path -Parent $PSCommandPath
+Push-Location $scriptDir
+try {
 
 # ============ DEVICE MAP ============
 # Valid -Target values:
@@ -103,3 +108,7 @@ Write-Host "== Triggering OTA on $topicUpdate =="
 ssh "$piUser@$piHost" "mosquitto_pub -h 192.168.0.10 -t '$topicUpdate' -m 'UPDATE'"
 
 Write-Host "== DONE. Device will update. =="
+
+} finally {
+    Pop-Location
+}

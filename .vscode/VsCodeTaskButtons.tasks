@@ -1,0 +1,16 @@
+{
+  "taskButtons.tasks": [
+    { "task": "OTA: maglock_ctrl", "text": "maglock_ctrl" },
+    { "task": "OTA: images_piano", "text": "images_piano" },
+    { "task": "OTA: chess", "text": "chess" },
+    { "task": "OTA: knocking", "text": "knocking" },
+    { "task": "OTA: candles", "text": "candles" },
+    { "task": "OTA: star_sky", "text": "star_sky" },
+    { "task": "OTA: star_slider", "text": "star_slider" },
+    { "task": "OTA: stop_timer", "text": "stop_timer" },
+    { "task": "ER1: Open Terminal 1 (SSH)", "text": "ssh-1" },
+    { "task": "ER1: Open Terminal 2 (Live Log)", "text": "log" },
+    { "task": "ER1: Open Terminal 3 (Grep Ready)", "text": "grep" },
+    { "task": "ER1: Open All Terminals", "text": "er1-all" }
+  ]
+}
