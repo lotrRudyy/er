@@ -5,8 +5,8 @@
 #include <Update.h>
 
 // ======================= FIRMWARE INFO =======================
-// bumped version for new solve logic
-static const char *FW_VERSION = "images_piano_v1.6_4btn_eth_ota_solved_open_edge";
+// bumped version for naming cleanup
+static const char *FW_VERSION = "images_piano_v1.7_4btn_eth_ota_solved_open_edge";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -17,7 +17,7 @@ static const char *FW_VERSION = "images_piano_v1.6_4btn_eth_ota_solved_open_edge
 
 // ======================= NETWORK CONFIG ======================
 byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57 };  // unique-ish MAC
-IPAddress ip     (192, 168, 0, 12); // room1 images/piano node
+IPAddress ip     (192, 168, 0, 12); // room1 images_piano node (buttons=images, mic=piano)
 IPAddress dns    (0, 0, 0, 0);
 IPAddress gw     (0, 0, 0, 0);
 IPAddress subnet (255, 255, 255, 0);
@@ -43,7 +43,7 @@ static const uint16_t OTA_PORT = 80;
 static const char *OTA_PATH  = "/firmware/images_piano.bin";
 
 // ======================= BUTTON CONFIG =======================
-// 4 buttons for the images riddle
+// 4 buttons for the images riddle (on images_piano node)
 static const int N_BTNS = 4;
 static const int BTN_PINS[N_BTNS] = { 25, 26, 14, 12 };
 
@@ -250,7 +250,7 @@ void checkImagesSolved() {
 
   // Rising edge: previously not all pressed, now all pressed
   if (!allPressedPrev && allPressedNow) {
-    publishLog("INFO", "ALL 4 BUTTONS PRESSED EDGE -> SOLVED (images)");
+    publishLog("INFO", "ALL 4 BUTTONS PRESSED EDGE -> SOLVED (images riddle)");
     if (enabled) {
       publishSolvedEvent("images");
       openImagesMaglock();

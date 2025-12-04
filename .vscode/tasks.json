@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build+ota maglock_ctrl",
+            "label": "build+ota room0_maglock_ctrl",
             "type": "shell",
             "command": "powershell",
             "args": [
@@ -81,7 +81,7 @@
                 "-File",
                 "ota.ps1",
                 "-Target",
-                "candle"
+                "candles"
             ],
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []

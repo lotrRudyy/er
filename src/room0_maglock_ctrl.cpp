@@ -5,7 +5,7 @@
 #include <Update.h>
 
 // ======================= FIRMWARE INFO =======================
-static const char *FW_VERSION = "maglock_ctrl_v11";
+static const char *FW_VERSION = "maglock_ctrl_v11.1";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -52,6 +52,13 @@ struct Lock {
 
 #define N_LOCKS 5
 
+// Canonical lock IDs (mirror MQTT topics under esc/ctrl/lock/<id>/...)
+static const char *LOCK_ID_IMAGES     = "images";
+static const char *LOCK_ID_DOOR_TO_R2 = "door_to_r2";
+static const char *LOCK_ID_DOOR_TO_R3 = "door_to_r3";
+static const char *LOCK_ID_SLIDER     = "slider";
+static const char *LOCK_ID_KNOCKING   = "knocking";
+
 // Mapping (per your current setup):
 // images     -> GPIO26 (fail-secure, OPEN = power ON for 1s)
 // door_to_r2 -> GPIO16 (fail-safe, OPEN = power OFF)
@@ -59,11 +66,11 @@ struct Lock {
 // slider     -> GPIO33 (fail-secure, OPEN = power ON for 1s)
 // knocking   -> GPIO25 (fail-secure, OPEN = power ON for 1s)
 Lock locks[N_LOCKS] = {
-  { "images",     26, false, false, 0 },
-  { "door_to_r2", 16, true,  false, 0 },
-  { "door_to_r3", 17, true,  false, 0 },
-  { "slider",     33, false, false, 0 },
-  { "knocking",   25, false, false, 0 }
+  { LOCK_ID_IMAGES,     26, false, false, 0 },
+  { LOCK_ID_DOOR_TO_R2, 16, true,  false, 0 },
+  { LOCK_ID_DOOR_TO_R3, 17, true,  false, 0 },
+  { LOCK_ID_SLIDER,     33, false, false, 0 },
+  { LOCK_ID_KNOCKING,   25, false, false, 0 }
 };
 
 // Fail-secure pulse length (ms) => 1 second
@@ -290,15 +297,16 @@ void handleGameEvent(const String &topic, const String &payload) {
   if (payload.indexOf("\"type\":\"SOLVED\"") < 0) return;
 
   // Check rid
-  if (payload.indexOf("\"rid\":\"knocking\"") < 0) return;
+  String ridMarker = String("\"rid\":\"") + LOCK_ID_KNOCKING + "\"";
+  if (payload.indexOf(ridMarker) < 0) return;
 
-  Lock *l = findLockById(String("knocking"));
+  Lock *l = findLockById(String(LOCK_ID_KNOCKING));
   if (!l) {
     publishLog("ERR", "No lock mapping for rid=knocking");
     return;
   }
 
-  publishLog("INFO", "EVENT SOLVED rid=knocking -> OPEN lock knocking");
+  publishLog("INFO", String("EVENT SOLVED rid=") + LOCK_ID_KNOCKING + " -> OPEN lock " + LOCK_ID_KNOCKING);
   handleLockOpen(*l);
 }
 

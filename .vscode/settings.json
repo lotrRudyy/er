@@ -28,14 +28,14 @@
     //     TASK BUTTONS SETUP
     // ============================
     "taskButtons.tasks": [
-        { "label": "Mag",  "task": "build+ota maglock_ctrl" },
-        { "label": "Img",  "task": "build+ota room1_images_piano" },
-        { "label": "Chs",  "task": "build+ota room2_chess" },
-        { "label": "Knk",  "task": "build+ota room3_knocking" },
-        { "label": "Cnd",  "task": "build+ota room3_candles" },
-        { "label": "Sky",  "task": "build+ota room3_star_sky" },
-        { "label": "Sld",  "task": "build+ota room3_star_slider" },
-        { "label": "Tmr",  "task": "build+ota room3_stop_timer" },
+        { "label": "Mag", "task": "build+ota room0_maglock_ctrl" },
+        { "label": "ImP", "task": "build+ota room1_images_piano" },
+        { "label": "Chs", "task": "build+ota room2_chess" },
+        { "label": "Knk", "task": "build+ota room3_knocking" },
+        { "label": "Cnd", "task": "build+ota room3_candles" },
+        { "label": "Sky", "task": "build+ota room3_star_sky" },
+        { "label": "Sld", "task": "build+ota room3_star_slider" },
+        { "label": "Stp", "task": "build+ota room3_stop_timer" },
 
         // NEW LOG BUTTON
         { "label": "Logs", "task": "er1: mqtt last2min" }
