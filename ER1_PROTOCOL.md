@@ -176,6 +176,17 @@ Rollbacks are handled via Git; Codex must not implement interactive approval flo
 - If the `er1` tmux session already exists, the script simply attaches; otherwise it creates a three-pane layout (main shell, live MQTT logs, and a grep-ready shell with `scripts/mqtt-logs.sh grep ERROR` prefilled). Pane titles are `er1-main`, `er1-pi-log-mqtt`, and `er1-pi-log-grep`.
 - tmux auto-starts `scripts/mqtt-logs.sh live` so the daily logfile is always running in the background. Use pane 3 or `log_grep` / `log_tail` for investigations without touching the live capture.
 
+## Manual Pi Update (Option A)
+
+deploy.sh is not tracked in Git.
+
+It lives only on the Pi at:
+`/home/rudyy/er/deploy.sh`
+
+Updates to the script must be done manually on the Pi.
+
+The `.gitignore` rule prevents accidental commits.
+
 ---
 
 ## 5. Post-Change Explanation

@@ -15,3 +15,6 @@ er1/.pio/
 # ER1 logs
 er1/logs/*.log
 !er1/logs/*.ps1
+
+# Pi-local deployment script
+deploy.sh
