@@ -11,7 +11,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "maglock_ctrl"
             ],
@@ -27,8 +27,7 @@
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
-                "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "images_piano"
             ],
@@ -45,7 +44,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "chess"
             ],
@@ -62,7 +61,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "knocking"
             ],
@@ -79,7 +78,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "candles"
             ],
@@ -96,7 +95,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "star_sky"
             ],
@@ -113,7 +112,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "star_slider"
             ],
@@ -130,14 +129,13 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "ota.ps1",
+                "er1\\ota.ps1",
                 "-Target",
                 "stop_timer"
             ],
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         },
-
         {
             "label": "er1: mqtt last2min",
             "type": "shell",
@@ -148,7 +146,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                "${workspaceFolder}\\er1_logs\\er1_mqtt_logs.ps1"
+                "er1\\logs\\er1_mqtt_logs.ps1"
             ],
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []

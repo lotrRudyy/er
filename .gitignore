@@ -9,3 +9,9 @@ __pycache__/
 *.zip
 !.vscode/settings.json
 
+# PlatformIO build output for ER1
+er1/.pio/
+
+# ER1 logs
+er1/logs/*.log
+!er1/logs/*.ps1
