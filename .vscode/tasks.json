@@ -128,25 +128,37 @@
       "presentation": {
         "panel": "new",
         "group": "er1term"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ER1: Open Terminal 1 (SSH)",
+      "type": "shell",
+      "command": "ssh rudyy@er1-pi",
+      "presentation": {
+        "panel": "new",
+        "group": "er1term"
       }
     },
     {
       "label": "ER1: Open Terminal 2 (Live Log)",
       "type": "shell",
-      "command": "ssh rudyy@er1-pi \"cd ~/er; scripts/mqtt-logs.sh live\"",
+      "command": "ssh rudyy@er1-pi",
       "presentation": {
         "panel": "new",
         "group": "er1term"
-      }
+      },
+      "problemMatcher": []
     },
     {
       "label": "ER1: Open Terminal 3 (Grep Ready)",
       "type": "shell",
-      "command": "ssh rudyy@er1-pi \"cd ~/er; bash\"",
+      "command": "ssh -t rudyy@er1-pi 'cd ~/er &&'",
       "presentation": {
         "panel": "new",
         "group": "er1term"
-      }
+      },
+      "problemMatcher": []
     },
     {
       "label": "ER1: Open All Terminals",
