@@ -1,26 +1,31 @@
-.pio/
-.vscode/.browse.VC.db*
-.vscode/c_cpp_properties.json
-.vscode/launch.json
-.vscode/ipch/
+# ---- IDE / OS clutter ----
 .DS_Store
 __pycache__/
 *.code-workspace
 *.zip
+
+# VS Code (keep only settings.json tracked)
+.vscode/.browse.VC.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
 !.vscode/settings.json
 
-# PlatformIO build output (now under per-ER firmware)
+# ---- PlatformIO build output ----
+# Old flat .pio plus per-ER firmware output
+.pio/
 er1/firmware/.pio/
 
-# ER1 Pi runtime: real logs and secrets stay on the Pi
+# ---- Pi runtime: logs and local secrets stay on the Pi ----
 er1/pi-runtime/logs/
 er1/pi-runtime/config/local.env
 
-# Skeleton placeholders for future rooms (ignore their runtime logs/config if created)
+# Skeleton placeholders for future rooms
+# (ignore their runtime logs/config if created)
 er2/pi-runtime/logs/
 er2/pi-runtime/config/local.env
 er3/pi-runtime/logs/
 er3/pi-runtime/config/local.env
 
-# Pi-local deployment script
+# ---- Local helper scripts not tracked in repo ----
 deploy.sh
