@@ -1,4 +1,10 @@
-# ER1 Codex Report - 2025-12-04 22:08
+# ER1 Codex Report - 2025-12-05 08:45
+
+## Markdownlint Scope + Fixes
+
+- Scoped markdownlint to only `.md` files via `.markdownlint.json` (`default: true`, MD013/MD033/MD041 disabled, ignore all non-Markdown).
+- Normalized Markdown spacing in README and docs (blank lines before lists/code fences, no content changes).
+- Files touched: `.markdownlint.json`, `README.md`, `commands.md`, `docs/mqtt_commands.md`.
 
 ## Logging
 

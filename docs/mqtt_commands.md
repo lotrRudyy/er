@@ -1,6 +1,7 @@
 # MQTT Command Cheatsheet
 
 Fast references for ER1 MQTT work. Constants:
+
 - `LOCAL_BROKER = 192.168.0.10`
 - `REMOTE_BROKER = 100.108.1.80`
 
@@ -15,12 +16,14 @@ ts '[%d.%m.%Y %H:%M:%S.%N]' | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
 Lock IDs: `images`, `door_to_r2`, `door_to_r3`, `slider`, `knocking`.
 
 ### Local broker
+
 ```bash
 mosquitto_pub -h 192.168.0.10 -t 'esc/ctrl/lock/<id>/cmd' -m "OPEN"
 mosquitto_pub -h 192.168.0.10 -t 'esc/ctrl/lock/<id>/cmd' -m "CLOSE"
 ```
 
 ### Remote broker
+
 ```bash
 mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/<id>/cmd' -m "OPEN"
 mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/<id>/cmd' -m "CLOSE"
@@ -39,6 +42,7 @@ mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
 ## Log-to-File Examples
 
 ### On the Pi (Linux)
+
 ```bash
 mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
   | ts '[%d.%m.%Y %H:%M:%S.%N]' \
@@ -47,6 +51,7 @@ mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
 ```
 
 ### On Windows
+
 ```powershell
 mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v `
   | ts '[%d.%m.%Y %H:%M:%S.%N]' `

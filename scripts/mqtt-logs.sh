@@ -3,8 +3,6 @@ set -euo pipefail
 
 LOCAL_BROKER="192.168.0.10"
 LOG_DIR="/home/rudyy/er/logs"
-TS_FORMAT='[%d.%m.%Y %H:%M:%S.%N]'
-SED_EXPR='s/([0-9]{3})[0-9]{6}]/\1]/'
 
 ensure_log_dir() {
   mkdir -p "$LOG_DIR"
@@ -15,40 +13,41 @@ print_help() {
 Usage: scripts/mqtt-logs.sh <command> [args]
 
 Commands:
-  live            Subscribe to esc/#, write logs/YYYY-MM-DD.log, and echo live output.
+  live            Subscribe to esc/#, write logs/er1-DD.MM.YYYY.log, and echo live output.
   tail            tail -f today's logfile.
   grep <pattern>  Search today's logfile for <pattern>.
   help            Show this help text.
 EOF
 }
 
-clean_line() {
-  sed -E "$SED_EXPR"
+timestamp_lines() {
+  while IFS= read -r line; do
+    printf '[%s] %s\n' "$(date '+%d.%m.%Y %H:%M:%S.%3N')" "$line"
+  done
 }
 
 run_live() {
   ensure_log_dir
-  local current_date file cleaned today
-  current_date=$(date +%Y-%m-%d)
-  file="$LOG_DIR/$current_date.log"
+  local current_date file today
+  current_date=$(date +%d.%m.%Y)
+  file="$LOG_DIR/er1-$current_date.log"
 
   mosquitto_sub -h "$LOCAL_BROKER" -t 'esc/#' -v \
-    | ts "$TS_FORMAT" \
+    | timestamp_lines \
     | while IFS= read -r line; do
-        today=$(date +%Y-%m-%d)
+        today=$(date +%d.%m.%Y)
         if [[ "$today" != "$current_date" ]]; then
           current_date="$today"
-          file="$LOG_DIR/$current_date.log"
+          file="$LOG_DIR/er1-$current_date.log"
         fi
-        cleaned=$(echo "$line" | clean_line)
-        echo "$cleaned" >> "$file"
-        echo "$cleaned"
+        echo "$line" >> "$file"
+        echo "$line"
       done
 }
 
 tail_today() {
   ensure_log_dir
-  local file="$LOG_DIR/$(date +%Y-%m-%d).log"
+  local file="$LOG_DIR/er1-$(date +%d.%m.%Y).log"
   touch "$file"
   tail -f "$file"
 }
@@ -57,7 +56,7 @@ grep_today() {
   ensure_log_dir
   [[ $# -ge 1 ]] || { echo "Pattern required for grep command." >&2; exit 1; }
   local pattern="$*"
-  local file="$LOG_DIR/$(date +%Y-%m-%d).log"
+  local file="$LOG_DIR/er1-$(date +%d.%m.%Y).log"
   if [[ ! -f "$file" ]]; then
     echo "No logfile found for today: $file" >&2
     exit 1
