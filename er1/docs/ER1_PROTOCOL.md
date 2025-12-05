@@ -36,7 +36,6 @@ er/
         mqtt-logs.sh
         mqtt-locks.sh
         log_live.sh
-        er1-tmux.sh
         ota
         aliases
       systemd/

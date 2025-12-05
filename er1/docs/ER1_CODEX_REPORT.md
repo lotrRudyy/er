@@ -51,21 +51,6 @@
   send_cmd "${action^^}" "$id" "$broker"
   ```
 
-## Terminal
-
-### scripts/er1-tmux.sh
-
-- Added the tmux orchestration helper that creates or attaches to the `er1` session.
-- Pane layout: main shell, `scripts/mqtt-logs.sh live`, and a grep-ready shell with `scripts/mqtt-logs.sh grep ERROR` preloaded.
-- Snippet:
-
-  ```bash
-  tmux split-window -h -t "$SESSION_NAME:0" -c "$WORKDIR"
-  tmux send-keys -t "$SESSION_NAME:0.1" "cd $WORKDIR; scripts/mqtt-logs.sh live" C-m
-  tmux split-window -v -t "$SESSION_NAME:0.0" -c "$WORKDIR" "cd $WORKDIR; bash"
-  tmux send-keys -t "$SESSION_NAME:0.2" "scripts/mqtt-logs.sh grep ERROR"
-  ```
-
 ## Documentation
 
 ### docs/mqtt_commands.md
