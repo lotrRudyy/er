@@ -43,38 +43,41 @@ static const char *OTA_PATH  = "/firmware/maglock_ctrl.bin";
 
 // ======================= LOCK CONFIG =========================
 struct Lock {
-  const char *id;       // "images", "door_to_r2", ...
+  const char *id;       // "images", "r2", ...
   uint8_t     pin;      // GPIO
   bool        failSafe; // true = power=locked (fail-safe doors)
   bool        pulseActive;
   unsigned long pulseEndMs;
+  bool        cooldownActive;
+  unsigned long cooldownEndMs;
 };
 
 #define N_LOCKS 5
 
 // Canonical lock IDs (mirror MQTT topics under esc/ctrl/lock/<id>/...)
-static const char *LOCK_ID_IMAGES     = "images";
-static const char *LOCK_ID_DOOR_TO_R2 = "door_to_r2";
-static const char *LOCK_ID_DOOR_TO_R3 = "door_to_r3";
-static const char *LOCK_ID_SLIDER     = "slider";
-static const char *LOCK_ID_KNOCKING   = "knocking";
+static const char *LOCK_ID_IMAGES   = "images";
+static const char *LOCK_ID_R2       = "r2";
+static const char *LOCK_ID_R3       = "r3";
+static const char *LOCK_ID_SLIDER   = "slider";
+static const char *LOCK_ID_KNOCKING = "knocking";
 
 // Mapping (per your current setup):
-// images     -> GPIO26 (fail-secure, OPEN = power ON for 1s)
-// door_to_r2 -> GPIO16 (fail-safe, OPEN = power OFF)
-// door_to_r3 -> GPIO17 (fail-safe, OPEN = power OFF)
-// slider     -> GPIO33 (fail-secure, OPEN = power ON for 1s)
-// knocking   -> GPIO25 (fail-secure, OPEN = power ON for 1s)
+// images   -> GPIO26 (fail-secure, 1s pulse + 10s cooldown)
+// r2       -> GPIO16 (fail-safe, OPEN = power OFF)
+// r3       -> GPIO17 (fail-safe, OPEN = power OFF)
+// slider   -> GPIO33 (fail-secure, 1s pulse + 10s cooldown)
+// knocking -> GPIO25 (fail-secure, 1s pulse + 10s cooldown)
 Lock locks[N_LOCKS] = {
-  { LOCK_ID_IMAGES,     26, false, false, 0 },
-  { LOCK_ID_DOOR_TO_R2, 16, true,  false, 0 },
-  { LOCK_ID_DOOR_TO_R3, 17, true,  false, 0 },
-  { LOCK_ID_SLIDER,     33, false, false, 0 },
-  { LOCK_ID_KNOCKING,   25, false, false, 0 }
+  { LOCK_ID_IMAGES,   26, false, false, 0, false, 0 },
+  { LOCK_ID_R2,       16, true,  false, 0, false, 0 },
+  { LOCK_ID_R3,       17, true,  false, 0, false, 0 },
+  { LOCK_ID_SLIDER,   33, false, false, 0, false, 0 },
+  { LOCK_ID_KNOCKING, 25, false, false, 0, false, 0 }
 };
 
-// Fail-secure pulse length (ms) => 1 second
-static const unsigned long FAILSEC_PULSE_MS = 1000;
+// Fail-secure pulse length and cooldown (ms)
+static const unsigned long FAILSEC_PULSE_MS    = 1000;
+static const unsigned long FAILSEC_COOLDOWN_MS = 10000;
 
 // ======================= GLOBALS =============================
 EthernetClient ethClient;
@@ -176,41 +179,46 @@ void setLockOutput(Lock &l, bool powered) {
 void openFailSafe(Lock &l) {
   // fail-safe: power = locked, no power = open
   l.pulseActive = false;
+  l.cooldownActive = false;
   setLockOutput(l, false);  // remove power -> door open
   publishLockState(l, "OPEN");
 }
 
 void closeFailSafe(Lock &l) {
   l.pulseActive = false;
+  l.cooldownActive = false;
   setLockOutput(l, true);   // power -> locked
   publishLockState(l, "CLOSED");
 }
 
-// For fail-secure locks, OPEN = power ON for FAILSEC_PULSE_MS, then OFF.
+// Fail-secure OPEN with pulse + cooldown heat protection.
 void pulseFailSecure(Lock &l) {
   unsigned long now = millis();
-  if (l.pulseActive) {
-    // guard: ignore repeated OPEN while active
+  if (l.pulseActive || l.cooldownActive) {
     return;
   }
   l.pulseActive = true;
   l.pulseEndMs = now + FAILSEC_PULSE_MS;
+  l.cooldownActive = false;
+  l.cooldownEndMs = 0;
   setLockOutput(l, true);   // power -> unlock
   publishLockState(l, "OPENING");
 }
 
 void stopFailSecurePulse(Lock &l) {
   l.pulseActive = false;
+  l.cooldownActive = true;
+  l.cooldownEndMs = millis() + FAILSEC_COOLDOWN_MS;
   setLockOutput(l, false);  // no power when idle
-  publishLockState(l, "IDLE");
+  publishLockState(l, "COOLDOWN");
 }
 
 void handleLockOpen(Lock &l) {
   if (l.failSafe) {
-    // door_to_r2 / door_to_r3: OPEN = power OFF
+    // r2 / r3: OPEN = power OFF
     openFailSafe(l);
   } else {
-    // images / slider / knocking: OPEN = power ON for 1 second
+    // images / slider / knocking: OPEN = power ON for 1 second (with cooldown)
     pulseFailSecure(l);
   }
 }
@@ -219,8 +227,10 @@ void handleLockClose(Lock &l) {
   if (l.failSafe) {
     closeFailSafe(l);
   } else {
-    // ensure coil is off, treat as "reset"
-    stopFailSecurePulse(l);
+    // ensure coil is off; do not cancel cooldown
+    l.pulseActive = false;
+    setLockOutput(l, false);
+    publishLockState(l, "CLOSED");
   }
 }
 
@@ -369,6 +379,8 @@ void setup() {
     digitalWrite(locks[i].pin, LOW);
     locks[i].pulseActive = false;
     locks[i].pulseEndMs  = 0;
+    locks[i].cooldownActive = false;
+    locks[i].cooldownEndMs  = 0;
   }
 
   // Ethernet reset
@@ -400,9 +412,13 @@ void loop() {
   // Handle fail-secure pulse timeouts (even if disabled – safety)
   for (int i = 0; i < N_LOCKS; i++) {
     Lock &l = locks[i];
-    if (!l.failSafe && l.pulseActive) {
-      if ((long)(now - l.pulseEndMs) >= 0) {
+    if (!l.failSafe) {
+      if (l.pulseActive && (long)(now - l.pulseEndMs) >= 0) {
         stopFailSecurePulse(l);
+      }
+      if (l.cooldownActive && (long)(now - l.cooldownEndMs) >= 0) {
+        l.cooldownActive = false;
+        publishLockState(l, "IDLE");
       }
     }
   }

@@ -1,334 +1,443 @@
-# ER1 Protocol (Rudy × ChatGPT) v1.2.3
+# ER1 Protocol (Canonical)
 
-## 0. Purpose
-
-This protocol defines how all development for the ER1 escape-room project is done:
-
-- Firmware
-- Logging
-- Node-RED
-- Shell scripts
-- Configuration files
-- Debug workflows
-- Codex usage
-- Version control consistency
-
-Goal: stability, consistency, and speed.
+If this document conflicts with anything else, **this wins**.
 
 ---
 
-## 1. Architecture Invariants (never break these)
+## 0. Repo & Pi layout
 
-Apply to every ESP32 node unless explicitly overridden:
+### 0.1 Git repo structure
 
-- Transport: Ethernet-only with W5500 (no WiFi unless explicitly requested).
-- Static IPs: must follow the ER1 IP plan.
-- MQTT topics:
-  esc/<room>/<device>/{hb,event,cmd,log,metric}
-- Device IDs (<device>):
-  Must be snake_case and consistent across:
-  - Firmware
-  - MQTT
-  - OTA paths
-  - Node-RED
-  - Scripts
-- OTA path:
-  /firmware/<dev>.bin
-- Pattern:
-  - FSM
-  - Non-blocking (no delay hacks)
-  - Heartbeat ~5s
-  - Preferences restore FSM state
-  - Retained heartbeat and retained critical state
-  - Local fallback logic where required (e.g. verifyAll())
+Repo root (PC / GitHub):
 
-Maglocks may be controlled only by maglock_ctrl.
-Riddle nodes never drive maglocks directly.
+er/
+  shared/
+    pc-scripts/
+      er1_profile.ps1
+      open_er1_pi_terminals.ps1
+      push.ps1
+      reset_repo.ps1
+      push.sh
+      reset_repo.sh
+      # later: deploy_pi.ps1
+    libs/          # reserved for shared C++ libs
+    docs/          # reserved for cross-ER docs
 
-If a sketch violates these rules, fix it and explicitly state what was corrected.
+  er1/
+    firmware/      # ER1 PlatformIO project
+      platformio.ini
+      src/
+      include/
+      lib/
+      ota.ps1
+      .vscode/
+    pi-runtime/    # mirror of /home/rudyy/er1 on the Pi
+      scripts/
+        mqtt-logs.sh
+        mqtt-locks.sh
+        log_live.sh
+        er1-tmux.sh
+        ota
+        aliases
+      systemd/
+        er1-mqtt-log.service
+      logs/
+        .gitkeep
+      config/
+        local.env.example
+      docs/
+        README.md
+    docs/
+      ER1_PROTOCOL.md
+      ER1_CODEX_REPORT.md
+      mqtt_commands.md
+      commands.md
+      er1_logging_and_tools.md
+      pwsh_profile.md
+      pwsh_setup.md
 
----
+  er2/
+    firmware/
+    pi-runtime/
+      scripts/
+      systemd/
+      logs/
+        .gitkeep
+      config/
+        local.env.example
+      docs/
+    docs/
 
-## 2. Versioning Rules
+  er3/
+    firmware/
+    pi-runtime/
+      scripts/
+      systemd/
+      logs/
+        .gitkeep
+      config/
+        local.env.example
+      docs/
+    docs/
 
-- Always start from the last confirmed working sketch unless a newer one is provided.
-- Only change what Rudy explicitly asks for.
-- Always bump FW_VERSION on every change.
-- After Rudy confirms stability, always ask:
-  “Should I store this as the new working version?”
+### 0.2 Pi layout for ER1
 
----
+ER1 Pi runtime root:
 
-## 3. Logging Rules (date with milliseconds)
+/home/rudyy/er1
+  scripts/
+  systemd/
+  logs/
+  config/
+    local.env
+  docs/
 
-- All MQTT log capture must run through `scripts/mqtt-logs.sh` (no `ts`, no `awk` timestamping). The script stamps each line with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`.
-- Log lines must look like `[04.12.2025 05:39:29.924] esc/... {...}`.
-- Logging is centralized on the Pi under `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`. `scripts/mqtt-logs.sh live` maintains the rolling logfile and also prints live output.
-- To view logs, source `scripts/aliases.er1.sh` and use:
-  - `log_live` to start the aggregator (LOCAL broker only).
-  - `log_tail` to follow today's file.
-  - `log_grep <pattern>` to grep today's file.
-- Remote broker access is for control commands only; logging always uses the local broker.
-- JSON in chat must always be compact inline, e.g. `{"lvl":"INFO","msg":"BTN idx=2 pin=14 state=RELEASED dt=30ms presses=288"}`.
-- `er1/docs/mqtt_commands.md` holds the current lock and logging cheatsheet plus references to `scripts/mqtt-logs.sh` and `scripts/mqtt-locks.sh`.
+Mapping from repo → Pi:
 
----
+- er1/pi-runtime/scripts/  → /home/rudyy/er1/scripts/
+- er1/pi-runtime/systemd/  → /home/rudyy/er1/systemd/
+- er1/pi-runtime/docs/     → /home/rudyy/er1/docs/
+- er1/pi-runtime/config/local.env.example → /home/rudyy/er1/config/local.env (edited manually)
+- /home/rudyy/er1/logs/ exists only on Pi (no real logs in Git).
 
-## 4. Code Editing — Codex-First Rule
+### 0.3 .gitignore rules (relevant)
 
-All real code modifications must be done through Codex, not through large chat snippets.
-
-ChatGPT must:
-
-1. Generate a Codex prompt describing:
-   - Goals
-   - Files or areas to modify
-   - Constraints
-   - Expected results
-2. Rudy pastes this prompt into Codex with the ER1 repo open.
-3. Codex applies the changes directly to files.
-4. Codex must output a report listing:
-   - Modified files
-   - Renamed files (if any)
-   - Summary of changes
-   - Short before/after snippets for the most important edits
-
-### When chat patches are allowed
-
-Only for micro-changes when ALL of these are true:
-- Single line or very small local block.
-- It is clearly faster than opening Codex.
-- No cross-file effects.
-
-In these cases, ChatGPT must:
-- Provide a “Search” block: exact code to Ctrl+F.
-- Provide a “Replacement” block: exact new code to paste.
-- Never put explanations inside the code blocks.
-
-### When Codex is always required
-
-Codex is mandatory when:
-- More than one file is affected.
-- More than one area in a file is affected.
-- Naming or identifier consistency work is needed.
-- Any firmware restructuring or refactor.
-- OTA/script updates.
-- Node-RED flow changes.
-- JSON structure changes.
-- VS Code config changes.
-- PlatformIO config changes.
-- Large logs (>30-50 lines) need analysis.
-- Any non-trivial change.
-
-Codex is the default. Chat patching is the exception.
-
-### 4.4 Codex change application & confirmation
-
-Codex must not constantly ask for permission for individual edits once a prompt has been given.
-- Rudy already approved single-confirmation workflow: when a command is clearly required but blocked by sandboxing, Codex must immediately retry it with the needed escalation instead of asking again.
-- When requesting Rudy's confirmation, include a Markdown link to the updated `ER1_CODEX_REPORT.md` once so he can review details, and do not repeat the confirmation request unless he explicitly asks.
-
-For each prompt, Codex should:
-
-- Apply all changes that are clearly implied by the prompt and by this protocol (across all required files).
-- Write a single, well-formatted report file in the repo, e.g. ER1_CODEX_REPORT.md (or update the existing one) that includes:
-  - List of all modified files.
-  - For each file: short summary of what changed.
-  - Short before/after snippets for the most important edits.
-
-In its chat response, Codex must explicitly tell Rudy:
-
-- That the changes have been applied.
-- That the report file was updated.
-- That Rudy should review and confirm whether to keep these changes or revert them with git.
-
-Codex must assume changes are tentative until Rudy confirms. It must not act as if they are "final" (e.g. by updating protocol references or telling future tools they are stable) until Rudy has explicitly confirmed.
-
-### 4.5 No-Confirmation Execution (Mandatory)
-
-Codex must NEVER ask Rudy for confirmation before applying changes.  
-A Codex prompt is ALWAYS treated as full authorization.  
-Codex must:
-
-1. Apply ALL changes described in the prompt across ALL relevant files.
-2. Write a full change log into ER1_CODEX_REPORT.md.
-3. Provide a compact summary in chat.
-4. Never pause execution to request human approval.
-
-If ambiguity exists, Codex must choose the **most consistent, protocol-aligned interpretation**, apply it, and clearly document what it chose and why in ER1_CODEX_REPORT.md.
-
-Rollbacks are handled via Git; Codex must not implement interactive approval flows.
-
-### 4.6 Formatting + Markdown linting
-
-- `.editorconfig` is the single source of truth for whitespace: LF endings, UTF-8, final newline, trailing whitespace trimming, and space indentation (2 spaces for source + docs, with overrides defined per file type). Keep the EditorConfig VS Code extension enabled so these rules apply automatically.
-- Markdown is linted via `.markdownlint.json`. MD013 (line length) stays disabled so shell commands remain readable, and MD033 (inline HTML) stays off for flexibility. Install `DavidAnson.vscode-markdownlint` so every doc edit surfaces issues locally.
-- If formatting rules need to change, update `.editorconfig` or `.markdownlint.json` instead of overriding settings locally, so the entire team stays aligned.
-
-### 4.7 ER1 Terminal Workflow (tmux session)
-
-- The standard Pi workflow is: `cd /home/rudyy/er1 && ./scripts/er1-tmux.sh`.
-- If the `er1` tmux session already exists, the script simply attaches; otherwise it creates a three-pane layout (main shell, live MQTT logs, and a grep-ready shell with `scripts/mqtt-logs.sh grep ERROR` prefilled). Pane titles are `er1-main`, `er1-pi-log-mqtt`, and `er1-pi-log-grep`.
-- tmux auto-starts `scripts/mqtt-logs.sh live` so the daily logfile is always running in the background. Use pane 3 or `log_grep` / `log_tail` for investigations without touching the live capture.
-
-## Manual Pi Update (Option A)
-
-deploy.sh is not tracked in Git.
-
-It lives only on the Pi at:
-`/home/rudyy/er1/deploy.sh`
-
-Updates to the script must be done manually on the Pi.
-
-The `.gitignore` rule prevents accidental commits.
+- Ignore build dirs:
+  - er1/firmware/.pio/
+  - er2/firmware/.pio/
+  - er3/firmware/.pio/
+- Ignore runtime junk:
+  - er1/pi-runtime/logs/ (except .gitkeep)
+  - er1/pi-runtime/config/local.env
+  - same pattern for er2 / er3
+- Keep:
+  - local.env.example
+  - all scripts, docs, systemd units.
 
 ---
 
-## 5. Post-Change Explanation
+## 1. Network & IPs
 
-After any fix or change (whether via Codex or chat), ChatGPT must state:
+- Subnet: 192.168.0.0/24
+- Router: 192.168.0.1
+- ER1 Pi / MQTT broker: 192.168.0.10
+- NVR: 192.168.0.5
 
-1. What changed.
-2. Why the bug happened (root cause, no fluff).
-3. One prevention rule (short, actionable).
+### 1.1 Fixed IP map (ER1 devices)
 
-Example prevention format:
-
-- “Prevention: always reset the press counter when entering STATE_IDLE.”
-
----
-
-## 6. Memory Updating
-
-ChatGPT must automatically store all new ER1 information Rudy gives, including:
-
-- IPs and network layout.
-- MQTT topics and patterns.
-- OTA paths and device IDs.
-- Architecture decisions.
-- Confirmed working versions.
-- Naming conventions.
-- Debug insights and lessons learned.
-
-Rudy does not need to say “save this”.
-Latest information always overrides older information.
+- 192.168.0.10 → ER1 Pi (MQTT, Node-RED, logs, OTA host)
+- 192.168.0.11 → Maglock controller (ESP32 + W5500)
+- 192.168.0.12 → Room1 images+piano node
+- 192.168.0.13 → Room2 chess node
+- 192.168.0.14 → Room3 knocking node
+- 192.168.0.15 → Room3 candles node
+- 192.168.0.16 → Room3 star_sky node
+- 192.168.0.17 → Room3 star_slider node
+- 192.168.0.18 → Room3 stop_timer node
 
 ---
 
-## 7. Protocol Evolution
+## 2. Global ESP32 rules
 
-When ChatGPT sees a pattern that should be a rule, it must:
+### 2.1 Hardware / transport
 
-1. Propose exact text to add or change in this protocol.
-2. Explicitly ask:
-   “Do you want to add this to the ER1 Protocol?”
+- Board: 38-pin ESP32 DevKit (USB-C clone).
+- Ethernet only (no Wi-Fi, no Wi-Fi libs).
+- Ethernet: W5500 on shared SPI:
+  - MOSI = GPIO23
+  - MISO = GPIO19
+  - SCK  = GPIO18
+  - ETH_CS  = GPIO15
+  - ETH_RST = GPIO27 (reserved; nothing else uses 27)
+- Static IP from table above.
+- Gateway & DNS: 0.0.0.0 (LAN-only).
 
-No silent protocol changes.
+### 2.2 MQTT topic pattern (nodes)
 
----
+For all normal nodes (not per-lock topics):
 
-## 8. Naming Conventions (strict)
+- esc/<room>/<dev>/hb
+- esc/<room>/<dev>/event
+- esc/<room>/<dev>/cmd
+- esc/<room>/<dev>/log
+- esc/<room>/<dev>/metric
 
-To keep the entire ER1 project consistent:
+Where:
 
-### 8.1 Filenames and folders → snake_case
+- <room> ∈ {room0, room1, room2, room3}
+- <dev> is the device name from section 3 (note the underscores).
 
-- Use lowercase with underscores.
-- Examples:
-  - mqtt_snapshot.json
-  - er1_logs
-  - ota_script.ps1
+QoS / retain:
 
-Exceptions (leave as-is because they are standard):
-- .vscode
-- .git
-- README.md
-- platformio.ini
+- hb: QoS 0, retained
+- event: QoS 0 (or 1 if critical), not retained
+- cmd: QoS 1, not retained
+- log: QoS 0, not retained
+- metric: QoS 0, not retained
 
-### 8.2 JSON keys → camelCase
+### 2.3 Heartbeats, metrics, logs
 
-- Example:
-  - {"fwVersion":12,"pressCount":4,"lvl":"INFO"}
+Heartbeat JSON example:
 
-No snake_case or UPPER_SNAKE_CASE in JSON keys.
+```json
+{"ver":"FW_X.Y","ip":"192.168.0.xx","up":123,"heap":12345,"rssi":-1,"reboot_count":0,"last_event_ts":0,"error_count":0,"diag_level":0}
+Cadence:
 
-### 8.3 C++ constants → UPPER_SNAKE_CASE
+Heartbeat: every 5–10 s.
 
-- Examples:
-  - BTN_PIN_1
-  - HEARTBEAT_INTERVAL_MS
-  - FW_VERSION
+Metrics: every 1–5 min (prod).
 
-### 8.4 C++ variables and functions → camelCase
+Logs: event-driven only, rate-limited.
 
-- Examples:
-  - lastPressTs
-  - handleButtons()
-  - verifyAll()
+2.4 Command protocol
+Each node listens on esc/<room>/<dev>/cmd.
 
-### 8.5 MQTT topics
+Supported commands (protocol level):
 
-- Pattern:
-  - esc/<room>/<device>/{hb,event,cmd,log,metric}
+ENABLE
+
+DISABLE
+
+REBOOT
+
+PING
+
+SET key=val
+
+DIAG level=<0..n> ttl_s=<seconds>
+
+UPDATE url=/firmware/<Dev>.bin
+
+2.5 OTA
+HTTP OTA served by ER1 Pi.
+
+OTA path per device: /firmware/<Dev>.bin.
+
+PC side: er1/firmware/ota.ps1, used like:
+
+. ota.ps1 -Env <Env> -Dev <Dev>
+
+Always bump FW_VERSION on each change.
+
+3. Device map (Env / Dev / Room / IP / OTA)
+Dev names here are the MQTT <dev> and OTA basename.
+
+Role	Env name	Dev name	Room	IP	OTA path
+Maglock controller	room0_maglock_ctrl	maglock_ctrl	room0	192.168.0.11	/firmware/maglock_ctrl.bin
+Images + piano	room1_images_piano	images_piano	room1	192.168.0.12	/firmware/images_piano.bin
+Chess	room2_chess	chess	room2	192.168.0.13	/firmware/chess.bin
+Knocking	room3_knocking	knocking	room3	192.168.0.14	/firmware/knocking.bin
+Candles	room3_candles	candles	room3	192.168.0.15	/firmware/candles.bin
+Star sky	room3_star_sky	star_sky	room3	192.168.0.16	/firmware/star_sky.bin
+Star slider	room3_star_slider	star_slider	room3	192.168.0.17	/firmware/star_slider.bin
+Stop timer	room3_stop_timer	stop_timer	room3	192.168.0.18	/firmware/stop_timer.bin
 
 Examples:
-- esc/room1/images_piano/hb
-- esc/room3/star_sky/log
-- esc/ctrl/lock/door_to_r3/state (lock IDs may contain underscores where appropriate)
 
-### 8.6 Device IDs, MQTT <device> names, OTA <dev> → snake_case
+Chess hb: esc/room2/chess/hb
 
-Device IDs must:
-- Use snake_case.
-- Match across:
-  - Firmware “Dev” name.
-  - MQTT <device>.
-  - OTA path basename (/firmware/<dev>.bin).
+Star sky event: esc/room3/star_sky/event
 
-Canonical ER1 device IDs:
+Stop timer hb: esc/room3/stop_timer/hb
 
-- maglock_ctrl
-- images_piano
-- chess
-- knocking
-- candles
-- star_sky
-- star_slider
-- stop_timer
+Maglock controller node topics:
 
-Invalid forms that must be eliminated:
-- star-sky
-- star-slider
-- stop-timer
-- images-piano
-- MixedCase variants of the above.
+esc/room0/maglock_ctrl/hb
 
-Existing code using invalid forms must be migrated to these canonical IDs via Codex.
+esc/room0/maglock_ctrl/cmd
 
-**8.6.1 Tooling/UI labels for devices**
-Any label, button text, or task name that directly represents a device (VS Code tasks, Task Button labels, OTA script targets, Node-RED control buttons, etc.) must use the canonical device ID string exactly (snake_case, as in the canonical list). No abbreviations or alternate spellings are allowed.
+esc/room0/maglock_ctrl/log
 
----
+esc/room0/maglock_ctrl/metric
 
-## 9. Project Scope
+4. Maglocks (IDs, topics, behavior)
+4.1 Lock IDs & MQTT topics
+Lock IDs:
 
-This protocol governs:
+images
 
-- All firmware for riddles.
-- maglock_ctrl (maglock controller).
-- Lighting controllers.
-- Node-RED dashboard flows.
-- Raspberry Pi scripts.
-- Logging and diagnostics.
-- Debug sessions and workflows.
-- Git / version control practices (at a high level).
-- Codex usage for editing.
+r2
 
----
+r3
 
-## 10. Future Versions
+slider
 
-This file is ER1 Protocol v1.2.3.
+knocking
 
-- Any changes to workflow, naming, architecture, or tooling that are meant to be permanent must be added here.
-- New versions must update the version number at the top.
+Lock topics:
+
+Command: esc/ctrl/lock/<id>/cmd
+
+State: esc/ctrl/lock/<id>/state
+
+Allowed lock commands:
+
+OPEN
+
+CLOSE
+
+No PULSE. No STATUS.
+
+Examples:
+
+esc/ctrl/lock/r2/cmd = OPEN
+esc/ctrl/lock/r3/cmd = CLOSE
+esc/ctrl/lock/images/cmd = OPEN
+esc/ctrl/lock/slider/cmd = OPEN
+esc/ctrl/lock/knocking/cmd = CLOSE
+
+State payload example:
+
+json
+Copy code
+{"state":"OPEN","reason":"cmd:OPEN","ts":123456789}
+4.2 GPIO mapping and electrical semantics
+Maglock controller GPIO → lock:
+
+images → GPIO26 (fail-secure)
+
+r2 → GPIO16 (fail-safe, door to Room 2)
+
+r3 → GPIO17 (fail-safe, door to Room 3)
+
+slider → GPIO33 (fail-secure)
+
+knocking → GPIO25 (fail-secure)
+
+Behavior:
+
+Fail-safe locks (r2, r3):
+
+No power = unlocked.
+
+CLOSE → set GPIO HIGH (power on, locked) and keep it on until OPEN.
+
+OPEN → set GPIO LOW (power off, unlocked).
+
+No pulsing / cooldown needed; they can stay energized.
+
+Fail-secure locks (images, slider, knocking):
+
+No power = locked.
+
+External protocol: only sees OPEN / CLOSE.
+
+Internal behavior for OPEN:
+
+If the lock is not currently in a pulse or cooldown:
+
+Turn output ON immediately.
+
+Keep it ON for exactly 1000 ms.
+
+After 1000 ms, turn output OFF again.
+
+Then start a cooldown period of 10 seconds for that lock.
+
+While either:
+
+the 1 s pulse is running, or
+
+the 10 s cooldown is active,
+
+ignore any new OPEN commands for that lock.
+
+Internal behavior for CLOSE:
+
+Immediately force the output OFF (coil off).
+
+CLOSE does not cancel or shorten the 10 s cooldown; it just ensures no power.
+
+So, from outside:
+
+You only send OPEN and CLOSE.
+
+Fail-secure coils:
+
+get a 1.0 s power pulse on OPEN,
+
+then are in a 10 s “heat protection” window where further OPEN is ignored,
+
+and are safe from being held on.
+
+5. Firmware rules (all nodes)
+FSM-based, non-blocking (no long delay()).
+
+Ethernet + MQTT + HTTP OTA only; no Wi-Fi.
+
+ESP32 Task Watchdog (2–5 s) enabled.
+
+Auto-reboot on:
+
+Long MQTT disconnect,
+
+Critically low heap,
+
+Fatal FSM error (with backoff + reboot counter).
+
+On boot:
+
+Restore last FSM state from Preferences.
+
+Publish a boot event on esc/<room>/<dev>/event.
+
+Re-scan sensors and publish updated state if needed.
+
+6. Logging & tools (ER1)
+6.1 MQTT → file logging (Pi)
+Central MQTT logging on ER1 Pi must use a date-based timestamp prefix with millisecond precision.
+
+Log dir: /home/rudyy/er1/logs/
+
+Log filename pattern (one per day):
+er1-DD.MM.YYYY.log
+
+Line format (mandatory):
+[DD.MM.YYYY HH:MM:SS.mmm] topic payload
+
+Implementation requirement:
+
+The prefix must be generated with date using %3N for milliseconds, e.g.:
+
+date +"[%d.%m.%Y %H:%M:%S.%3N]"
+
+Do not use ts or any other timestamp tool anymore.
+
+Replace any older timestamp logic so that all MQTT logging flows through this date-based format.
+
+Main script on Pi:
+
+/home/rudyy/er1/scripts/mqtt-logs.sh with subcommands:
+
+daemon → systemd mode, no stdout
+
+live → print to stdout
+
+tail → tail today’s log
+
+grep <pattern> → grep today’s log
+
+Systemd reference unit (on Pi):
+
+/home/rudyy/er1/systemd/er1-mqtt-log.service
+
+WorkingDirectory=/home/rudyy/er1
+
+ExecStart=/home/rudyy/er1/scripts/mqtt-logs.sh daemon
+
+Environment=LOCAL_BROKER=127.0.0.1
+
+6.2 PC helpers (PowerShell, from shared/pc-scripts)
+er1_profile.ps1 is loaded via $PROFILE and provides:
+
+pi (SSH into Pi)
+
+er1-log-live, er1-log-node <dev>, er1-log-all
+
+er1-lock <id> (esc/ctrl/lock/<id>/cmd wrapper)
+
+er1-lock-images, er1-lock-all
+
+er1-ota <Dev> (calls er1/firmware/ota.ps1)
+
+Future: deploy_pi.ps1 to sync er1/pi-runtime → /home/rudyy/er1.

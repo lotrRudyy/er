@@ -37,8 +37,8 @@ function er1-lock-all {
 function er1-lock-images       { ssh -t $er1Pi "er1 lock open images" }
 function er1-lock-slider       { ssh -t $er1Pi "er1 lock open slider" }
 function er1-lock-knocking     { ssh -t $er1Pi "er1 lock open knocking" }
-function er1-lock-door_to_r2   { ssh -t $er1Pi "er1 lock open door_to_r2" }
-function er1-lock-door_to_r3   { ssh -t $er1Pi "er1 lock open door_to_r3" }
+function er1-lock-r2   { ssh -t $er1Pi "er1 lock open r2" }
+function er1-lock-r3   { ssh -t $er1Pi "er1 lock open r3" }
 
 # ---- OTA (protocol-canonical device names) ----
 # maglock_ctrl, images_piano, chess, knocking, candles, star_sky, star_slider, stop_timer

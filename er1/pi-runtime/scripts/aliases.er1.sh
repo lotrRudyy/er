@@ -9,7 +9,7 @@ alias log_help="scripts/mqtt-logs.sh help"
 alias lock_open="scripts/mqtt-locks.sh open"
 alias lock_close="scripts/mqtt-locks.sh close"
 
-_er1_lock_ids="images door_to_r2 door_to_r3 slider knocking"
+_er1_lock_ids="images r2 r3 slider knocking"
 _er1_complete_locks() {
   COMPREPLY=( $(compgen -W "$_er1_lock_ids" -- "${COMP_WORDS[COMP_CWORD]}") )
 }

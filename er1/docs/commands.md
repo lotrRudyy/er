@@ -1,27 +1,19 @@
-# MQTT MQTT Quick Commands
+# MQTT Quick Commands
 
-All subscription snippets follow the canonical pipeline:
+Log format: `[DD.MM.YYYY HH:MM:SS.mmm] topic payload` (date + ms). Logfile pattern on Pi: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
 
-```
-mosquitto_sub -h <broker> -t '<topic>' -v \
-  | ts '[%d.%m.%Y %H:%M:%S.%N]' \
-  | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
-```
-
-## Local Broker (100.108.1.80)
+## Local Broker (127.0.0.1)
 
 ### Publish
 
 ```
-mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
+mosquitto_pub -h 127.0.0.1 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
 ```
 
 ### Subscribe (all topics)
 
 ```
-mosquitto_sub -h 100.108.1.80 -t 'esc/#' -v \
-  | ts '[%d.%m.%Y %H:%M:%S.%N]' \
-  | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
+./scripts/mqtt-logs.sh live
 ```
 
 ## Tailscale Broker (100.108.1.80)

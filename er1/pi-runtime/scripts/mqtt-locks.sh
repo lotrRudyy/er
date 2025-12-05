@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_BROKER="100.108.1.80"
+LOCAL_BROKER="127.0.0.1"
 REMOTE_BROKER="100.108.1.80"
-VALID_IDS=("images" "door_to_r2" "door_to_r3" "slider" "knocking")
+VALID_IDS=("images" "r2" "r3" "slider" "knocking")
 
 usage() {
   cat <<'EOF'
 Usage: scripts/mqtt-locks.sh <open|close> <lock_id> [remote]
 
-lock_id: images, door_to_r2, door_to_r3, slider, knocking
+lock_id: images, r2, r3, slider, knocking
 scope:  omit for local broker, pass "remote" to hit REMOTE_BROKER.
 EOF
 }

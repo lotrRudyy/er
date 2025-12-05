@@ -10,7 +10,7 @@
 
 ### scripts/mqtt-logs.sh
 
-- Rebuilt the script around the new daily logging model: only the local broker is subscribed, every message flows through `ts '[%d.%m.%Y %H:%M:%S.%N]' | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'`, and midnight rollover automatically switches to the next `logs/YYYY-MM-DD.log`.
+- Rebuilt the script around the new daily logging model: only the local broker is subscribed, every message is stamped with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`, and midnight rollover automatically switches to the next `logs/er1-DD.MM.YYYY.log`.
 - Added `live`, `tail`, `grep`, and `help` subcommands so aliases can call the same entrypoint.
 - Dropped the obsolete `scripts/logging/aliases_logging.sh`; `scripts/mqtt-logs.sh` is now the sole logging entrypoint.
 - Snippet:
@@ -74,10 +74,7 @@
 - Snippet:
 
   ```markdown
-  mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
-    | ts '[%d.%m.%Y %H:%M:%S.%N]' \
-    | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/' \
-      >> /home/rudyy/er1/logs/er1-$(date +%d.%m.%Y).log
+  ./scripts/mqtt-logs.sh daemon  # writes to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log with date+ms prefix
   ```
 
 ### commands.md
@@ -91,9 +88,7 @@
 - Snippet:
 
   ```markdown
-  mosquitto_sub -h <IP> -t '<topic>' -v \
-    | ts '[%d.%m.%Y %H:%M:%S.%N]' \
-    | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
+  ./scripts/mqtt-logs.sh live  # date +"[%d.%m.%Y %H:%M:%S.%3N]" prefix
   ```
 
 ## Config
