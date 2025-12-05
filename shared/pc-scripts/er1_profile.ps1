@@ -8,19 +8,23 @@ function pi {
 
 # ---- Logs ----
 function er1-log-all {
-    ssh -t $er1Pi "$er1Cmd logs all"
+    # live MQTT logs for everything
+    ssh -t $er1Pi "$er1Cmd logs live"
 }
 
 function er1-log-node {
     param(
         [Parameter(Mandatory = $true)][string]$dev
     )
-    ssh -t $er1Pi "$er1Cmd logs node $dev"
+    # filter logs by device name using grep
+    ssh -t $er1Pi "$er1Cmd logs grep $dev"
 }
 
 function er1-log-live {
+    # explicit live logs (same as -all, just clearer)
     ssh -t $er1Pi "$er1Cmd logs live"
 }
+
 
 # ---- Locks (no pulse, only open) ----
 function er1-lock {
@@ -52,3 +56,19 @@ function er1-ota {
 function er1-syslog       { ssh -t $er1Pi "$er1Cmd syslog" }
 function er1-mqtt-status  { ssh -t $er1Pi "$er1Cmd status_mqtt" }
 function er1-mqtt-restart { ssh -t $er1Pi "$er1Cmd restart_mqtt" }
+
+# ---- Deploy ER1 Pi runtime ----
+function er1-deploy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("er1")]
+        [string]$Env,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("runtime", "full")]
+        [string]$Mode = "runtime"
+    )
+
+    pwsh -File "$HOME\Documents\Escape Room\er\shared\pc-scripts\deploy_pi.ps1" -Env $Env -Mode $Mode
+}
+

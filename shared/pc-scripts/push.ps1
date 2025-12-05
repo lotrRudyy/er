@@ -1,9 +1,22 @@
-param([string]$Message = "update from ChatGPT")
+param([string]$Message = "update")
+
 git add .
+
+# commit only if there is something to commit
+$changes = git status --porcelain
+if (-not $changes) {
+    Write-Host "[push] No changes to commit." -ForegroundColor Yellow
+    exit 0
+}
+
 git commit -m $Message
-git branch -M main
-git remote remove origin 2>$null
-# Set your repo URL here (HTTPS). Example:
-# git remote add origin https://github.com/<you>/er1.git
-Write-Host "Set your origin with: git remote add origin https://github.com/<you>/er1.git" -ForegroundColor Cyan
-Write-Host "Then run: git push -u origin main" -ForegroundColor Cyan
+
+# only push if origin exists
+$hasOrigin = git remote | Select-String -SimpleMatch "origin" -Quiet
+if ($hasOrigin) {
+    git push
+} else {
+    Write-Host "[push] No 'origin' remote configured. Set it with:" -ForegroundColor Yellow
+    Write-Host "       git remote add origin https://github.com/<you>/er.git"
+    Write-Host "       git push -u origin main"
+}

@@ -6,7 +6,7 @@
 #include <DFRobotDFPlayerMini.h>
 
 // ======================= FIRMWARE INFO =======================
-static const char *FW_VERSION = "knocking_v5.11_3piezo_eth_ota_df_seq_timer_log";
+static const char *FW_VERSION = "knocking_v5.12_3piezo_eth_ota_df_seq_timer_log";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -74,6 +74,9 @@ HitState hitState[N_SENSORS];
 
 unsigned long lastMetricMs = 0;
 static const unsigned long METRIC_INTERVAL_MS = 1000;
+static const uint32_t METRIC_IDLE_INTERVAL_MS   = 10000;  // 10s between idle summaries
+static const uint16_t METRIC_ACTIVITY_THRESHOLD = 150;    // raw ADC max above this = interesting knock/noise
+static uint32_t lastIdleMetricMs = 0;
 
 // ======================= SEQUENCE CONFIG =====================
 // Target pattern: 0,0,0,0,1,1,2,2,2
@@ -283,10 +286,24 @@ void publishHeartbeatIfDue() {
 // ======================= METRICS =============================
 void publishMetricsIfDue() {
   unsigned long now = millis();
-  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
-  lastMetricMs = now;
 
-  uint32_t uptime = millis() / 1000;
+  bool hasActivity = false;
+  for (int i = 0; i < N_SENSORS; i++) {
+    if (piezo[i].maxVal >= METRIC_ACTIVITY_THRESHOLD) {
+      hasActivity = true;
+      break;
+    }
+  }
+
+  if (!hasActivity && (now - lastMetricMs < METRIC_INTERVAL_MS)) return;
+
+  uint32_t uptime = now / 1000;
+  bool anyActive = false;
+  bool channelActive[N_SENSORS];
+  uint16_t avgVals[N_SENSORS];
+  uint16_t baseVals[N_SENSORS];
+  uint16_t maxVals[N_SENSORS];
+  int dVals[N_SENSORS];
 
   for (int i = 0; i < N_SENSORS; i++) {
     PiezoState &ps = piezo[i];
@@ -305,22 +322,46 @@ void publishMetricsIfDue() {
 
     int d = (int)ps.avg - (int)ps.base;
 
+    channelActive[i] = (ps.maxVal >= METRIC_ACTIVITY_THRESHOLD);
+    if (channelActive[i]) anyActive = true;
+
+    avgVals[i]  = ps.avg;
+    baseVals[i] = ps.base;
+    maxVals[i]  = ps.maxVal;
+    dVals[i]    = d;
+  }
+
+  if (!anyActive && (now - lastIdleMetricMs < METRIC_IDLE_INTERVAL_MS)) {
+    lastMetricMs = now;
+    return;
+  }
+
+  for (int i = 0; i < N_SENSORS; i++) {
+    if (anyActive && !channelActive[i]) continue;
+
     String payload = String("{\"t\":\"INF\",\"up\":") + uptime +
                      ",\"df\":" + (dfOk ? "1" : "0") +
                      ",\"en\":" + (enabled ? "1" : "0") +
                      ",\"i\":" + i +
-                     ",\"avg\":" + ps.avg +
-                     ",\"max\":" + ps.maxVal +
-                     ",\"base\":" + ps.base +
-                     ",\"d\":" + d +
+                     ",\"avg\":" + avgVals[i] +
+                     ",\"max\":" + maxVals[i] +
+                     ",\"base\":" + baseVals[i] +
+                     ",\"d\":" + dVals[i] +
                      ",\"thr\":" + KNOCK_RAW_THR +
                      "}";
 
     mqtt.publish(TOPIC_METRIC, payload.c_str());
+  }
 
-    ps.sum    = 0;
-    ps.samples= 0;
-    ps.maxVal = 0;
+  if (!anyActive) {
+    lastIdleMetricMs = now;
+  }
+
+  lastMetricMs = now;
+  for (int i = 0; i < N_SENSORS; i++) {
+    piezo[i].sum     = 0;
+    piezo[i].samples = 0;
+    piezo[i].maxVal  = 0;
   }
 }
 

@@ -58,5 +58,10 @@
   "terminal.integrated.confirmOnExit": "never",
   "terminal.integrated.defaultLocation": "editor",
   "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
-  "terminal.external.windowsExec": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+  "terminal.external.windowsExec": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  "powershell.scriptAnalysis.enable": true,
+  "powershell.scriptAnalysis.settingsPath": "",
+  "powershell.scriptAnalysis.excludeRules": [
+    "PSUseApprovedVerbs"
+  ]
 }

@@ -1,86 +1,125 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [ValidateSet("er1", "er2", "er3")]
-  [string]$Site
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("er1")]
+    [string]$Env,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("runtime", "full")]
+    [string]$Mode = "runtime"
 )
 
-# --- Pi hosts (Tailscale hostnames) ---
-$piHosts = @{
-  "er1" = "er1-pi"
-  "er2" = "er2-pi"
-  "er3" = "er3-pi"
+$ErrorActionPreference = "Stop"
+
+# ----- Resolve paths -----
+
+# repo root = ...\Escape Room\er
+$repoRoot = (Get-Item "$PSScriptRoot\..\..").FullName
+
+# local ER folder for this env -> C:\Users\...\Escape Room\er\er1
+$localRoot = Join-Path $repoRoot "er1"
+
+if (-not (Test-Path $localRoot)) {
+    throw "Pi runtime folder not found: $localRoot"
 }
 
-if (-not $piHosts.ContainsKey($Site)) {
-  Write-Error "No Pi host configured for site '$Site'"
-  exit 1
-}
+# ----- Env mapping -----
 
-$piHost    = $piHosts[$Site]
-$piUser    = "rudyy"
-$remoteRoot = "/home/$piUser/$Site"
-
-# --- repo layout: script is in shared/pc-scripts, repo root is two levels up ---
-$repoRoot  = (Resolve-Path "$PSScriptRoot\..\..").Path
-$siteRoot  = Join-Path $repoRoot $Site        # er1, er2, er3
-$piRuntime = Join-Path $siteRoot "pi-runtime" # er1/pi-runtime
-
-if (-not (Test-Path $piRuntime)) {
-  Write-Error "Pi runtime folder not found: $piRuntime"
-  exit 1
-}
-
-Write-Host "[deploy-pi] Site:       $Site"
-Write-Host "[deploy-pi] Repo root:  $repoRoot"
-Write-Host "[deploy-pi] Runtime:    $piRuntime"
-Write-Host "[deploy-pi] Pi target:  ${piUser}@${piHost}:${remoteRoot}"
-Write-Host ""
-
-# --- ensure remote directory layout exists ---
-$mkDirs = @(
-  "$remoteRoot",
-  "$remoteRoot/scripts",
-  "$remoteRoot/systemd",
-  "$remoteRoot/docs",
-  "$remoteRoot/config",
-  "$remoteRoot/logs"
-) -join " "
-
-ssh "${piUser}@${piHost}" "mkdir -p $mkDirs" || {
-  Write-Error "[deploy-pi] Failed to create remote dirs on ${piHost}"
-  exit 1
-}
-
-function Copy-Dir {
-  param(
-    [string]$Local,
-    [string]$Remote
-  )
-  if (Test-Path $Local) {
-    Write-Host "[deploy-pi] sync dir  $Local -> $Remote"
-    & scp -r "$Local" "${piUser}@${piHost}:$Remote" | Write-Host
-    if ($LASTEXITCODE -ne 0) {
-      Write-Error "[deploy-pi] scp failed for $Local -> $Remote"
-      exit 1
+switch ($Env) {
+    "er1" {
+        $piUser     = "rudyy"
+        $piHost     = "100.108.1.80"   # Tailscale IP
+        $remoteRoot = "/home/rudyy/er1"
     }
-  } else {
-    Write-Host "[deploy-pi] skip dir (missing): $Local"
-  }
+    default {
+        throw "Unknown environment: $Env"
+    }
 }
 
-# --- sync scripts, systemd, docs ---
-Copy-Dir (Join-Path $piRuntime "scripts")  "$remoteRoot/scripts"
-Copy-Dir (Join-Path $piRuntime "systemd") "$remoteRoot/systemd"
-Copy-Dir (Join-Path $piRuntime "docs")    "$remoteRoot/docs"
+$piTarget = "{0}@{1}" -f $piUser, $piHost
 
-# --- config template: copy example only, never touch local.env ---
-$configExample = Join-Path $piRuntime "config/local.env.example"
-if (Test-Path $configExample) {
-  Write-Host "[deploy-pi] copy config/local.env.example"
-  & scp "$configExample" "${piUser}@${piHost}:${remoteRoot}/config/local.env.example" | Write-Host
+Write-Host ("[deploy-er1] Env:         {0}" -f $Env)
+Write-Host ("[deploy-er1] Mode:        {0}" -f $Mode)
+Write-Host ("[deploy-er1] Local root:  {0}" -f $localRoot)
+Write-Host ("[deploy-er1] Remote root: {0}:{1}" -f $piTarget, $remoteRoot)
+
+# ----- Ensure remote directory exists -----
+
+ssh $piTarget "mkdir -p '$remoteRoot'"
+
+# ----- Helper: run rsync -----
+
+function Invoke-Rsync {
+    param(
+        [string]$Source,
+        [string]$Dest,
+        [string[]]$ExtraArgs
+    )
+
+    $args = @("-avz", "--delete") + $ExtraArgs + @($Source, $Dest)
+    Write-Host "[deploy-er1] rsync $($args -join ' ')"
+    & rsync @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "rsync failed with exit code $LASTEXITCODE"
+    }
 }
 
-Write-Host ""
-Write-Host "[deploy-pi] Done."
-Write-Host "  - Real config: ${remoteRoot}/config/local.env"
-Write-Host "  - Logs:        ${remoteRoot}/logs/"
+# ----- Mode: full (mirror whole er1 tree, with deletes) -----
+
+if ($Mode -eq "full") {
+    # Mirror everything under er1/, but skip local build crud if you want later
+    Invoke-Rsync -Source ("{0}/" -f $localRoot) `
+                 -Dest   ("{0}:{1}/" -f $piTarget, $remoteRoot) `
+                 -ExtraArgs @(
+                    "--exclude=.pio",
+                    "--exclude=.sconsign*",
+                    "--exclude=.vscode"
+                 )
+}
+else {
+    # ----- Mode: runtime (only what the Pi needs to run) -----
+
+    # 1) CLI wrapper
+    if (Test-Path (Join-Path $localRoot "er1")) {
+        Invoke-Rsync -Source (Join-Path $localRoot "er1") `
+                     -Dest   ("{0}:{1}/" -f $piTarget, $remoteRoot) `
+                     -ExtraArgs @()
+    }
+
+    # 2) scripts/ (CLI helpers, mqtt-logs.sh, mqtt-locks.sh, ota, ...)
+    if (Test-Path (Join-Path $localRoot "scripts")) {
+        Invoke-Rsync -Source (Join-Path $localRoot "scripts/") `
+                     -Dest   ("{0}:{1}/scripts/" -f $piTarget, $remoteRoot) `
+                     -ExtraArgs @()
+    }
+
+    # 3) config/ (runtime config)
+    if (Test-Path (Join-Path $localRoot "config")) {
+        Invoke-Rsync -Source (Join-Path $localRoot "config/") `
+                     -Dest   ("{0}:{1}/config/" -f $piTarget, $remoteRoot) `
+                     -ExtraArgs @()
+    }
+
+    # 4) systemd/ (unit files)
+    if (Test-Path (Join-Path $localRoot "systemd")) {
+        Invoke-Rsync -Source (Join-Path $localRoot "systemd/") `
+                     -Dest   ("{0}:{1}/systemd/" -f $piTarget, $remoteRoot) `
+                     -ExtraArgs @()
+    }
+
+    # NOTE: we deliberately do NOT touch logs/ in "runtime" mode
+}
+
+# ----- Fix execute bits on remote -----
+
+ssh $piTarget @"
+set -e
+cd '$remoteRoot'
+chmod +x ./er1 2>/dev/null || true
+if [ -d scripts ]; then
+  chmod +x scripts/*.sh 2>/dev/null || true
+  chmod +x scripts/ota 2>/dev/null || true
+fi
+"@
+
+Write-Host "[deploy-er1] Deploy complete."
+Write-Host "[deploy-er1] Next step: run .\pc-scripts\push.ps1 to commit & push." -ForegroundColor Yellow
