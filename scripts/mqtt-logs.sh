@@ -1,53 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_BROKER="192.168.0.10"
-LOG_DIR="/home/rudyy/er/logs"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
+BROKER="${LOCAL_BROKER:-127.0.0.1}"
 
 ensure_log_dir() {
   mkdir -p "$LOG_DIR"
 }
 
-print_help() {
-  cat <<'EOF'
-Usage: scripts/mqtt-logs.sh <command> [args]
-
-Commands:
-  live            Subscribe to esc/#, write logs/er1-DD.MM.YYYY.log, and echo live output.
-  tail            tail -f today's logfile.
-  grep <pattern>  Search today's logfile for <pattern>.
-  help            Show this help text.
-EOF
+log_file_for_date() {
+  local date_part="$1"
+  echo "$LOG_DIR/er1-${date_part}.log"
 }
 
-timestamp_lines() {
-  while IFS= read -r line; do
-    printf '[%s] %s\n' "$(date '+%d.%m.%Y %H:%M:%S.%3N')" "$line"
-  done
+timestamp() {
+  date +"[%d.%m.%Y %H:%M:%S.%3N]"
 }
 
-run_live() {
+write_stream() {
+  local echo_output="$1"
   ensure_log_dir
-  local current_date file today
-  current_date=$(date +%d.%m.%Y)
-  file="$LOG_DIR/er1-$current_date.log"
 
-  mosquitto_sub -h "$LOCAL_BROKER" -t 'esc/#' -v \
-    | timestamp_lines \
-    | while IFS= read -r line; do
-        today=$(date +%d.%m.%Y)
-        if [[ "$today" != "$current_date" ]]; then
-          current_date="$today"
-          file="$LOG_DIR/er1-$current_date.log"
-        fi
-        echo "$line" >> "$file"
-        echo "$line"
-      done
+  local current_date file today stamped
+  current_date=$(date +%d.%m.%Y)
+  file="$(log_file_for_date "$current_date")"
+
+  mosquitto_sub -h "$BROKER" -t 'esc/#' -v | while IFS= read -r line; do
+    today=$(date +%d.%m.%Y)
+    if [[ "$today" != "$current_date" ]]; then
+      current_date="$today"
+      file="$(log_file_for_date "$current_date")"
+    fi
+
+    stamped="$(timestamp) $line"
+    echo "$stamped" >> "$file"
+    if [[ "$echo_output" == "yes" ]]; then
+      echo "$stamped"
+    fi
+  done
 }
 
 tail_today() {
   ensure_log_dir
-  local file="$LOG_DIR/er1-$(date +%d.%m.%Y).log"
+  local file
+  file="$(log_file_for_date "$(date +%d.%m.%Y)")"
   touch "$file"
   tail -f "$file"
 }
@@ -55,13 +52,33 @@ tail_today() {
 grep_today() {
   ensure_log_dir
   [[ $# -ge 1 ]] || { echo "Pattern required for grep command." >&2; exit 1; }
-  local pattern="$*"
-  local file="$LOG_DIR/er1-$(date +%d.%m.%Y).log"
+
+  local pattern file
+  pattern="$*"
+  file="$(log_file_for_date "$(date +%d.%m.%Y)")"
+
   if [[ ! -f "$file" ]]; then
     echo "No logfile found for today: $file" >&2
     exit 1
   fi
+
   grep --color=auto "$pattern" "$file"
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: scripts/mqtt-logs.sh <command> [args]
+
+Commands:
+  daemon          Run esc/# capture to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
+  live            Same as daemon but also echoes to stdout.
+  tail            tail -f today's logfile.
+  grep <pattern>  Search today's logfile for <pattern>.
+  help            Show this help text.
+Notes:
+  - Broker is taken from $LOCAL_BROKER (default: 127.0.0.1).
+  - Log timestamp uses: date +"[%d.%m.%Y %H:%M:%S.%3N]".
+EOF
 }
 
 main() {
@@ -69,8 +86,11 @@ main() {
   shift || true
 
   case "$cmd" in
+    daemon)
+      write_stream "no"
+      ;;
     live)
-      run_live
+      write_stream "yes"
       ;;
     tail)
       tail_today

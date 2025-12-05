@@ -59,20 +59,15 @@ If a sketch violates these rules, fix it and explicitly state what was corrected
 
 ---
 
-## 3. Logging Rules (ts with milliseconds)
+## 3. Logging Rules (date with milliseconds)
 
-- All MQTT log commands must run through the exact pipeline below and no alternatives:
-
-      mosquitto_sub -h <IP> -t '<topic>' -v \
-        | ts '[%d.%m.%Y %H:%M:%S.%N]' \
-        | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
-
+- All MQTT log capture must run through `scripts/mqtt-logs.sh` (no `ts`, no `awk` timestamping). The script stamps each line with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`.
 - Log lines must look like `[04.12.2025 05:39:29.924] esc/... {...}`.
-- Logging is centralized on the Pi under `/home/rudyy/er/logs/YYYY-MM-DD.log`. `scripts/mqtt-logs.sh live` maintains the rolling logfile and also prints live output.
+- Logging is centralized on the Pi under `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`. `scripts/mqtt-logs.sh live` maintains the rolling logfile and also prints live output.
 - To view logs, source `scripts/aliases.er1.sh` and use:
   - `log_live` to start the aggregator (LOCAL broker only).
-  - `log_tail` to follow today’s file.
-  - `log_grep <pattern>` to grep today’s file.
+  - `log_tail` to follow today's file.
+  - `log_grep <pattern>` to grep today's file.
 - Remote broker access is for control commands only; logging always uses the local broker.
 - JSON in chat must always be compact inline, e.g. `{"lvl":"INFO","msg":"BTN idx=2 pin=14 state=RELEASED dt=30ms presses=288"}`.
 - `docs/mqtt_commands.md` holds the current lock and logging cheatsheet plus references to `scripts/mqtt-logs.sh` and `scripts/mqtt-locks.sh`.
@@ -172,7 +167,7 @@ Rollbacks are handled via Git; Codex must not implement interactive approval flo
 
 ### 4.7 ER1 Terminal Workflow (tmux session)
 
-- The standard Pi workflow is: `cd /home/rudyy/er && ./scripts/er1-tmux.sh`.
+- The standard Pi workflow is: `cd /home/rudyy/er1 && ./scripts/er1-tmux.sh`.
 - If the `er1` tmux session already exists, the script simply attaches; otherwise it creates a three-pane layout (main shell, live MQTT logs, and a grep-ready shell with `scripts/mqtt-logs.sh grep ERROR` prefilled). Pane titles are `er1-main`, `er1-pi-log-mqtt`, and `er1-pi-log-grep`.
 - tmux auto-starts `scripts/mqtt-logs.sh live` so the daily logfile is always running in the background. Use pane 3 or `log_grep` / `log_tail` for investigations without touching the live capture.
 
@@ -181,7 +176,7 @@ Rollbacks are handled via Git; Codex must not implement interactive approval flo
 deploy.sh is not tracked in Git.
 
 It lives only on the Pi at:
-`/home/rudyy/er/deploy.sh`
+`/home/rudyy/er1/deploy.sh`
 
 Updates to the script must be done manually on the Pi.
 

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/ota <target>
+
+Targets:
+  maglock_ctrl  -> Env=room0_maglock_ctrl  Dev=maglock_ctrl  Room=room0
+  images_piano  -> Env=room1_images_piano  Dev=images_piano  Room=room1
+  chess         -> Env=room2_chess         Dev=chess         Room=room2
+  knocking      -> Env=room3_knocking      Dev=knocking      Room=room3
+  candles       -> Env=room3_candles       Dev=candles       Room=room3
+  star_sky      -> Env=room3_star_sky      Dev=star_sky      Room=room3
+  star_slider   -> Env=room3_star_slider   Dev=star_slider   Room=room3
+  stop_timer    -> Env=room3_stop_timer    Dev=stop_timer    Room=room3
+EOF
+}
+
+if [[ $# -lt 1 || "$1" == "-h" || "$1" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+target="$1"
+ENV=""
+DEVNAME=""
+ROOM=""
+
+case "$target" in
+  maglock_ctrl) ENV="room0_maglock_ctrl"; DEVNAME="maglock_ctrl"; ROOM="room0" ;;
+  images_piano) ENV="room1_images_piano"; DEVNAME="images_piano"; ROOM="room1" ;;
+  chess) ENV="room2_chess"; DEVNAME="chess"; ROOM="room2" ;;
+  knocking) ENV="room3_knocking"; DEVNAME="knocking"; ROOM="room3" ;;
+  candles) ENV="room3_candles"; DEVNAME="candles"; ROOM="room3" ;;
+  star_sky) ENV="room3_star_sky"; DEVNAME="star_sky"; ROOM="room3" ;;
+  star_slider) ENV="room3_star_slider"; DEVNAME="star_slider"; ROOM="room3" ;;
+  stop_timer) ENV="room3_stop_timer"; DEVNAME="stop_timer"; ROOM="room3" ;;
+  *)
+    echo "Unknown target: $target" >&2
+    usage
+    exit 1
+    ;;
+esac
+
+if ! command -v pwsh >/dev/null 2>&1; then
+  cat <<EOF >&2
+PowerShell (pwsh) is not installed on this machine.
+Run OTA from Windows using:
+  pwsh -NoLogo -File ./ota.ps1 -Env "$ENV" -Dev "$DEVNAME"
+EOF
+  exit 1
+fi
+
+OTA_DIR="$ROOT_DIR/er1"
+if [[ ! -f "$OTA_DIR/ota.ps1" ]]; then
+  echo "ota.ps1 not found under $OTA_DIR" >&2
+  exit 1
+fi
+
+cd "$OTA_DIR"
+pwsh -NoLogo -File ./ota.ps1 -Env "$ENV" -Dev "$DEVNAME" -Room "$ROOM"

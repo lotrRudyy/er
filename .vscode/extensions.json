@@ -2,8 +2,7 @@
   "recommendations": [
     "platformio.platformio-ide",
     "spencerwmiles.vscode-task-buttons",
-    "EditorConfig.EditorConfig",
-    "DavidAnson.vscode-markdownlint"
+    "EditorConfig.EditorConfig"
   ],
   "unwantedRecommendations": [
     "ms-vscode.cpptools-extension-pack"

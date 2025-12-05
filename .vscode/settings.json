@@ -1,3 +1,62 @@
 {
-  "er1.settingsInfo": "Project-specific VS Code settings go here."
+  "er1.settingsInfo": "Project-specific VS Code settings go here.",
+  "remote.SSH.remotePlatform": {
+    "192.168.0.10": "linux",
+    "er1-pi": "linux",
+    "rudolfdosser.com": "linux",
+    "hostingerVPS": "linux",
+    "hostingerVPSdcbots": "linux",
+    "localWebServer": "linux",
+    "192.168.0.111": "linux",
+    "rudyy-debian11": "linux"
+  },
+  "workbench.secondarySideBar.defaultVisibility": "visible",
+  "explorer.confirmDelete": false,
+  "files.hotExit": "onExitAndWindowClose",
+  "window.restoreWindows": "all",
+  "workbench.editor.restoreViewState": true,
+  "terminal.integrated.enablePersistentSessions": true,
+  "terminal.integrated.enableMultiLinePasteWarning": "never",
+  "editor.defaultFormatter": "ms-vscode-remote.remote-ssh-edit",
+  "files.autoSave": "afterDelay",
+  "terminal.integrated.automationProfile.windows": {},
+  "chat.agentSessionsViewLocation": "single-view",
+  "workbench.colorTheme": "Default Dark+",
+  "git.confirmSync": false,
+  "git.postCommitCommand": "push",
+  "security.workspace.trust.untrustedFiles": "open",
+  "git.enableSmartCommit": true,
+  "git.ignoreRebaseWarning": true,
+  "editor.largeFileOptimizations": false,
+  "explorer.confirmDragAndDrop": false,
+  "terminal.integrated.profiles.windows": {
+    "PowerShell": {
+      "source": "PowerShell",
+      "icon": "terminal-powershell"
+    },
+    "Command Prompt": {
+      "path": [
+        "${env:windir}\\Sysnative\\cmd.exe",
+        "${env:windir}\\System32\\cmd.exe"
+      ],
+      "args": [],
+      "icon": "terminal-cmd"
+    },
+    "Git Bash": {
+      "source": "Git Bash"
+    },
+    "pwsh": {
+      "path": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    },
+    "Windows PowerShell": {
+      "path": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  "terminal.integrated.allowMnemonics": false,
+  "terminal.integrated.confirmOnExit": "never",
+  "terminal.integrated.defaultLocation": "editor",
+  "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
+  "terminal.external.windowsExec": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
 }

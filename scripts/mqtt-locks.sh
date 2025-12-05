@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_BROKER="192.168.0.10"
+LOCAL_BROKER="100.108.1.80"
 REMOTE_BROKER="100.108.1.80"
 VALID_IDS=("images" "door_to_r2" "door_to_r3" "slider" "knocking")
 

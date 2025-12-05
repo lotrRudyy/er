@@ -2,7 +2,7 @@
 
 Fast references for ER1 MQTT work. Constants:
 
-- `LOCAL_BROKER = 192.168.0.10`
+- `LOCAL_BROKER = 100.108.1.80`
 - `REMOTE_BROKER = 100.108.1.80`
 
 Canonical timestamp pipeline (use verbatim for every logging command):
@@ -18,8 +18,8 @@ Lock IDs: `images`, `door_to_r2`, `door_to_r3`, `slider`, `knocking`.
 ### Local broker
 
 ```bash
-mosquitto_pub -h 192.168.0.10 -t 'esc/ctrl/lock/<id>/cmd' -m "OPEN"
-mosquitto_pub -h 192.168.0.10 -t 'esc/ctrl/lock/<id>/cmd' -m "CLOSE"
+mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/<id>/cmd' -m "OPEN"
+mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/<id>/cmd' -m "CLOSE"
 ```
 
 ### Remote broker
@@ -34,7 +34,7 @@ Replace `<id>` with one of the canonical lock IDs.
 ## Live Logging (LOCAL broker only)
 
 ```bash
-mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
+mosquitto_sub -h 100.108.1.80 -t 'esc/#' -v \
   | ts '[%d.%m.%Y %H:%M:%S.%N]' \
   | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
 ```
@@ -47,13 +47,13 @@ mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
 mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
   | ts '[%d.%m.%Y %H:%M:%S.%N]' \
   | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/' \
-  >> /home/rudyy/er/logs/$(date +%Y-%m-%d).log
+  >> /home/rudyy/er1/logs/er1-$(date +%d.%m.%Y).log
 ```
 
 ### On Windows
 
 ```powershell
-mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v `
+mosquitto_sub -h 100.108.1.80 -t 'esc/#' -v `
   | ts '[%d.%m.%Y %H:%M:%S.%N]' `
   | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/' `
   >> C:\er_logs\2025-12-04.log

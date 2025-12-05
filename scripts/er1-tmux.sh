@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SESSION_NAME="er1"
-WORKDIR="/home/rudyy/er"
+WORKDIR="/home/rudyy/er1"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is not installed. Please install tmux on the Pi to use this workflow." >&2

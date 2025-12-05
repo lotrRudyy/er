@@ -8,18 +8,18 @@ mosquitto_sub -h <broker> -t '<topic>' -v \
   | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
 ```
 
-## Local Broker (192.168.0.10)
+## Local Broker (100.108.1.80)
 
 ### Publish
 
 ```
-mosquitto_pub -h 192.168.0.10 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
+mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
 ```
 
 ### Subscribe (all topics)
 
 ```
-mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
+mosquitto_sub -h 100.108.1.80 -t 'esc/#' -v \
   | ts '[%d.%m.%Y %H:%M:%S.%N]' \
   | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/'
 ```

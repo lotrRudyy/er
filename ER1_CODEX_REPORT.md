@@ -77,7 +77,7 @@
   mosquitto_sub -h 192.168.0.10 -t 'esc/#' -v \
     | ts '[%d.%m.%Y %H:%M:%S.%N]' \
     | sed -E 's/([0-9]{3})[0-9]{6}]/\1]/' \
-      >> /home/rudyy/er/logs/$(date +%Y-%m-%d).log
+      >> /home/rudyy/er1/logs/er1-$(date +%d.%m.%Y).log
   ```
 
 ### commands.md
