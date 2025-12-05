@@ -9,12 +9,18 @@ __pycache__/
 *.zip
 !.vscode/settings.json
 
-# PlatformIO build output for ER1
-er1/.pio/
+# PlatformIO build output (now under per-ER firmware)
+er1/firmware/.pio/
 
-# ER1 logs
-er1/logs/*.log
-!er1/logs/*.ps1
+# ER1 Pi runtime: real logs and secrets stay on the Pi
+er1/pi-runtime/logs/
+er1/pi-runtime/config/local.env
+
+# Skeleton placeholders for future rooms (ignore their runtime logs/config if created)
+er2/pi-runtime/logs/
+er2/pi-runtime/config/local.env
+er3/pi-runtime/logs/
+er3/pi-runtime/config/local.env
 
 # Pi-local deployment script
 deploy.sh

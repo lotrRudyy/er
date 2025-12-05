@@ -1,10 +1,10 @@
-# ER1 — Escape Room 1
+# Escape Room Repo Layout
 
-PlatformIO (ESP32 + W5500, HTTP OTA, MQTT, FSM). Maglocks centralized; sensor nodes publish events only.
+- `er1/firmware/` — PlatformIO project (ESP32 + W5500, HTTP OTA, MQTT, FSM).
+- `er1/pi-runtime/` — source of truth for `/home/rudyy/er1` on the Pi (scripts, systemd, config templates).
+- `er1/docs/` — ER1-specific documentation (protocol, MQTT commands, PowerShell setup).
+- `er2/`, `er3/` — placeholders for future rooms (firmware + pi-runtime skeletons).
+- `shared/pc-scripts/` — Windows/macOS/Linux helper scripts for developers.
+- `shared/libs/`, `shared/docs/` — reserved for shared code and documentation.
 
-**Envs:** room0_maglock_ctrl, room1_images_piano, room2_chess, room2_chess_rfid, room3_candles, room3_knocking, room3_star_sky, room3_star_slider, room3_stop_timer.
-
-## First-time
-
-1) Open in VS Code → Source Control → Initialize Repository → Commit.
-2) Publish Branch → private repo name `er1`.
+Canonical ER1 environments: room0_maglock_ctrl, room1_images_piano, room2_chess, room2_chess_rfid, room3_candles, room3_knocking, room3_star_sky, room3_star_slider, room3_stop_timer.

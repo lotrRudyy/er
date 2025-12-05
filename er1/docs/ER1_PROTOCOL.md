@@ -70,7 +70,7 @@ If a sketch violates these rules, fix it and explicitly state what was corrected
   - `log_grep <pattern>` to grep today's file.
 - Remote broker access is for control commands only; logging always uses the local broker.
 - JSON in chat must always be compact inline, e.g. `{"lvl":"INFO","msg":"BTN idx=2 pin=14 state=RELEASED dt=30ms presses=288"}`.
-- `docs/mqtt_commands.md` holds the current lock and logging cheatsheet plus references to `scripts/mqtt-logs.sh` and `scripts/mqtt-locks.sh`.
+- `er1/docs/mqtt_commands.md` holds the current lock and logging cheatsheet plus references to `scripts/mqtt-logs.sh` and `scripts/mqtt-locks.sh`.
 
 ---
 

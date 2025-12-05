@@ -2,10 +2,10 @@
 
 ## Path layout (Pi)
 - Repo root: `/home/rudyy/er1`
-- Scripts: `/home/rudyy/er1/scripts`
-- Logs: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`
-- Docs: `/home/rudyy/er1/docs`
-- systemd reference: `/home/rudyy/er1/systemd/er1-mqtt-log.service` (copy to `/etc/systemd/system/` manually)
+- Scripts: `/home/rudyy/er1/scripts` (source: `er1/pi-runtime/scripts/`)
+- Logs: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log` (runtime only)
+- Docs: `/home/rudyy/er1/docs` (runtime help; source: `er1/pi-runtime/docs/`)
+- systemd reference: `/home/rudyy/er1/systemd/er1-mqtt-log.service` (source: `er1/pi-runtime/systemd/`, copy to `/etc/systemd/system/` manually)
 
 ## MQTT logging (`scripts/mqtt-logs.sh`)
 - Broker: `LOCAL_BROKER` env (defaults to `127.0.0.1`).
@@ -32,7 +32,7 @@
   - `star_sky` → Env `room3_star_sky`, Dev `star_sky`
   - `star_slider` → Env `room3_star_slider`, Dev `star_slider`
   - `stop_timer` → Env `room3_stop_timer`, Dev `stop_timer`
-- Requires `pwsh`. If missing on the Pi, run the OTA from Windows:
+- Requires `pwsh`. If missing on the Pi, run the OTA from Windows against the firmware project (`er1/firmware/ota.ps1`):
   - `pwsh -NoLogo -File ./ota.ps1 -Env "<Env>" -Dev "<Dev>"`
 
 ## Systemd (reference only)
