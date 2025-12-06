@@ -6,7 +6,7 @@
 #include <DFRobotDFPlayerMini.h>
 
 // ======================= FIRMWARE INFO =======================
-static const char *FW_VERSION = "knocking_v5.12_3piezo_eth_ota_df_seq_timer_log";
+static const char *FW_VERSION = "knocking_v5.14_3piezo_eth_ota_df_seq_timer_log";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -73,9 +73,10 @@ struct HitState {
 HitState hitState[N_SENSORS];
 
 unsigned long lastMetricMs = 0;
+// we keep these constants for future use, but the spam is controlled by a hard 10s gate now
 static const unsigned long METRIC_INTERVAL_MS = 1000;
-static const uint32_t METRIC_IDLE_INTERVAL_MS   = 10000;  // 10s between idle summaries
-static const uint16_t METRIC_ACTIVITY_THRESHOLD = 150;    // raw ADC max above this = interesting knock/noise
+static const uint32_t METRIC_IDLE_INTERVAL_MS   = 10000;
+static const uint16_t METRIC_ACTIVITY_THRESHOLD = 150;
 static uint32_t lastIdleMetricMs = 0;
 
 // ======================= SEQUENCE CONFIG =====================
@@ -104,7 +105,19 @@ bool enabled = true;
 
 // ======================= LOG UTIL ============================
 void publishLog(const char *lvl, const String &msg) {
-  String payload = String("{\"lvl\":\"") + lvl + "\",\"msg\":\"" + msg + "\"}";
+  // Rate limit non-critical logs to max 1 / 10s
+  static unsigned long lastLogMs = 0;
+  unsigned long now = millis();
+
+  bool isCritical = (strcmp(lvl, "ERR") == 0) || (strcmp(lvl, "CMD") == 0);
+  if (!isCritical && (now - lastLogMs < 10000)) {
+    return;
+  }
+  lastLogMs = now;
+
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"lvl\":\"" + lvl +
+                   "\",\"msg\":\"" + msg + "\"}";
   mqtt.publish(TOPIC_LOG, payload.c_str());
 }
 
@@ -284,22 +297,14 @@ void publishHeartbeatIfDue() {
 }
 
 // ======================= METRICS =============================
+// Now: single aggregated line, max once every 10 seconds.
 void publishMetricsIfDue() {
   unsigned long now = millis();
-
-  bool hasActivity = false;
-  for (int i = 0; i < N_SENSORS; i++) {
-    if (piezo[i].maxVal >= METRIC_ACTIVITY_THRESHOLD) {
-      hasActivity = true;
-      break;
-    }
-  }
-
-  if (!hasActivity && (now - lastMetricMs < METRIC_INTERVAL_MS)) return;
+  if (now - lastMetricMs < 10000) return;   // hard 10s gate
+  lastMetricMs = now;
 
   uint32_t uptime = now / 1000;
-  bool anyActive = false;
-  bool channelActive[N_SENSORS];
+
   uint16_t avgVals[N_SENSORS];
   uint16_t baseVals[N_SENSORS];
   uint16_t maxVals[N_SENSORS];
@@ -322,42 +327,50 @@ void publishMetricsIfDue() {
 
     int d = (int)ps.avg - (int)ps.base;
 
-    channelActive[i] = (ps.maxVal >= METRIC_ACTIVITY_THRESHOLD);
-    if (channelActive[i]) anyActive = true;
-
     avgVals[i]  = ps.avg;
     baseVals[i] = ps.base;
     maxVals[i]  = ps.maxVal;
     dVals[i]    = d;
   }
 
-  if (!anyActive && (now - lastIdleMetricMs < METRIC_IDLE_INTERVAL_MS)) {
-    lastMetricMs = now;
-    return;
-  }
+  // Build single JSON array payload
+  String payload = String("{\"t\":\"INF\",\"fw\":\"") + FW_VERSION +
+                   "\",\"up\":" + uptime +
+                   ",\"df\":" + (dfOk ? "1" : "0") +
+                   ",\"en\":" + (enabled ? "1" : "0") +
+                   ",\"thr\":" + KNOCK_RAW_THR;
 
+  payload += ",\"avg\":[";
   for (int i = 0; i < N_SENSORS; i++) {
-    if (anyActive && !channelActive[i]) continue;
-
-    String payload = String("{\"t\":\"INF\",\"up\":") + uptime +
-                     ",\"df\":" + (dfOk ? "1" : "0") +
-                     ",\"en\":" + (enabled ? "1" : "0") +
-                     ",\"i\":" + i +
-                     ",\"avg\":" + avgVals[i] +
-                     ",\"max\":" + maxVals[i] +
-                     ",\"base\":" + baseVals[i] +
-                     ",\"d\":" + dVals[i] +
-                     ",\"thr\":" + KNOCK_RAW_THR +
-                     "}";
-
-    mqtt.publish(TOPIC_METRIC, payload.c_str());
+    if (i > 0) payload += ",";
+    payload += avgVals[i];
   }
+  payload += "]";
 
-  if (!anyActive) {
-    lastIdleMetricMs = now;
+  payload += ",\"max\":[";
+  for (int i = 0; i < N_SENSORS; i++) {
+    if (i > 0) payload += ",";
+    payload += maxVals[i];
   }
+  payload += "]";
 
-  lastMetricMs = now;
+  payload += ",\"base\":[";
+  for (int i = 0; i < N_SENSORS; i++) {
+    if (i > 0) payload += ",";
+    payload += baseVals[i];
+  }
+  payload += "]";
+
+  payload += ",\"d\":[";
+  for (int i = 0; i < N_SENSORS; i++) {
+    if (i > 0) payload += ",";
+    payload += dVals[i];
+  }
+  payload += "]}";
+
+  mqtt.publish(TOPIC_METRIC, payload.c_str());
+
+  // reset accumulators
   for (int i = 0; i < N_SENSORS; i++) {
     piezo[i].sum     = 0;
     piezo[i].samples = 0;

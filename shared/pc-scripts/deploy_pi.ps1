@@ -46,7 +46,7 @@ Write-Host ("[deploy-er1] Remote root: {0}:{1}" -f $piTarget, $remoteRoot)
 
 ssh $piTarget "mkdir -p '$remoteRoot'"
 
-# ----- Helper: run rsync -----
+# ----- Helper: run rsync (or scp fallback) -----
 
 function Invoke-Rsync {
     param(
@@ -55,11 +55,27 @@ function Invoke-Rsync {
         [string[]]$ExtraArgs
     )
 
-    $args = @("-avz", "--delete") + $ExtraArgs + @($Source, $Dest)
-    Write-Host "[deploy-er1] rsync $($args -join ' ')"
-    & rsync @args
-    if ($LASTEXITCODE -ne 0) {
-        throw "rsync failed with exit code $LASTEXITCODE"
+    $rsyncCmd = Get-Command rsync -ErrorAction SilentlyContinue
+
+    if ($rsyncCmd) {
+        $args = @("-avz", "--delete") + $ExtraArgs + @($Source, $Dest)
+        Write-Host "[deploy-er1] rsync $($args -join ' ')"
+        & rsync @args
+        if ($LASTEXITCODE -ne 0) {
+            throw "rsync failed with exit code $LASTEXITCODE"
+        }
+    }
+    else {
+        Write-Host "[deploy-er1] rsync not found, falling back to scp -r" -ForegroundColor Yellow
+
+        $scpSource = $Source
+        $scpDest   = $Dest
+
+        Write-Host "[deploy-er1] scp -r `"$scpSource`" `"$scpDest`""
+        & scp -r "$scpSource" "$scpDest"
+        if ($LASTEXITCODE -ne 0) {
+            throw "scp failed with exit code $LASTEXITCODE"
+        }
     }
 }
 

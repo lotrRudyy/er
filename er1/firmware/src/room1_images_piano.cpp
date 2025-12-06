@@ -5,8 +5,10 @@
 #include <Update.h>
 
 // ======================= FIRMWARE INFO =======================
-// bumped version for naming cleanup
-static const char *FW_VERSION = "images_piano_v1.7_4btn_eth_ota_solved_open_edge";
+// Simple version used in ALL logs / hb / metrics
+static const char *FW_VERSION = "1.11";
+// Descriptive version string for BOOT message & code comments
+static const char *FW_DESC    = "images_piano_v1.11_4btn_eth_ota_solved_open_edge_btn_edge_fwlog_btnlog";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -48,13 +50,16 @@ static const int N_BTNS = 4;
 static const int BTN_PINS[N_BTNS] = { 25, 26, 14, 12 };
 
 // Debounce (ms) for button edges
-static const unsigned long BTN_DEBOUNCE_MS = 30;
+static const unsigned long BTN_DEBOUNCE_MS      = 30;
+// Minimum time between accepted/logged edges per button
+static const unsigned long BTN_EDGE_MIN_LOG_MS  = 100;
 
 struct ButtonState {
   int pin;
   bool cur;
   bool prev;
   unsigned long lastChangeMs;
+  unsigned long lastLogMs;
   uint32_t presses;
 };
 
@@ -71,13 +76,16 @@ unsigned long lastHbMs     = 0;
 unsigned long lastMetricMs = 0;
 
 static const unsigned long HB_INTERVAL_MS     = 5000;
-static const unsigned long METRIC_INTERVAL_MS = 1000;
+static const unsigned long METRIC_INTERVAL_MS = 1000; // kept for potential future use
 
 bool enabled = true;
 
 // ======================= LOG UTIL ============================
 void publishLog(const char *lvl, const String &msg) {
-  String payload = String("{\"lvl\":\"") + lvl + "\",\"msg\":\"" + msg + "\"}";
+  // fw field always uses simple FW_VERSION
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"lvl\":\"" + lvl +
+                   "\",\"msg\":\"" + msg + "\"}";
   mqtt.publish(TOPIC_LOG, payload.c_str());
 }
 
@@ -170,7 +178,39 @@ void publishHeartbeatIfDue() {
   mqtt.publish(TOPIC_HB, hb.c_str(), true);
 }
 
-// ======================= METRICS =============================
+// ======================= METRICS (EDGE-BASED) ================
+void publishButtonMetricsOnChange(int idx) {
+  uint32_t uptime = millis() / 1000;
+  ButtonState &b = btn[idx];
+
+  // Per-button metric (include fw)
+  String payloadBtn = String("{\"t\":\"BTN\",\"fw\":\"") + FW_VERSION +
+                      "\",\"up\":" + uptime +
+                      ",\"en\":" + (enabled ? "1" : "0") +
+                      ",\"i\":" + idx +
+                      ",\"pin\":" + b.pin +
+                      ",\"state\":" + (b.cur ? 1 : 0) +   // 1 = released (HIGH), 0 = pressed (LOW)
+                      ",\"presses\":" + b.presses +
+                      "}";
+  mqtt.publish(TOPIC_METRIC, payloadBtn.c_str());
+
+  // Overall "all pressed" status
+  bool allPressedNow = true;
+  for (int i = 0; i < N_BTNS; i++) {
+    if (btn[i].cur != LOW) {  // INPUT_PULLUP: LOW = pressed
+      allPressedNow = false;
+      break;
+    }
+  }
+
+  String payloadAll = String("{\"t\":\"ALL\",\"fw\":\"") + FW_VERSION +
+                      "\",\"up\":" + uptime +
+                      ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
+                      "}";
+  mqtt.publish(TOPIC_METRIC, payloadAll.c_str());
+}
+
+// Old periodic metrics function kept but unused now
 void publishMetricsIfDue() {
   unsigned long now = millis();
   if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
@@ -178,31 +218,30 @@ void publishMetricsIfDue() {
 
   uint32_t uptime = millis() / 1000;
 
-  // Per-button metrics
   for (int i = 0; i < N_BTNS; i++) {
     ButtonState &b = btn[i];
 
-    String payload = String("{\"t\":\"BTN\",\"up\":") + uptime +
+    String payload = String("{\"t\":\"BTN\",\"fw\":\"") + FW_VERSION +
+                     "\",\"up\":" + uptime +
                      ",\"en\":" + (enabled ? "1" : "0") +
                      ",\"i\":" + i +
                      ",\"pin\":" + b.pin +
-                     ",\"state\":" + (b.cur ? 1 : 0) +   // 1 = released (HIGH), 0 = pressed (LOW)
+                     ",\"state\":" + (b.cur ? 1 : 0) +
                      ",\"presses\":" + b.presses +
                      "}";
-
     mqtt.publish(TOPIC_METRIC, payload.c_str());
   }
 
-  // Overall "all pressed" status for debugging
   bool allPressedNow = true;
   for (int i = 0; i < N_BTNS; i++) {
-    if (digitalRead(btn[i].pin) != LOW) {
+    if (btn[i].cur != LOW) {
       allPressedNow = false;
       break;
     }
   }
 
-  String payloadAll = String("{\"t\":\"ALL\",\"up\":") + uptime +
+  String payloadAll = String("{\"t\":\"ALL\",\"fw\":\"") + FW_VERSION +
+                      "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
   mqtt.publish(TOPIC_METRIC, payloadAll.c_str());
@@ -212,34 +251,39 @@ void publishMetricsIfDue() {
 void handleButtonEdge(int idx, bool newState) {
   ButtonState &b = btn[idx];
   unsigned long now = millis();
-  unsigned long dt  = now - b.lastChangeMs;   // time since last accepted edge
+  unsigned long dtChange = now - b.lastChangeMs;
+  if (dtChange < BTN_DEBOUNCE_MS) return;
 
-  if (dt < BTN_DEBOUNCE_MS) return;
+  unsigned long dtLog = now - b.lastLogMs;
+  if (dtLog < BTN_EDGE_MIN_LOG_MS) return;
+
   b.lastChangeMs = now;
+  b.lastLogMs    = now;
+
+  if (!newState) {
+    // Count only presses (LOW)
+    b.presses++;
+  }
 
   const char *stateStr = newState ? "RELEASED" : "PRESSED";
 
-  // More detailed edge log for debugging flapping buttons
+  // THIS is your button logging – per edge, via MQTT log topic
   String msg = String("BTN idx=") + idx +
                " pin=" + b.pin +
                " state=" + stateStr +
-               " dt=" + dt + "ms" +
+               " dt=" + dtChange + "ms" +
                " presses=" + b.presses;
   publishLog("INFO", msg);
 
-  if (!newState) {
-    // Count only presses
-    b.presses++;
-  }
+  // Button-related MQTT only on state change
+  publishButtonMetricsOnChange(idx);
 }
 
 // ======================= IMAGES SOLVE LOGIC ==================
 // SOLVED only when:
 //  - all 4 buttons are pressed at the same time (all LOW)
 //  - we *just* transitioned from "not all pressed" to "all pressed"
-//  - that gives exactly one SOLVED per "all-pressed" episode
 void checkImagesSolved() {
-  // Check current "all pressed" state using debounced values
   bool allPressedNow = true;
   for (int i = 0; i < N_BTNS; i++) {
     if (btn[i].cur != LOW) {  // INPUT_PULLUP: LOW = pressed
@@ -259,7 +303,6 @@ void checkImagesSolved() {
     }
   }
 
-  // Remember for next loop
   allPressedPrev = allPressedNow;
 }
 
@@ -300,6 +343,7 @@ void mqttCallback(char *topicC, byte *payload, unsigned int length) {
 
 void mqttReconnect() {
   while (!mqtt.connected()) {
+    // LWT on the heartbeat topic
     if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
       publishLog("INFO", "MQTT connected");
       mqtt.subscribe(TOPIC_CMD);
@@ -317,6 +361,7 @@ void setup() {
     btn[i].pin          = BTN_PINS[i];
     btn[i].presses      = 0;
     btn[i].lastChangeMs = 0;
+    btn[i].lastLogMs    = 0;
     pinMode(btn[i].pin, INPUT_PULLUP);
     bool lvl = digitalRead(btn[i].pin);
     btn[i].cur  = lvl;
@@ -349,6 +394,9 @@ void setup() {
 
   lastHbMs     = millis();
   lastMetricMs = millis();
+
+  // BOOT log uses descriptive FW_DESC but fw field still simple FW_VERSION
+  publishLog("INFO", String("BOOT FW=") + FW_DESC);
 }
 
 // ======================= LOOP ================================
@@ -372,7 +420,6 @@ void loop() {
   // Check images riddle solve condition (all 4 pressed edge)
   checkImagesSolved();
 
-  // Metrics + heartbeat
-  publishMetricsIfDue();
+  // Only heartbeat is periodic now; button MQTT is edge-based
   publishHeartbeatIfDue();
 }
