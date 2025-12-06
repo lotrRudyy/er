@@ -5,7 +5,10 @@
 #include <Update.h>
 
 // ======================= FIRMWARE INFO =======================
-static const char *FW_VERSION = "maglock_ctrl_v11.1";
+// Simple numeric version used in all MQTT payloads
+static const char *FW_VERSION = "1.1";
+// Human-readable description for changelog / docs
+static const char *FW_DESC    = "maglock_ctrl 1.1 – ER1 protocol-aligned (images,r2,r3,slider,knocking), 1s pulses + 10s cooldown, HB/log/metric v2, gameMode";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -15,7 +18,7 @@ static const char *FW_VERSION = "maglock_ctrl_v11.1";
 #define ETH_MOSI 23
 
 // ======================= NETWORK CONFIG ======================
-byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55 };
+byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x50 };  // unique-ish MAC
 IPAddress ip     (192, 168, 0, 11);
 IPAddress dns    (0, 0, 0, 0);
 IPAddress gw     (0, 0, 0, 0);
@@ -26,87 +29,218 @@ IPAddress mqttServer(192, 168, 0, 10);
 const uint16_t mqttPort = 1883;
 
 // ======================= NODE TOPICS =========================
-// This is the controller node itself (for HB/log/cmd/OTA)
 static const char *CLIENT_ID    = "maglock_ctrl";
 static const char *TOPIC_HB     = "esc/room0/maglock_ctrl/hb";
 static const char *TOPIC_CMD    = "esc/room0/maglock_ctrl/cmd";
 static const char *TOPIC_LOG    = "esc/room0/maglock_ctrl/log";
+static const char *TOPIC_METRIC = "esc/room0/maglock_ctrl/metric";
 
-// Lock command/state topics pattern:
-// esc/ctrl/lock/<id>/cmd
-// esc/ctrl/lock/<id>/state
+// Global game-mode topic (simple string: OFF|INGAME|MAINT)
+static const char *TOPIC_GAME   = "esc/game/state";
+
+// Lock topics: esc/ctrl/lock/<id>/{cmd,state}
+static const char *LOCK_CMD_PREFIX   = "esc/ctrl/lock/";    // + <id> + "/cmd"
+static const char *LOCK_STATE_PREFIX = "esc/ctrl/lock/";    // + <id> + "/state"
 
 // ======================= OTA CONFIG ==========================
 static const char *OTA_HOST  = "192.168.0.10";
 static const uint16_t OTA_PORT = 80;
 static const char *OTA_PATH  = "/firmware/maglock_ctrl.bin";
 
+// ======================= GAME MODE ===========================
+enum GameMode {
+  MODE_OFF = 0,   // no group in-game, minimal logs, slow HB
+  MODE_INGAME,    // players in-game, normal logs, fast HB
+  MODE_MAINT      // maintenance / debugging, verbose logs
+};
+
+GameMode gameMode = MODE_OFF;
+
 // ======================= LOCK CONFIG =========================
+enum LockMode {
+  FAIL_SECURE = 0,  // no power = locked, pulse to unlock
+  FAIL_SAFE         // no power = unlocked, hold power to lock
+};
+
 struct Lock {
-  const char *id;       // "images", "r2", ...
-  uint8_t     pin;      // GPIO
-  bool        failSafe; // true = power=locked (fail-safe doors)
-  bool        pulseActive;
-  unsigned long pulseEndMs;
-  bool        cooldownActive;
-  unsigned long cooldownEndMs;
+  const char *id;
+  uint8_t     pin;
+  LockMode    mode;
+
+  // runtime state
+  bool        coilOn;            // current physical output (true = HIGH)
+  bool        pulsing;           // only for fail-secure
+  bool        cooldown;          // only for fail-secure
+  unsigned long pulseStartMs;
+  unsigned long cooldownStartMs;
+  uint32_t    pulseCount;
 };
 
-#define N_LOCKS 5
+static const unsigned long PULSE_MS     = 1000;   // 1 s pulse
+static const unsigned long COOLDOWN_MS = 10000;  // 10 s cooldown
 
-// Canonical lock IDs (mirror MQTT topics under esc/ctrl/lock/<id>/...)
-static const char *LOCK_ID_IMAGES   = "images";
-static const char *LOCK_ID_R2       = "r2";
-static const char *LOCK_ID_R3       = "r3";
-static const char *LOCK_ID_SLIDER   = "slider";
-static const char *LOCK_ID_KNOCKING = "knocking";
-
-// Mapping (per your current setup):
-// images   -> GPIO26 (fail-secure, 1s pulse + 10s cooldown)
-// r2       -> GPIO16 (fail-safe, OPEN = power OFF)
-// r3       -> GPIO17 (fail-safe, OPEN = power OFF)
-// slider   -> GPIO33 (fail-secure, 1s pulse + 10s cooldown)
-// knocking -> GPIO25 (fail-secure, 1s pulse + 10s cooldown)
-Lock locks[N_LOCKS] = {
-  { LOCK_ID_IMAGES,   26, false, false, 0, false, 0 },
-  { LOCK_ID_R2,       16, true,  false, 0, false, 0 },
-  { LOCK_ID_R3,       17, true,  false, 0, false, 0 },
-  { LOCK_ID_SLIDER,   33, false, false, 0, false, 0 },
-  { LOCK_ID_KNOCKING, 25, false, false, 0, false, 0 }
+Lock locks[] = {
+  {"images",   26, FAIL_SECURE},
+  {"r2",       16, FAIL_SAFE},
+  {"r3",       17, FAIL_SAFE},
+  {"slider",   33, FAIL_SECURE},
+  {"knocking", 25, FAIL_SECURE}
 };
 
-// Fail-secure pulse length and cooldown (ms)
-static const unsigned long FAILSEC_PULSE_MS    = 1000;
-static const unsigned long FAILSEC_COOLDOWN_MS = 10000;
+static const size_t LOCK_COUNT = sizeof(locks) / sizeof(locks[0]);
 
-// ======================= GLOBALS =============================
+// ======================= STATE ===============================
 EthernetClient ethClient;
 PubSubClient mqtt(ethClient);
 
-unsigned long lastHbMs = 0;
-static const unsigned long HB_INTERVAL_MS = 5000;
-
-// global enable flag
 bool enabled = true;
 
-// ======================= UTIL: LOG ===========================
-void publishLog(const char *lvl, const String &msg) {
-  String payload = String("{\"lvl\":\"") + lvl + "\",\"msg\":\"" + msg + "\"}";
+unsigned long lastHbMs     = 0;
+unsigned long lastMetricMs = 0;
+
+static const unsigned long METRIC_INTERVAL_MS = 10000;
+
+// error counter used in HB/log payloads
+uint32_t g_errorCount = 0;
+
+// ======================= UTILS ===============================
+Lock* findLockById(const String &id) {
+  for (size_t i = 0; i < LOCK_COUNT; i++) {
+    if (id.equalsIgnoreCase(locks[i].id)) {
+      return &locks[i];
+    }
+  }
+  return nullptr;
+}
+
+String makeLockStateTopic(const char *id) {
+  String t = LOCK_STATE_PREFIX;
+  t += id;
+  t += "/state";
+  return t;
+}
+
+// ======================= LOG / HB / METRIC ===================
+unsigned long currentHbIntervalMs() {
+  switch (gameMode) {
+    case MODE_INGAME: return 5000;   // tighter when players are in
+    case MODE_MAINT:  return 10000;  // medium
+    case MODE_OFF:
+    default:          return 15000;  // slow when idle
+  }
+}
+
+// Log helper; gate by gameMode
+void publishLog(const char *lvl, const String &msg, const String &dataJson = String()) {
+  // Respect gameMode:
+  // - MODE_OFF: only ERR
+  // - MODE_INGAME: INF/WRN/ERR (no DBG)
+  // - MODE_MAINT: everything
+  bool isErr = (strcmp(lvl, "ERR") == 0);
+  bool isInf = (strcmp(lvl, "INF") == 0);
+  bool isWrn = (strcmp(lvl, "WRN") == 0);
+  bool isDbg = (strcmp(lvl, "DBG") == 0);
+
+  bool allow = false;
+  if (isErr) {
+    allow = true;
+  } else if (gameMode == MODE_OFF) {
+    allow = false;
+  } else if (gameMode == MODE_INGAME) {
+    // No DBG when in-game
+    allow = !isDbg;
+  } else if (gameMode == MODE_MAINT) {
+    allow = true;
+  }
+
+  if (!allow) {
+    if (isErr) g_errorCount++;  // still count error even if somehow gated
+    return;
+  }
+
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"up\":" + String(millis() / 1000) +
+                   ",\"lv\":\"" + lvl + "\",\"msg\":\"" + msg + "\"";
+  if (dataJson.length() > 0) {
+    payload += ",\"d\":" + dataJson;
+  }
+  payload += "}";
   mqtt.publish(TOPIC_LOG, payload.c_str());
+
+  if (isErr) {
+    g_errorCount++;
+  }
+}
+
+void logErr(const String &msg, const String &dataJson = String()) {
+  publishLog("ERR", msg, dataJson);
+}
+
+void publishHeartbeatIfDue() {
+  unsigned long now = millis();
+  unsigned long interval = currentHbIntervalMs();
+  if (now - lastHbMs < interval) return;
+  lastHbMs = now;
+
+  const char *st;
+  if (!enabled) {
+    st = "warn";
+  } else if (g_errorCount > 0) {
+    st = "warn";
+  } else {
+    st = "ok";
+  }
+
+  String hb = String("{\"fw\":\"") + FW_VERSION +
+              "\",\"up\":" + String(now / 1000) +
+              ",\"st\":\"" + st + "\",\"err\":" + String(g_errorCount) +
+              "}";
+  mqtt.publish(TOPIC_HB, hb.c_str(), true);
+}
+
+void publishMetricsIfDue() {
+  unsigned long now = millis();
+  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
+  lastMetricMs = now;
+
+  String gm = (gameMode == MODE_OFF) ? "OFF" :
+              (gameMode == MODE_INGAME) ? "INGAME" : "MAINT";
+
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"up\":" + String(now / 1000) +
+                   ",\"k\":\"maglock_ctrl\"" +
+                   ",\"mode\":\"" + gm + "\"" +
+                   ",\"locks\":[";
+  for (size_t i = 0; i < LOCK_COUNT; i++) {
+    if (i > 0) payload += ",";
+    payload += "{\"id\":\"";
+    payload += locks[i].id;
+    payload += "\",\"coil\":";
+    payload += (locks[i].coilOn ? "1" : "0");
+    payload += ",\"pulses\":";
+    payload += String(locks[i].pulseCount);
+    payload += ",\"pulse\":";
+    payload += (locks[i].pulsing ? "1" : "0");
+    payload += ",\"cooldown\":";
+    payload += (locks[i].cooldown ? "1" : "0");
+    payload += "}";
+  }
+  payload += "]}";
+
+  mqtt.publish(TOPIC_METRIC, payload.c_str());
 }
 
 // ======================= OTA (HTTP pull) =====================
 bool doHttpOta() {
   EthernetClient client;
   String url = String("http://") + OTA_HOST + OTA_PATH;
-  publishLog("INFO", String("CMD UPDATE -> HTTP OTA ") + url);
+  publishLog("INF", String("CMD UPDATE -> HTTP OTA ") + url);
 
   if (!client.connect(OTA_HOST, OTA_PORT)) {
-    publishLog("ERR", "OTA connect failed");
+    logErr("OTA connect failed");
     return false;
   }
 
-  // HTTP GET
   client.print("GET ");
   client.print(OTA_PATH);
   client.print(" HTTP/1.1\r\nHost: ");
@@ -115,7 +249,6 @@ bool doHttpOta() {
 
   long contentLength = -1;
 
-  // Read headers
   while (client.connected()) {
     String line = client.readStringUntil('\n');
     if (line == "\r" || line.length() == 0) break;
@@ -130,196 +263,240 @@ bool doHttpOta() {
   }
 
   if (contentLength <= 0) {
-    publishLog("ERR", "OTA invalid content-length");
+    logErr("OTA invalid content-length");
     return false;
   }
 
   if (!Update.begin(contentLength)) {
-    publishLog("ERR", "OTA Update.begin failed");
+    logErr("OTA Update.begin failed");
     return false;
   }
 
   uint8_t buf[512];
+  long total = 0;
 
-  while (client.connected() || client.available()) {
+  while (client.connected() && total < contentLength) {
     int len = client.read(buf, sizeof(buf));
-    if (len <= 0) continue;
+    if (len <= 0) {
+      delay(10);
+      continue;
+    }
     Update.write(buf, len);
+    total += len;
   }
 
   if (!Update.end(true)) {
-    publishLog("ERR", "OTA Update.end failed");
+    logErr("OTA Update.end failed");
     return false;
   }
 
-  publishLog("INFO", "OTA OK, rebooting");
+  publishLog("INF", "OTA OK, rebooting");
   delay(500);
   ESP.restart();
   return true;
 }
 
-// ======================= LOCK HELPERS ========================
-Lock *findLockById(const String &id) {
-  for (int i = 0; i < N_LOCKS; i++) {
-    if (id.equals(locks[i].id)) return &locks[i];
+// ======================= LOCK CONTROL ========================
+void applyLockOutput(Lock &lk) {
+  digitalWrite(lk.pin, lk.coilOn ? HIGH : LOW);
+}
+
+const char* lockStateName(const Lock &lk) {
+  // Logical "state" for external world
+  if (lk.mode == FAIL_SECURE) {
+    // treat pulse as OPEN, otherwise CLOSED
+    return lk.coilOn ? "OPEN" : "CLOSED";
+  } else {
+    // fail-safe: coilOn=locked
+    return lk.coilOn ? "CLOSED" : "OPEN";
   }
-  return nullptr;
 }
 
-void publishLockState(Lock &l, const char *state) {
-  String topic = String("esc/ctrl/lock/") + l.id + "/state";
-  String payload = String("{\"id\":\"") + l.id + "\",\"state\":\"" + state + "\"}";
-  mqtt.publish(topic.c_str(), payload.c_str());
+void publishLockState(const Lock &lk, const char *reason) {
+  String t = makeLockStateTopic(lk.id);
+
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"up\":" + String(millis() / 1000) +
+                   ",\"id\":\"" + lk.id + "\"" +
+                   ",\"state\":\"" + String(lockStateName(lk)) + "\"";
+  if (reason && reason[0]) {
+    payload += ",\"reason\":\"";
+    payload += reason;
+    payload += "\"";
+  }
+  payload += ",\"coil\":";
+  payload += (lk.coilOn ? "1" : "0");
+  payload += ",\"pulses\":";
+  payload += String(lk.pulseCount);
+  payload += "}";
+
+  mqtt.publish(t.c_str(), payload.c_str());
 }
 
-void setLockOutput(Lock &l, bool powered) {
-  digitalWrite(l.pin, powered ? HIGH : LOW);
-}
-
-void openFailSafe(Lock &l) {
-  // fail-safe: power = locked, no power = open
-  l.pulseActive = false;
-  l.cooldownActive = false;
-  setLockOutput(l, false);  // remove power -> door open
-  publishLockState(l, "OPEN");
-}
-
-void closeFailSafe(Lock &l) {
-  l.pulseActive = false;
-  l.cooldownActive = false;
-  setLockOutput(l, true);   // power -> locked
-  publishLockState(l, "CLOSED");
-}
-
-// Fail-secure OPEN with pulse + cooldown heat protection.
-void pulseFailSecure(Lock &l) {
-  unsigned long now = millis();
-  if (l.pulseActive || l.cooldownActive) {
+// Fail-secure OPEN pulse with cooldown logic
+void startPulse(Lock &lk, const char *reason) {
+  if (lk.mode != FAIL_SECURE) {
+    publishLog("WRN", String("OPEN on non-failsecure via pulse: ") + lk.id);
     return;
   }
-  l.pulseActive = true;
-  l.pulseEndMs = now + FAILSEC_PULSE_MS;
-  l.cooldownActive = false;
-  l.cooldownEndMs = 0;
-  setLockOutput(l, true);   // power -> unlock
-  publishLockState(l, "OPENING");
-}
-
-void stopFailSecurePulse(Lock &l) {
-  l.pulseActive = false;
-  l.cooldownActive = true;
-  l.cooldownEndMs = millis() + FAILSEC_COOLDOWN_MS;
-  setLockOutput(l, false);  // no power when idle
-  publishLockState(l, "COOLDOWN");
-}
-
-void handleLockOpen(Lock &l) {
-  if (l.failSafe) {
-    // r2 / r3: OPEN = power OFF
-    openFailSafe(l);
-  } else {
-    // images / slider / knocking: OPEN = power ON for 1 second (with cooldown)
-    pulseFailSecure(l);
+  if (lk.pulsing || lk.cooldown) {
+    publishLog("WRN", String("OPEN ignored (pulse/cooldown active) for ") + lk.id);
+    return;
   }
+
+  lk.coilOn = true;
+  lk.pulsing = true;
+  lk.cooldown = false;
+  lk.pulseStartMs = millis();
+  lk.pulseCount++;
+  applyLockOutput(lk);
+  publishLockState(lk, reason);
 }
 
-void handleLockClose(Lock &l) {
-  if (l.failSafe) {
-    closeFailSafe(l);
-  } else {
-    // ensure coil is off; do not cancel cooldown
-    l.pulseActive = false;
-    setLockOutput(l, false);
-    publishLockState(l, "CLOSED");
+// Fail-safe: lock/unlock
+void setFailSafe(Lock &lk, bool locked, const char *reason) {
+  if (lk.mode != FAIL_SAFE) {
+    publishLog("WRN", String("setFailSafe on non-failsafe: ") + lk.id);
+    return;
   }
+  lk.coilOn = locked;
+  lk.pulsing = false;
+  lk.cooldown = false;
+  applyLockOutput(lk);
+  publishLockState(lk, reason);
 }
 
-// ======================= HEARTBEAT ===========================
-void publishHeartbeatIfDue() {
+void updatePulseTimers() {
   unsigned long now = millis();
-  if (now - lastHbMs < HB_INTERVAL_MS) return;
-  lastHbMs = now;
+  for (size_t i = 0; i < LOCK_COUNT; i++) {
+    Lock &lk = locks[i];
 
-  String hb = String("{\"node\":\"maglock_ctrl\",\"fw\":\"") + FW_VERSION +
-              "\",\"ip\":\"192.168.0.11\",\"uptime\":" + String(millis()/1000) +
-              "}";
-  mqtt.publish(TOPIC_HB, hb.c_str(), true);
+    if (lk.mode == FAIL_SECURE) {
+      // handle active pulse
+      if (lk.pulsing && (now - lk.pulseStartMs >= PULSE_MS)) {
+        lk.pulsing = false;
+        lk.coilOn = false;
+        applyLockOutput(lk);
+        publishLockState(lk, "pulse_done");
+        // start cooldown
+        lk.cooldown = true;
+        lk.cooldownStartMs = now;
+      }
+      // handle cooldown expiry
+      if (lk.cooldown && (now - lk.cooldownStartMs >= COOLDOWN_MS)) {
+        lk.cooldown = false;
+        publishLockState(lk, "cooldown_done");
+      }
+    }
+  }
+}
+
+// ======================= LOCK COMMANDS =======================
+void handleLockCommand(Lock &lk, const String &cmd) {
+  if (!enabled) {
+    publishLog("WRN", String("Lock cmd while DISABLED: ") + lk.id + " cmd=" + cmd);
+    return;
+  }
+
+  if (cmd == "OPEN") {
+    if (lk.mode == FAIL_SECURE) {
+      startPulse(lk, "cmd:OPEN");
+    } else { // FAIL_SAFE
+      // OPEN on fail-safe = unlock (coil off)
+      setFailSafe(lk, false, "cmd:OPEN");
+    }
+    return;
+  }
+
+  if (cmd == "CLOSE") {
+    if (lk.mode == FAIL_SECURE) {
+      // Force OFF, cancel pulse but not cooldown
+      lk.coilOn = false;
+      lk.pulsing = false;
+      applyLockOutput(lk);
+      publishLockState(lk, "cmd:CLOSE");
+    } else { // FAIL_SAFE
+      // CLOSE on fail-safe = lock (coil on)
+      setFailSafe(lk, true, "cmd:CLOSE");
+    }
+    return;
+  }
+
+  // ER1 protocol: only OPEN/CLOSE are valid externally
+  publishLog("WRN", String("Unknown lock cmd for ") + lk.id + ": " + cmd);
+}
+
+bool parseLockIdFromTopic(const String &topic, String &outId) {
+  const String prefix = LOCK_CMD_PREFIX; // "esc/ctrl/lock/"
+  const String suffix = "/cmd";
+
+  if (!topic.startsWith(prefix) || !topic.endsWith(suffix)) return false;
+
+  int start = prefix.length();
+  int end = topic.length() - suffix.length();
+  if (end <= start) return false;
+
+  outId = topic.substring(start, end);
+  return true;
+}
+
+// ======================= NODE CMDS & GAME MODE ===============
+void handleNodeCmd(const String &msg) {
+  if (msg == "DISABLE") {
+    enabled = false;
+    publishLog("INF", "CMD DISABLE");
+    return;
+  }
+  if (msg == "ENABLE") {
+    enabled = true;
+    publishLog("INF", "CMD ENABLE");
+    return;
+  }
+  if (msg == "PING") {
+    publishLog("DBG", "CMD PING");
+    publishHeartbeatIfDue();
+    return;
+  }
+  if (msg == "UPDATE") {
+    doHttpOta();
+    return;
+  }
+  if (msg == "REBOOT") {
+    publishLog("INF", "CMD REBOOT");
+    delay(200);
+    ESP.restart();
+    return;
+  }
+
+  publishLog("WRN", String("Unknown node CMD: ") + msg);
+}
+
+void handleGameModeMsg(const String &msg) {
+  String m = msg;
+  m.trim();
+  m.toUpperCase();
+
+  GameMode old = gameMode;
+
+  if (m == "INGAME") {
+    gameMode = MODE_INGAME;
+  } else if (m == "MAINT" || m == "MAINTENANCE") {
+    gameMode = MODE_MAINT;
+  } else {
+    gameMode = MODE_OFF;
+  }
+
+  if (gameMode != old) {
+    String d = String("{\"from\":\"") +
+               ((old == MODE_OFF) ? "OFF" : (old == MODE_INGAME ? "INGAME" : "MAINT")) +
+               "\",\"to\":\"" +
+               ((gameMode == MODE_OFF) ? "OFF" : (gameMode == MODE_INGAME ? "INGAME" : "MAINT")) +
+               "\"}";
+    publishLog("INF", "gameMode changed", d);
+  }
 }
 
 // ======================= MQTT HANDLING =======================
-void handleLockCmdTopic(const String &topic, const String &msg) {
-  if (!enabled) {
-    // ignore manual lock commands when disabled
-    return;
-  }
-
-  // topic: esc/ctrl/lock/<id>/cmd
-  int baseLen = String("esc/ctrl/lock/").length();
-  int endIdx = topic.lastIndexOf("/cmd");
-  if (endIdx <= baseLen) return;
-  String id = topic.substring(baseLen, endIdx);
-
-  Lock *l = findLockById(id);
-  if (!l) {
-    publishLog("WARN", String("Unknown lock id in cmd: ") + id);
-    return;
-  }
-
-  if (msg == "OPEN") {
-    handleLockOpen(*l);
-  } else if (msg == "CLOSE") {
-    handleLockClose(*l);
-  } else {
-    // "PULSE" or anything else is effectively removed/ignored
-    publishLog("WARN", String("Unknown lock cmd: ") + msg);
-  }
-}
-
-void handleCtrlCmd(const String &msg) {
-  if (msg == "DISABLE") {
-    enabled = false;
-    publishLog("INFO", "CTRL DISABLE");
-    return;
-  }
-
-  if (msg == "ENABLE") {
-    enabled = true;
-    publishLog("INFO", "CTRL ENABLE");
-    return;
-  }
-
-  if (msg == "PING") {
-    publishHeartbeatIfDue(); // immediate HB
-  } else if (msg == "UPDATE") {
-    doHttpOta();
-  }
-}
-
-// handle SOLVED events from riddles
-void handleGameEvent(const String &topic, const String &payload) {
-  if (!enabled) {
-    // ignore auto-open logic when disabled
-    return;
-  }
-
-  // We only care about SOLVED from rid "knocking" for now.
-  // Minimal parse: just search substrings.
-  if (payload.indexOf("\"type\":\"SOLVED\"") < 0) return;
-
-  // Check rid
-  String ridMarker = String("\"rid\":\"") + LOCK_ID_KNOCKING + "\"";
-  if (payload.indexOf(ridMarker) < 0) return;
-
-  Lock *l = findLockById(String(LOCK_ID_KNOCKING));
-  if (!l) {
-    publishLog("ERR", "No lock mapping for rid=knocking");
-    return;
-  }
-
-  publishLog("INFO", String("EVENT SOLVED rid=") + LOCK_ID_KNOCKING + " -> OPEN lock " + LOCK_ID_KNOCKING);
-  handleLockOpen(*l);
-}
-
 void mqttCallback(char *topicC, byte *payload, unsigned int length) {
   String topic(topicC);
   String msg;
@@ -327,63 +504,50 @@ void mqttCallback(char *topicC, byte *payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   msg.trim();
 
-  // Log basic info for debugging
-  if (topic == TOPIC_CMD || topic.startsWith("esc/ctrl/lock/")) {
-    publishLog("CMD", String(topic) + " = " + msg);
-  }
-
   if (topic == TOPIC_CMD) {
-    handleCtrlCmd(msg);
+    handleNodeCmd(msg);
     return;
   }
 
-  if (topic.startsWith("esc/ctrl/lock/") && topic.endsWith("/cmd")) {
-    handleLockCmdTopic(topic, msg);
+  if (topic == TOPIC_GAME) {
+    handleGameModeMsg(msg);
     return;
   }
 
-  // Any sensor/riddle event
-  if (topic.endsWith("/event")) {
-    handleGameEvent(topic, msg);
-    return;
+  // Lock commands: esc/ctrl/lock/<id>/cmd
+  String lockId;
+  if (parseLockIdFromTopic(topic, lockId)) {
+    Lock *lk = findLockById(lockId);
+    if (!lk) {
+      logErr(String("Lock id not found: ") + lockId);
+      return;
+    }
+    handleLockCommand(*lk, msg);
   }
 }
 
 void mqttReconnect() {
-  while (!mqtt.connected()) {
+  int tries = 0;
+  while (!mqtt.connected() && tries < 3) {
     if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
-      publishLog("INFO", "MQTT connected");
-
-      // Subscribe to controller cmd
+      publishLog("INF", "MQTT connected");
       mqtt.subscribe(TOPIC_CMD);
-
-      // Subscribe to manual lock commands
+      mqtt.subscribe(TOPIC_GAME);
       mqtt.subscribe("esc/ctrl/lock/+/cmd");
-
-      // Subscribe to ALL game events
-      mqtt.subscribe("esc/+/+/event");
-
-      // Initial heartbeat
-      publishHeartbeatIfDue();
+      publishHeartbeatIfDue();  // initial HB
+      return;
     } else {
-      delay(2000);
+      tries++;
+      delay(1000);
     }
+  }
+  if (!mqtt.connected()) {
+    logErr("MQTT reconnect failed", "{\"tries\":3}");
   }
 }
 
-// ======================= SETUP ===============================
-void setup() {
-  // Init lock pins (all off -> LOW)
-  for (int i = 0; i < N_LOCKS; i++) {
-    pinMode(locks[i].pin, OUTPUT);
-    digitalWrite(locks[i].pin, LOW);
-    locks[i].pulseActive = false;
-    locks[i].pulseEndMs  = 0;
-    locks[i].cooldownActive = false;
-    locks[i].cooldownEndMs  = 0;
-  }
-
-  // Ethernet reset
+// ======================= ETHERNET INIT =======================
+void setupEthernet() {
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
   delay(50);
@@ -396,32 +560,38 @@ void setup() {
 
   mqtt.setServer(mqttServer, mqttPort);
   mqtt.setCallback(mqttCallback);
-
-  lastHbMs = millis();
 }
 
-// ======================= LOOP ================================
+// ======================= SETUP / LOOP ========================
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  // Init lock pins (all LOW at boot)
+  for (size_t i = 0; i < LOCK_COUNT; i++) {
+    pinMode(locks[i].pin, OUTPUT);
+    locks[i].coilOn = false;
+    locks[i].pulsing = false;
+    locks[i].cooldown = false;
+    locks[i].pulseStartMs = 0;
+    locks[i].cooldownStartMs = 0;
+    locks[i].pulseCount = 0;
+    applyLockOutput(locks[i]);
+  }
+
+  setupEthernet();
+  mqttReconnect();
+
+  publishLog("INF", "BOOT complete");
+}
+
 void loop() {
   if (!mqtt.connected()) {
     mqttReconnect();
   }
   mqtt.loop();
 
-  unsigned long now = millis();
-
-  // Handle fail-secure pulse timeouts (even if disabled – safety)
-  for (int i = 0; i < N_LOCKS; i++) {
-    Lock &l = locks[i];
-    if (!l.failSafe) {
-      if (l.pulseActive && (long)(now - l.pulseEndMs) >= 0) {
-        stopFailSecurePulse(l);
-      }
-      if (l.cooldownActive && (long)(now - l.cooldownEndMs) >= 0) {
-        l.cooldownActive = false;
-        publishLockState(l, "IDLE");
-      }
-    }
-  }
-
+  updatePulseTimers();
+  publishMetricsIfDue();
   publishHeartbeatIfDue();
 }

@@ -3,13 +3,12 @@
 #include <Ethernet.h>
 #include <PubSubClient.h>
 #include <Update.h>
-#include <Preferences.h>
 
 // ======================= FIRMWARE INFO =======================
 // Simple numeric version used in all MQTT payloads
 static const char *FW_VERSION = "1.0";
-// Human-readable description for changelog / docs
-static const char *FW_DESC    = "star_sky 1.0 – 4-strip sequencer, gated by candles SOLVED, HB/log/metric v2, prefs";
+// Human-readable description for code comments / changelog
+static const char *FW_DESC    = "stop_timer 1.0 – door reed sensor, HB/log v2 schema";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -19,8 +18,8 @@ static const char *FW_DESC    = "star_sky 1.0 – 4-strip sequencer, gated by ca
 #define ETH_MOSI 23
 
 // ======================= NETWORK CONFIG ======================
-byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55 };  // unique-ish MAC
-IPAddress ip     (192, 168, 0, 16);
+byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58 };  // unique-ish MAC
+IPAddress ip     (192, 168, 0, 18);
 IPAddress dns    (0, 0, 0, 0);
 IPAddress gw     (0, 0, 0, 0);
 IPAddress subnet (255, 255, 255, 0);
@@ -30,51 +29,28 @@ IPAddress mqttServer(192, 168, 0, 10);
 const uint16_t mqttPort = 1883;
 
 // ======================= NODE TOPICS =========================
-static const char *CLIENT_ID      = "star_sky";
-static const char *TOPIC_HB       = "esc/room3/star_sky/hb";
-static const char *TOPIC_CMD      = "esc/room3/star_sky/cmd";
-static const char *TOPIC_LOG      = "esc/room3/star_sky/log";
-static const char *TOPIC_METRIC   = "esc/room3/star_sky/metric";
-// external event we subscribe to:
-static const char *TOPIC_CANDLES_EVENT = "esc/room3/candles/event";
+static const char *CLIENT_ID    = "stop_timer";
+static const char *TOPIC_HB     = "esc/room3/stop_timer/hb";
+static const char *TOPIC_CMD    = "esc/room3/stop_timer/cmd";
+static const char *TOPIC_LOG    = "esc/room3/stop_timer/log";
+static const char *TOPIC_METRIC = "esc/room3/stop_timer/metric";
+static const char *TOPIC_EVENT  = "esc/room3/stop_timer/event";
 
 // ======================= OTA CONFIG ==========================
 static const char *OTA_HOST  = "192.168.0.10";
 static const uint16_t OTA_PORT = 80;
-static const char *OTA_PATH  = "/firmware/star_sky.bin";
+static const char *OTA_PATH  = "/firmware/stop_timer.bin";
 
-// ======================= LIGHTING CONFIG =====================
-// LED strips on PWM via MOSFETs
-// Channel 0 / pin 16 -> set 1 (always on after candles solved)
-// Channel 1 / pin 17 -> set 2
-// Channel 2 / pin 18 -> set 3
-// Channel 3 / pin 19 -> set 4
-static const int LED_PINS[4] = {16, 17, 18, 19};
-
-// Timing:
-// total cycle = 27 s
-// 0–4 s: set2
-// 4–8 s: set3
-// 8–12 s: set4
-// 12–27 s: all off (except set1 always on)
-static const unsigned long STEP_MS  = 4000;    // 4 s per active set
-static const unsigned long PAUSE_MS = 15000;   // 15 s pause after 3 sets
-static const unsigned long CYCLE_MS = STEP_MS * 3 + PAUSE_MS; // 12 + 15 = 27
+// ======================= DOOR SENSOR CONFIG ==================
+static const int DOOR_PIN = 32;              // reed switch to GND, INPUT_PULLUP
+static const unsigned long DOOR_DEBOUNCE_MS = 50;
 
 // ======================= STATE ===============================
 EthernetClient ethClient;
 PubSubClient mqtt(ethClient);
-Preferences prefs;
 
 bool enabled = true;
 
-// candles_solved -> whether we should run the pattern
-bool candlesSolved = false;
-
-// timer anchor for cycle
-unsigned long cycleStartMs = 0;
-
-// telemetry
 unsigned long lastHbMs     = 0;
 unsigned long lastMetricMs = 0;
 
@@ -84,47 +60,19 @@ static const unsigned long METRIC_INTERVAL_MS = 10000;
 // error counter used in HB/log payloads
 uint32_t g_errorCount = 0;
 
-// ======================= HELPERS: LED CONTROL =================
-void setStripRaw(int idx, uint8_t duty) {
-  if (idx < 0 || idx >= 4) return;
-  ledcWrite(idx, duty);
-}
+// Door state tracking
+enum DoorState {
+  DOOR_UNKNOWN = 0,
+  DOOR_CLOSED,
+  DOOR_OPEN
+};
 
-void setAllStripsOff() {
-  for (int i = 0; i < 4; i++) setStripRaw(i, 0);
-}
+DoorState doorState = DOOR_UNKNOWN;
+int doorLastRaw = HIGH;
+unsigned long doorLastEdgeMs = 0;
 
-void applyPattern() {
-  if (!candlesSolved) {
-    // everything off until candles are solved
-    setAllStripsOff();
-    return;
-  }
-
-  unsigned long now   = millis();
-  unsigned long delta = (now - cycleStartMs) % CYCLE_MS;
-
-  // set1 always ON
-  setStripRaw(0, 255);
-
-  // default: sets 2–4 off
-  setStripRaw(1, 0);
-  setStripRaw(2, 0);
-  setStripRaw(3, 0);
-
-  if (delta < STEP_MS) {
-    // 0–4 s: set 2 on
-    setStripRaw(1, 255);
-  } else if (delta < STEP_MS * 2) {
-    // 4–8 s: set 3 on
-    setStripRaw(2, 255);
-  } else if (delta < STEP_MS * 3) {
-    // 8–12 s: set 4 on
-    setStripRaw(3, 255);
-  } else {
-    // 12–27 s: pause, only set1 on, 2–4 already off
-  }
-}
+// Metrics
+uint32_t doorOpenCount = 0;
 
 // ======================= LOG / HB HELPERS ====================
 void publishLog(const char *lvl, const String &msg, const String &dataJson = String()) {
@@ -169,21 +117,29 @@ void publishMetricsIfDue() {
   if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
   lastMetricMs = now;
 
-  unsigned long delta = (now - cycleStartMs) % CYCLE_MS;
-  const char *phase =
-    (!candlesSolved)              ? "OFF" :
-    (delta < STEP_MS)             ? "SET2" :
-    (delta < STEP_MS * 2)         ? "SET3" :
-    (delta < STEP_MS * 3)         ? "SET4" : "PAUSE";
-
   // Metrics format: {"fw":FW_VERSION,"up":uptime_s,"k":"metric_key",...}
+  const char *stateStr =
+    (doorState == DOOR_OPEN)   ? "OPEN" :
+    (doorState == DOOR_CLOSED) ? "CLOSED" : "UNKNOWN";
+
   String payload = String("{\"fw\":\"") + FW_VERSION +
                    "\",\"up\":" + String(now / 1000) +
-                   ",\"k\":\"star_sky\"" +
-                   ",\"candles\":" + (candlesSolved ? "1" : "0") +
-                   ",\"phase\":\"" + phase + "\"" +
+                   ",\"k\":\"door\",\"state\":\"" + stateStr +
+                   "\",\"open_count\":" + String(doorOpenCount) +
                    "}";
   mqtt.publish(TOPIC_METRIC, payload.c_str());
+}
+
+// ======================= EVENT PUBLISH =======================
+void publishDoorEvent(DoorState s) {
+  const char *stateStr =
+    (s == DOOR_OPEN)   ? "OPEN" :
+    (s == DOOR_CLOSED) ? "CLOSED" : "UNKNOWN";
+
+  String payload = String("{\"fw\":\"") + FW_VERSION +
+                   "\",\"up\":" + String(millis() / 1000) +
+                   ",\"door\":\"" + stateStr + "\"}";
+  mqtt.publish(TOPIC_EVENT, payload.c_str());
 }
 
 // ======================= OTA (HTTP pull) =====================
@@ -205,6 +161,7 @@ bool doHttpOta() {
 
   long contentLength = -1;
 
+  // Read headers
   while (client.connected()) {
     String line = client.readStringUntil('\n');
     if (line == "\r" || line.length() == 0) break;
@@ -293,22 +250,6 @@ void mqttCallback(char *topicC, byte *payload, unsigned int length) {
 
   if (topic == TOPIC_CMD) {
     handleCmd(msg);
-    return;
-  }
-
-  if (topic == TOPIC_CANDLES_EVENT) {
-    // Very simple JSON sniff: look for `"event":"SOLVED"`
-    if (msg.indexOf("\"event\"") != -1 && msg.indexOf("SOLVED") != -1) {
-      if (!candlesSolved) {
-        candlesSolved = true;
-        prefs.putBool("candles", true);
-        cycleStartMs = millis();
-        publishLog("INF", "Candles SOLVED event received, enabling pattern");
-      } else {
-        publishLog("DBG", "Candles SOLVED event (already enabled)");
-      }
-    }
-    return;
   }
 }
 
@@ -317,7 +258,6 @@ void mqttReconnect() {
     if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
       publishLog("INF", "MQTT connected");
       mqtt.subscribe(TOPIC_CMD);
-      mqtt.subscribe(TOPIC_CANDLES_EVENT);
       publishHeartbeatIfDue();  // initial HB
     } else {
       delay(2000);
@@ -327,6 +267,7 @@ void mqttReconnect() {
 
 // ======================= ETHERNET INIT =======================
 void setupEthernet() {
+  // Ethernet reset
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
   delay(50);
@@ -341,17 +282,31 @@ void setupEthernet() {
   mqtt.setCallback(mqttCallback);
 }
 
-// ======================= STATE PERSISTENCE ===================
-void loadStateFromPrefs() {
-  prefs.begin("star_sky", false);
-  candlesSolved = prefs.getBool("candles", false);
+// ======================= DOOR SAMPLING =======================
+void updateDoorState() {
+  unsigned long now = millis();
+  int raw = digitalRead(DOOR_PIN);
 
-  if (candlesSolved) {
-    publishLog("INF", "BOOT candles=1, starting pattern");
-  } else {
-    publishLog("INF", "BOOT candles=0, pattern disabled");
+  if (raw != doorLastRaw) {
+    doorLastRaw = raw;
+    doorLastEdgeMs = now;
   }
-  cycleStartMs = millis();
+
+  if (now - doorLastEdgeMs < DOOR_DEBOUNCE_MS) {
+    return; // still bouncing
+  }
+
+  DoorState newState = (raw == LOW) ? DOOR_CLOSED : DOOR_OPEN;
+
+  if (newState != doorState) {
+    doorState = newState;
+    if (doorState == DOOR_OPEN) {
+      doorOpenCount++;
+    }
+    if (enabled) {
+      publishDoorEvent(doorState);
+    }
+  }
 }
 
 // ======================= SETUP / LOOP ========================
@@ -359,17 +314,13 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // PWM setup for 4 strips
-  for (int i = 0; i < 4; i++) {
-    ledcSetup(i, 1000, 8);      // channel i, 1 kHz, 8-bit
-    ledcAttachPin(LED_PINS[i], i);
-    setStripRaw(i, 0);
-  }
+  pinMode(DOOR_PIN, INPUT_PULLUP);
+  doorLastRaw = digitalRead(DOOR_PIN);
+  doorLastEdgeMs = millis();
+  doorState = (doorLastRaw == LOW) ? DOOR_CLOSED : DOOR_OPEN;
 
   setupEthernet();
   mqttReconnect();
-
-  loadStateFromPrefs();
 }
 
 void loop() {
@@ -378,12 +329,7 @@ void loop() {
   }
   mqtt.loop();
 
-  if (enabled) {
-    applyPattern();
-  } else {
-    setAllStripsOff();
-  }
-
+  updateDoorState();
   publishMetricsIfDue();
   publishHeartbeatIfDue();
 }
