@@ -2,8 +2,20 @@
 $er1Pi  = "rudyy@100.108.1.80"
 $er1Cmd = "/home/rudyy/er1/er1"
 
-# ---- Repo root on PC ----
-$erRepoRoot = "$HOME\Documents\Escape Room\er"
+# ---- Repo root for BOTH PC and Laptop ----
+$pcPath     = "$HOME\Documents\Escape Room\er"
+$laptopPath = "$HOME\Documents\er"
+
+if (Test-Path $pcPath) {
+    $erRepoRoot = $pcPath
+}
+elseif (Test-Path $laptopPath) {
+    $erRepoRoot = $laptopPath
+}
+else {
+    Write-Error "ER repo not found. Checked: $pcPath and $laptopPath"
+    return
+}
 
 function pi {
     ssh $er1Pi
@@ -85,4 +97,27 @@ function er1-deploy {
     }
 
     pwsh -File $deployScript -Env $Env -Mode $Mode
+}
+
+# ---- Commit & push helper (PC + Laptop) ----
+function er-commit {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Message = "update"
+    )
+
+    if (-not (Test-Path $erRepoRoot)) {
+        Write-Error "er-commit: erRepoRoot '$erRepoRoot' does not exist."
+        return
+    }
+
+    Push-Location $erRepoRoot
+    try {
+        git add .
+        git commit -m $Message
+        git push
+    }
+    finally {
+        Pop-Location
+    }
 }
