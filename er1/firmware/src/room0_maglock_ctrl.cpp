@@ -6,9 +6,9 @@
 
 // ======================= FIRMWARE INFO =======================
 // Simple numeric version used in all MQTT payloads
-static const char *FW_VERSION = "1.1";
+static const char *FW_VERSION = "1.2";
 // Human-readable description for changelog / docs
-static const char *FW_DESC    = "maglock_ctrl 1.1 – ER1 protocol-aligned (images,r2,r3,slider,knocking), 1s pulses + 10s cooldown, HB/log/metric v2, gameMode";
+static const char *FW_DESC    = "maglock_ctrl 1.2 – ER1 protocol-aligned, 1s pulses+10s cooldown, HB/log/metric v2, gameMode, direct knocking SOLVED->OPEN mapping";
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -37,6 +37,9 @@ static const char *TOPIC_METRIC = "esc/room0/maglock_ctrl/metric";
 
 // Global game-mode topic (simple string: OFF|INGAME|MAINT)
 static const char *TOPIC_GAME   = "esc/game/state";
+
+// Knock riddle event topic
+static const char *TOPIC_KNOCK_EVENT = "esc/room3/knocking/event";
 
 // Lock topics: esc/ctrl/lock/<id>/{cmd,state}
 static const char *LOCK_CMD_PREFIX   = "esc/ctrl/lock/";    // + <id> + "/cmd"
@@ -137,8 +140,6 @@ void publishLog(const char *lvl, const String &msg, const String &dataJson = Str
   // - MODE_INGAME: INF/WRN/ERR (no DBG)
   // - MODE_MAINT: everything
   bool isErr = (strcmp(lvl, "ERR") == 0);
-  bool isInf = (strcmp(lvl, "INF") == 0);
-  bool isWrn = (strcmp(lvl, "WRN") == 0);
   bool isDbg = (strcmp(lvl, "DBG") == 0);
 
   bool allow = false;
@@ -496,6 +497,23 @@ void handleGameModeMsg(const String &msg) {
   }
 }
 
+// Handle esc/room3/knocking/event
+void handleKnockingEvent(const String &msg) {
+  // Very simple check: only react if payload mentions SOLVED
+  if (msg.indexOf("SOLVED") < 0) {
+    return;
+  }
+
+  Lock *lk = findLockById("knocking");
+  if (!lk) {
+    logErr("Knocking SOLVED event but lock 'knocking' not found");
+    return;
+  }
+
+  publishLog("INF", "Knocking SOLVED -> OPEN knocking lock");
+  handleLockCommand(*lk, "OPEN");
+}
+
 // ======================= MQTT HANDLING =======================
 void mqttCallback(char *topicC, byte *payload, unsigned int length) {
   String topic(topicC);
@@ -511,6 +529,11 @@ void mqttCallback(char *topicC, byte *payload, unsigned int length) {
 
   if (topic == TOPIC_GAME) {
     handleGameModeMsg(msg);
+    return;
+  }
+
+  if (topic == TOPIC_KNOCK_EVENT) {
+    handleKnockingEvent(msg);
     return;
   }
 
@@ -534,6 +557,7 @@ void mqttReconnect() {
       mqtt.subscribe(TOPIC_CMD);
       mqtt.subscribe(TOPIC_GAME);
       mqtt.subscribe("esc/ctrl/lock/+/cmd");
+      mqtt.subscribe(TOPIC_KNOCK_EVENT);  // listen to r3 knocking SOLVED
       publishHeartbeatIfDue();  // initial HB
       return;
     } else {

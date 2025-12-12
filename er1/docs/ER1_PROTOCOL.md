@@ -444,16 +444,61 @@ er1-mqtt-log.service
 
 ## 6.2 PC tools (PowerShell)
 
-`er1_profile.ps1` provides:
+All Windows-side interaction is now done through the single `er1` function
+loaded from `shared/pc-scripts/er1_profile.ps1`.
 
-- `pi`
-- `er1-log-live`
-- `er1-log-node <dev>`
-- `er1-ota <Dev>`
-- `er1-lock <id>`
-- `er1-lock-images`, `er1-lock-r2`, ...
-- `er1-deploy er1`
-- `er-commit`
+### Core commands
+
+- `er1 help`
+  Show full help including log, OTA, deploy and lock commands.
+
+- `er1 pi`
+  SSH into the ER1 Pi (via Tailscale).
+
+### Logging
+
+- `er1 log`
+  Tail today’s log (default: 200 lines).
+
+- `er1 log <device>`
+  Filter today’s log by device name.
+
+- `er1 log -live`
+  Live stream of all MQTT logs from the Pi.
+
+- `er1 log <device> -live`
+  Live filtered stream.
+
+- `er1 log -errors`
+  Only ERR-level lines.
+
+- `er1 logs …`
+  Raw passthrough to the Pi’s `er1 logs` CLI
+  (for advanced/archived log access).
+
+### OTA
+
+- `er1 ota <device>`
+  Upload and trigger OTA firmware update
+  using `er1/firmware/ota.ps1`.
+
+### Deploy Pi runtime
+
+- `er1 deploy`
+  Sync `er1/pi-runtime` → `/home/rudyy/er1` and restart systemd units.
+
+### Maglocks
+
+- `er1 lock <id>`
+  Send an OPEN command to a lock ID.
+
+- `er1 lock-all`
+  Opens all locks via MQTT.
+
+### Git helpers
+
+- `er1 commit "<msg>"`
+  Add, commit, and push from repo root.
 
 ---
 

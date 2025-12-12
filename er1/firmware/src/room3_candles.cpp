@@ -3,13 +3,15 @@
 #include <Ethernet.h>
 #include <PubSubClient.h>
 #include <Update.h>
-#include <Preferences.h>
 
 // ======================= FIRMWARE INFO =======================
 // Simple numeric version used in all MQTT payloads
 static const char *FW_VERSION = "1.1";
-// Human-readable description for code comments / changelog
-static const char *FW_DESC    = "candles 1.1 – 4x KY-037 pattern 1-2-0-3, flicker on wrong, HB/log/metric v2, prefs-solved";
+// Human-readable description for docs / changelog only
+static const char *FW_DESC    = "candles 1.1 – 4-mic ORDER[2,0,3,1] with 3s sequence timer + MQTT trigger to star-sky/lighting";
+
+// DEV logging flag: 0 = only ERR logs, 1 = verbose logs (INF/DBG/WRN/ERR)
+#define CANDLES_DEV_LOG 0
 
 // ======================= ETHERNET PINS =======================
 #define ETH_CS   15
@@ -19,8 +21,8 @@ static const char *FW_DESC    = "candles 1.1 – 4x KY-037 pattern 1-2-0-3, flic
 #define ETH_MOSI 23
 
 // ======================= NETWORK CONFIG ======================
-byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57 };  // unique-ish MAC
-IPAddress ip     (192, 168, 0, 15);
+byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58 };  // unique-ish MAC
+IPAddress ip     (192, 168, 0, 15);   // room3 candles node
 IPAddress dns    (0, 0, 0, 0);
 IPAddress gw     (0, 0, 0, 0);
 IPAddress subnet (255, 255, 255, 0);
@@ -30,123 +32,103 @@ IPAddress mqttServer(192, 168, 0, 10);
 const uint16_t mqttPort = 1883;
 
 // ======================= NODE TOPICS =========================
-static const char *CLIENT_ID    = "candles";
-static const char *TOPIC_HB     = "esc/room3/candles/hb";
-static const char *TOPIC_CMD    = "esc/room3/candles/cmd";
-static const char *TOPIC_LOG    = "esc/room3/candles/log";
-static const char *TOPIC_METRIC = "esc/room3/candles/metric";
-static const char *TOPIC_EVENT  = "esc/room3/candles/event";
+static const char *CLIENT_ID          = "candles";
+static const char *TOPIC_HB           = "esc/room3/candles/hb";
+static const char *TOPIC_CMD          = "esc/room3/candles/cmd";
+static const char *TOPIC_LOG          = "esc/room3/candles/log";
+static const char *TOPIC_METRIC       = "esc/room3/candles/metric";
+static const char *TOPIC_EVENT        = "esc/room3/candles/event";
+// Command targets for star sky + lighting controller
+static const char *TOPIC_CMD_STAR_SKY = "esc/room3/star-sky/cmd";
+static const char *TOPIC_CMD_LIGHTING = "esc/room0/lighting/cmd";
 
 // ======================= OTA CONFIG ==========================
 static const char *OTA_HOST  = "192.168.0.10";
 static const uint16_t OTA_PORT = 80;
 static const char *OTA_PATH  = "/firmware/candles.bin";
 
-// ======================= CANDLE HW CONFIG ====================
-static const int MIC_COUNT = 4;
-static const int MIC_PINS[MIC_COUNT] = {32, 33, 34, 35};     // KY-037 analog outputs
-static const int LED_PINS[4]         = {16, 17, 18, 19};     // candle LEDs (PWM)
+// ======================= PUZZLE CONFIG =======================
+// LEDs: MOSFET gate pins for the 4 candles
+static const int LED_PINS[4] = {16, 17, 18, 19};
+// Mics: 4 analog inputs on ADC1
+static const int MIC_PINS[4] = {32, 33, 34, 35};
+// Required blow order
+static const int ORDER[4]    = {2, 0, 3, 1};
 
-// ADC / blow detection
-static const int MIC_THRESHOLD       = 1200;                 // raw ADC threshold
-static const unsigned long BLOW_DEBOUNCE_MS = 250;          // per channel debounce
+// Fixed baselines & thresholds
+static int BASE[4]  = {1515, 1490, 1485, 1508};
+static int DELTA[4] = {120, 120, 120, 120};
 
-// Pattern & timing
-static const unsigned long INACTIVITY_MS  = 3000;           // 3 s to "lock in" pattern
-static const unsigned long POST_QUIET_MS  = 2000;           // quiet window after success
-static const uint8_t MAX_SEQ_LEN          = 16;
+// Refractory period per candle (ms)
+static const unsigned long REFRACT_MS = 600;
 
-// Required ritual pattern: 1-2-0-3
-static const uint8_t REQUIRED_SEQ[] = {1, 2, 0, 3};
-static const uint8_t REQ_LEN        = sizeof(REQUIRED_SEQ) / sizeof(REQUIRED_SEQ[0]);
+// Sequence evaluation timeout after last blow (ms)
+static const unsigned long SEQ_TIMEOUT_MS = 3000;
 
-// ======================= STATE ===============================
+// ======================= PUZZLE STATE ========================
+bool lit[4] = {true, true, true, true};
+unsigned long lastTrig[4] = {0, 0, 0, 0};  // per-candle refractory
+
+// Sequence buffer: order in which candles were blown
+int  progress[4]          = {-1, -1, -1, -1};
+int  progressed           = 0;             // seq length (0..4)
+unsigned long lastAction  = 0;             // last blow or reset
+unsigned long lastSeqActivityMs = 0;       // last blow timestamp
+
+bool solved          = false;
+bool solvedEventSent = false;
+
+inline void setLed(int i, bool on) {
+  digitalWrite(LED_PINS[i], on ? HIGH : LOW);
+  lit[i] = on;
+}
+
+// ======================= GLOBALS =============================
 EthernetClient ethClient;
 PubSubClient mqtt(ethClient);
-Preferences prefs;
-
-bool enabled = true;
 
 unsigned long lastHbMs     = 0;
 unsigned long lastMetricMs = 0;
-
 static const unsigned long HB_INTERVAL_MS     = 5000;
-static const unsigned long METRIC_INTERVAL_MS = 10000;
+static const unsigned long METRIC_INTERVAL_MS = 1000;
 
-// error counter used in HB/log payloads
+bool enabled = true;
+
+// error counter (for HB err field)
 uint32_t g_errorCount = 0;
 
-// Riddle FSM
-enum RiddleState {
-  RS_IDLE = 0,       // no input yet
-  RS_RECORDING,      // collecting blows
-  RS_POST_QUIET,     // solved, waiting 2s quiet
-  RS_SOLVED          // permanently solved
+// ======================= METRIC STATE ========================
+struct MicMetric {
+  uint32_t sum;
+  uint16_t samples;
+  uint16_t avg;
+  uint16_t base;
+  uint16_t maxVal;
+  uint16_t lastRaw;
 };
+MicMetric micMetrics[4];
 
-RiddleState riddleState = RS_IDLE;
-bool solvedFlag = false;
-
-// Pattern buffer
-uint8_t seqBuf[MAX_SEQ_LEN];
-uint8_t seqLen = 0;
-
-// Timing
-unsigned long lastBlowMs = 0;
-unsigned long stateEnterMs = 0;
-
-// Per-channel debounce
-unsigned long lastBlowMsChan[MIC_COUNT] = {0, 0, 0, 0};
-
-// Metrics
-uint32_t blowCountTotal = 0;
-uint32_t wrongPatternCount = 0;
-
-// ======================= HELPERS: LED CONTROL =================
-void setLedRaw(int idx, uint8_t duty) {
-  if (idx < 0 || idx >= 4) return;
-  ledcWrite(idx, duty);  // channel == idx
-}
-
-void setCandleOn(int idx) {
-  setLedRaw(idx, 255);
-}
-
-void setCandleOff(int idx) {
-  setLedRaw(idx, 0);
-}
-
-void setAllCandlesOn() {
-  for (int i = 0; i < 4; i++) setCandleOn(i);
-}
-
-void setAllCandlesOff() {
-  for (int i = 0; i < 4; i++) setCandleOff(i);
-}
-
-// Short, blocking flicker used only on wrong pattern
-void flickerCandlesOn() {
-  unsigned long start = millis();
-  unsigned long duration = 700;   // total flicker time (ms)
-
-  while (millis() - start < duration) {
-    for (int i = 0; i < 4; i++) {
-      uint8_t r = random(120, 255);  // bright, warm flicker
-      ledcWrite(i, r);
-    }
-    delay(random(40, 80)); // organic flicker timing
-  }
-
-  // Fade to full brightness
-  for (int b = 0; b <= 255; b += 10) {
-    for (int i = 0; i < 4; i++) ledcWrite(i, b);
-    delay(15);
-  }
-}
-
-// ======================= LOG / HB HELPERS ====================
+// ======================= LOG UTILS ===========================
+// lvl: "DBG","INF","WRN","ERR"
 void publishLog(const char *lvl, const String &msg, const String &dataJson = String()) {
-  // lvl: "DBG","INF","WRN","ERR"
+  bool isErr = (strcmp(lvl, "ERR") == 0);
+  bool allow = false;
+
+  if (isErr) {
+    allow = true;
+  } else if (CANDLES_DEV_LOG) {
+    // DEV: allow all levels
+    allow = true;
+  } else {
+    // PROD: only errors
+    allow = false;
+  }
+
+  if (!allow) {
+    if (isErr) g_errorCount++;  // still count errors for HB
+    return;
+  }
+
   String payload = String("{\"fw\":\"") + FW_VERSION +
                    "\",\"up\":" + String(millis() / 1000) +
                    ",\"lv\":\"" + lvl + "\",\"msg\":\"" + msg + "\"";
@@ -154,71 +136,16 @@ void publishLog(const char *lvl, const String &msg, const String &dataJson = Str
     payload += ",\"d\":" + dataJson;
   }
   payload += "}";
+
   mqtt.publish(TOPIC_LOG, payload.c_str());
 
-  if (strcmp(lvl, "ERR") == 0) {
+  if (isErr) {
     g_errorCount++;
   }
 }
 
-void publishHeartbeatIfDue() {
-  unsigned long now = millis();
-  if (now - lastHbMs < HB_INTERVAL_MS) return;
-  lastHbMs = now;
-
-  const char *st;
-  if (!enabled) {
-    st = "warn";
-  } else if (g_errorCount > 0) {
-    st = "warn";
-  } else {
-    st = "ok";
-  }
-
-  String hb = String("{\"fw\":\"") + FW_VERSION +
-              "\",\"up\":" + String(now / 1000) +
-              ",\"st\":\"" + st + "\",\"err\":" + String(g_errorCount) +
-              "}";
-  mqtt.publish(TOPIC_HB, hb.c_str(), true);
-}
-
-void publishMetricsIfDue() {
-  unsigned long now = millis();
-  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
-  lastMetricMs = now;
-
-  const char *rstStr =
-    (riddleState == RS_IDLE)       ? "IDLE" :
-    (riddleState == RS_RECORDING)  ? "REC" :
-    (riddleState == RS_POST_QUIET) ? "POST_QUIET" : "SOLVED";
-
-  // Metrics format: {"fw":FW_VERSION,"up":uptime_s,"k":"metric_key",...}
-  String payload = String("{\"fw\":\"") + FW_VERSION +
-                   "\",\"up\":" + String(now / 1000) +
-                   ",\"k\":\"candles\"" +
-                   ",\"state\":\"" + rstStr + "\"" +
-                   ",\"thr\":" + String(MIC_THRESHOLD) +
-                   ",\"seq_len\":" + String(seqLen) +
-                   ",\"blows\":" + String(blowCountTotal) +
-                   ",\"wrong\":" + String(wrongPatternCount) +
-                   ",\"solved\":" + (solvedFlag ? "1" : "0") +
-                   "}";
-  mqtt.publish(TOPIC_METRIC, payload.c_str());
-}
-
-// ======================= EVENT PUBLISH =======================
-void publishSolvedEvent() {
-  String seqStr = "[";
-  for (uint8_t i = 0; i < seqLen; i++) {
-    if (i > 0) seqStr += ",";
-    seqStr += String(seqBuf[i]);
-  }
-  seqStr += "]";
-
-  String payload = String("{\"fw\":\"") + FW_VERSION +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"event\":\"SOLVED\",\"seq\":" + seqStr + "}";
-  mqtt.publish(TOPIC_EVENT, payload.c_str());
+void logErr(const String &msg, const String &dataJson = String()) {
+  publishLog("ERR", msg, dataJson);
 }
 
 // ======================= OTA (HTTP pull) =====================
@@ -228,7 +155,7 @@ bool doHttpOta() {
   publishLog("INF", String("CMD UPDATE -> HTTP OTA ") + url);
 
   if (!client.connect(OTA_HOST, OTA_PORT)) {
-    publishLog("ERR", "OTA connect failed");
+    logErr("OTA connect failed");
     return false;
   }
 
@@ -255,30 +182,25 @@ bool doHttpOta() {
   }
 
   if (contentLength <= 0) {
-    publishLog("ERR", "OTA invalid content-length");
+    logErr("OTA invalid content-length");
     return false;
   }
 
   if (!Update.begin(contentLength)) {
-    publishLog("ERR", "OTA Update.begin failed");
+    logErr("OTA Update.begin failed");
     return false;
   }
 
   uint8_t buf[512];
-  long total = 0;
 
-  while (client.connected() && total < contentLength) {
+  while (client.connected() || client.available()) {
     int len = client.read(buf, sizeof(buf));
-    if (len <= 0) {
-      delay(10);
-      continue;
-    }
+    if (len <= 0) continue;
     Update.write(buf, len);
-    total += len;
   }
 
   if (!Update.end(true)) {
-    publishLog("ERR", "OTA Update.end failed");
+    logErr("OTA Update.end failed");
     return false;
   }
 
@@ -288,93 +210,202 @@ bool doHttpOta() {
   return true;
 }
 
-// ======================= PATTERN / FSM =======================
-void resetPattern() {
-  seqLen = 0;
-  lastBlowMs = 0;
+// ======================= EVENT PUBLISH =======================
+void publishSolvedEvent() {
+  if (solvedEventSent) return;
+
+  String payload = String("{\"event\":\"SOLVED\",\"rid\":\"candles\"}");
+  // General gameflow event
+  mqtt.publish(TOPIC_EVENT, payload.c_str());
+  // Trigger star sky and lighting controller
+  mqtt.publish(TOPIC_CMD_STAR_SKY,  "CANDLES_SOLVED");
+  mqtt.publish(TOPIC_CMD_LIGHTING,  "CANDLES_SOLVED");
+
+  solvedEventSent = true;
 }
 
-void resetRiddle() {
-  solvedFlag = false;
-  riddleState = RS_IDLE;
-  stateEnterMs = millis();
-  resetPattern();
-  setAllCandlesOn();
-  prefs.putBool("solved", false);
-}
-
-bool patternMatchesRequired() {
-  if (seqLen != REQ_LEN) return false;
-  for (uint8_t i = 0; i < REQ_LEN; i++) {
-    if (seqBuf[i] != REQUIRED_SEQ[i]) return false;
+// ======================= PUZZLE HELPERS ======================
+void clearSequence() {
+  for (int i = 0; i < 4; i++) {
+    progress[i] = -1;
   }
-  return true;
+  progressed          = 0;
+  lastSeqActivityMs   = 0;
 }
 
-void onBlow(uint8_t idx) {
-  if (!enabled) return;
-  if (riddleState == RS_SOLVED || riddleState == RS_POST_QUIET) return;
+void resetPuzzleState() {
+  for (int i = 0; i < 4; i++) {
+    setLed(i, true);
+    progress[i] = -1;
+  }
+  progressed        = 0;
+  solved            = false;
+  solvedEventSent   = false;
+  lastAction        = millis();
+  lastSeqActivityMs = 0;
+}
+
+void flickerRelight(int cycles = 6, int onMs = 80, int offMs = 60) {
+  // Simple blocking flicker: all ON/OFF a few times, then ON
+  for (int c = 0; c < cycles; c++) {
+    for (int i = 0; i < 4; i++) setLed(i, true);
+    delay(onMs);
+    for (int i = 0; i < 4; i++) setLed(i, false);
+    delay(offMs);
+  }
+  for (int i = 0; i < 4; i++) setLed(i, true);
+}
+
+void resetAll() {
+  flickerRelight();  // wrong-sequence feedback (TODO: tune pattern)
+  resetPuzzleState();
+  publishLog("INF", "Reset (relight all)");
+}
+
+// ======================= BLOW DETECTION ======================
+// Returns true if we detected a valid "blow" on mic i
+bool detectBlow(int idx) {
+  const int samples = 80;
+  const int needed  = samples / 3;  // ~33% of samples over threshold
 
   unsigned long now = millis();
+  if (now - lastTrig[idx] < REFRACT_MS) return false;
 
-  if (riddleState == RS_IDLE) {
-    // First blow of an attempt
-    riddleState = RS_RECORDING;
-    stateEnterMs = now;
-    resetPattern();
+  int over = 0;
+  for (int k = 0; k < samples; k++) {
+    int v = analogRead(MIC_PINS[idx]);
+    if (abs(v - BASE[idx]) > DELTA[idx]) over++;
+    delay(2);
   }
 
-  if (riddleState == RS_RECORDING) {
-    if (seqLen < MAX_SEQ_LEN) {
-      seqBuf[seqLen++] = idx;
+  bool hit = (over >= needed);
+  if (hit) {
+    lastTrig[idx] = millis();
+  }
+  return hit;
+}
+
+// ======================= SEQUENCE EVAL =======================
+void evaluateSequence() {
+  if (progressed == 0) return;  // nothing to evaluate
+
+  // Build debug string
+  if (CANDLES_DEV_LOG) {
+    String seqStr;
+    for (int i = 0; i < progressed; i++) {
+      if (i > 0) seqStr += ",";
+      seqStr += progress[i];
     }
-    blowCountTotal++;
-    lastBlowMs = now;
-
-    // Visual: blown candle goes off
-    setCandleOff(idx);
+    publishLog("INF", String("SEQ_EVAL len=") + progressed + " buf=[" + seqStr + "]");
   }
-}
 
-void updateRiddleFsm() {
-  unsigned long now = millis();
+  bool ok = true;
 
-  if (riddleState == RS_RECORDING) {
-    if (lastBlowMs > 0 && (now - lastBlowMs) > INACTIVITY_MS) {
-      // Time to "lock in" and evaluate
-      if (patternMatchesRequired()) {
-        solvedFlag = true;
-        prefs.putBool("solved", true);
-
-        publishLog("INF", "pattern SOLVED");
-        publishSolvedEvent();
-
-        // Keep candles off on success
-        setAllCandlesOff();
-
-        riddleState = RS_POST_QUIET;
-        stateEnterMs = now;
-      } else {
-        wrongPatternCount++;
-        String data = String("{\"len\":") + String(seqLen) + "}";
-        publishLog("INF", "pattern WRONG", data);
-
-        // Cool flicker effect before resetting
-        flickerCandlesOn();
-
-        resetRiddle();
+  // Must have exactly 4 blows and match ORDER
+  if (progressed != 4) {
+    ok = false;
+  } else {
+    for (int i = 0; i < 4; i++) {
+      if (progress[i] != ORDER[i]) {
+        ok = false;
+        break;
       }
     }
-  } else if (riddleState == RS_POST_QUIET) {
-    if (now - stateEnterMs > POST_QUIET_MS) {
-      riddleState = RS_SOLVED;
-      stateEnterMs = now;
-      // stay dark; no LED re-enable
-    }
+  }
+
+  if (ok) {
+    // SUCCESS: solved, keep LEDs off
+    solved = true;
+    publishLog("INF", "SEQUENCE OK -> SOLVED");
+    publishSolvedEvent();
+  } else {
+    // FAIL: wrong sequence -> flicker + reset
+    publishLog("INF", "SEQUENCE FAIL -> reset");
+    resetAll();
   }
 }
 
-// ======================= CMD HANDLING ========================
+void evaluateSequenceIfDue() {
+  if (solved) return;
+  if (progressed == 0) return;  // nothing started
+
+  unsigned long now = millis();
+  if (now - lastSeqActivityMs < SEQ_TIMEOUT_MS) return;
+
+  // 3 seconds of no blows since last one -> evaluate
+  evaluateSequence();
+}
+
+// ======================= HEARTBEAT ===========================
+void publishHeartbeatIfDue() {
+  unsigned long now = millis();
+  if (now - lastHbMs < HB_INTERVAL_MS) return;
+  lastHbMs = now;
+
+  const char *st;
+  if (!enabled) {
+    st = "warn";
+  } else if (g_errorCount > 0) {
+    st = "warn";
+  } else {
+    st = "ok";
+  }
+
+  String hb = String("{\"fw\":\"") + FW_VERSION +
+              "\",\"up\":" + String(now / 1000) +
+              ",\"st\":\"" + st + "\",\"err\":" + String(g_errorCount) +
+              "}";
+  mqtt.publish(TOPIC_HB, hb.c_str(), true);
+}
+
+// ======================= METRICS =============================
+void publishMetricsIfDue() {
+  unsigned long now = millis();
+  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
+  lastMetricMs = now;
+
+  uint32_t uptime = now / 1000;
+
+  for (int i = 0; i < 4; i++) {
+    MicMetric &mm = micMetrics[i];
+
+    if (mm.samples > 0) {
+      mm.avg = mm.sum / mm.samples;
+    } else {
+      mm.avg = 0;
+    }
+
+    // Rolling baseline (EMA)
+    if (mm.base == 0) {
+      mm.base = mm.avg;
+    } else {
+      mm.base = (mm.base * 15 + mm.avg) / 16;
+    }
+
+    int d = (int)mm.avg - (int)mm.base;
+
+    String payload = String("{\"fw\":\"") + FW_VERSION +
+                     "\",\"up\":" + uptime +
+                     ",\"k\":\"candles\"" +
+                     ",\"en\":" + (enabled ? "1" : "0") +
+                     ",\"i\":" + i +
+                     ",\"avg\":" + mm.avg +
+                     ",\"max\":" + mm.maxVal +
+                     ",\"base\":" + mm.base +
+                     ",\"d\":" + d +
+                     ",\"thr\":" + DELTA[i] +
+                     "}";
+
+    mqtt.publish(TOPIC_METRIC, payload.c_str());
+
+    // reset accumulators
+    mm.sum     = 0;
+    mm.samples = 0;
+    mm.maxVal  = 0;
+  }
+}
+
+// ======================= MQTT HANDLING =======================
 void handleCmd(const String &msg) {
   if (msg == "DISABLE") {
     enabled = false;
@@ -401,11 +432,9 @@ void handleCmd(const String &msg) {
     ESP.restart();
     return;
   }
-
   publishLog("WRN", String("Unknown CMD: ") + msg);
 }
 
-// ======================= MQTT HANDLING =======================
 void mqttCallback(char *topicC, byte *payload, unsigned int length) {
   String topic(topicC);
   String msg;
@@ -414,24 +443,51 @@ void mqttCallback(char *topicC, byte *payload, unsigned int length) {
   msg.trim();
 
   if (topic == TOPIC_CMD) {
+    publishLog("DBG", String("CMD topic=") + topic + " msg=" + msg);
     handleCmd(msg);
   }
 }
 
 void mqttReconnect() {
-  while (!mqtt.connected()) {
+  int tries = 0;
+  while (!mqtt.connected() && tries < 3) {
     if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
       publishLog("INF", "MQTT connected");
       mqtt.subscribe(TOPIC_CMD);
       publishHeartbeatIfDue();  // initial HB
+      return;
     } else {
-      delay(2000);
+      tries++;
+      delay(1000);
     }
+  }
+  if (!mqtt.connected()) {
+    logErr("MQTT reconnect failed", "{\"tries\":3}");
   }
 }
 
-// ======================= ETHERNET INIT =======================
-void setupEthernet() {
+// ======================= SETUP ===============================
+void setup() {
+  // LEDs
+  for (int i = 0; i < 4; i++) {
+    pinMode(LED_PINS[i], OUTPUT);
+    setLed(i, true);
+  }
+
+  // Metrics init
+  for (int i = 0; i < 4; i++) {
+    micMetrics[i].sum     = 0;
+    micMetrics[i].samples = 0;
+    micMetrics[i].avg     = 0;
+    micMetrics[i].base    = 0;
+    micMetrics[i].maxVal  = 0;
+    micMetrics[i].lastRaw = 0;
+  }
+
+  analogReadResolution(12);
+  lastAction        = millis();
+  lastSeqActivityMs = 0;
+
   // Ethernet reset
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
@@ -445,53 +501,12 @@ void setupEthernet() {
 
   mqtt.setServer(mqttServer, mqttPort);
   mqtt.setCallback(mqttCallback);
+
+  lastHbMs     = millis();
+  lastMetricMs = millis();
 }
 
-// ======================= STATE PERSISTENCE ===================
-void loadStateFromPrefs() {
-  prefs.begin("candles", false);
-  solvedFlag = prefs.getBool("solved", false);
-
-  if (solvedFlag) {
-    riddleState = RS_SOLVED;
-    setAllCandlesOff();
-    publishLog("INF", "BOOT solved=1, keeping candles off");
-  } else {
-    riddleState = RS_IDLE;
-    setAllCandlesOn();
-    publishLog("INF", "BOOT solved=0, reset riddle");
-  }
-  stateEnterMs = millis();
-}
-
-// ======================= SETUP / LOOP ========================
-void setup() {
-  Serial.begin(115200);
-  delay(200);
-
-  analogReadResolution(12);
-
-  // Seed RNG for flicker
-  randomSeed(analogRead(32));
-
-  // LEDs PWM
-  for (int i = 0; i < 4; i++) {
-    ledcSetup(i, 1000, 8);     // channel i, 1 kHz, 8-bit
-    ledcAttachPin(LED_PINS[i], i);
-  }
-
-  // Mic pins
-  for (int i = 0; i < MIC_COUNT; i++) {
-    pinMode(MIC_PINS[i], INPUT);
-    lastBlowMsChan[i] = 0;
-  }
-
-  setupEthernet();
-  mqttReconnect();
-
-  loadStateFromPrefs();
-}
-
+// ======================= LOOP ================================
 void loop() {
   if (!mqtt.connected()) {
     mqttReconnect();
@@ -500,17 +515,57 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Sample microphones & detect blows
-  for (int i = 0; i < MIC_COUNT; i++) {
-    int v = analogRead(MIC_PINS[i]);
-    if (v >= MIC_THRESHOLD &&
-        (now - lastBlowMsChan[i]) > BLOW_DEBOUNCE_MS) {
-      lastBlowMsChan[i] = now;
-      onBlow(i);
+  // --- Metrics sampling: one raw read per mic per loop ---
+  for (int i = 0; i < 4; i++) {
+    uint16_t raw = analogRead(MIC_PINS[i]);
+    micMetrics[i].lastRaw = raw;
+    micMetrics[i].sum    += raw;
+    micMetrics[i].samples++;
+    if (raw > micMetrics[i].maxVal) micMetrics[i].maxVal = raw;
+  }
+
+  // --- Puzzle logic only when enabled ---
+  if (enabled) {
+    if (!solved) {
+      // Scan for blows on each candle
+      for (int i = 0; i < 4; i++) {
+        if (!lit[i]) continue;  // already off -> ignore further blows
+
+        if (detectBlow(i)) {
+          lastAction        = now;
+          lastSeqActivityMs = now;
+
+          // Turn that candle OFF immediately (only once)
+          setLed(i, false);
+
+          // Record sequence step
+          if (progressed < 4) {
+            progress[progressed] = i;
+            progressed++;
+
+            if (CANDLES_DEV_LOG) {
+              String d = String("{\"idx\":") + i +
+                         ",\"step\":" + progressed + "}";
+              publishLog("INF", "BLOW", d);
+            }
+          }
+
+          // If all 4 are OFF (progressed == 4), evaluate immediately
+          if (progressed >= 4) {
+            evaluateSequence();
+          }
+        }
+      }
+
+      // If we have at least one blow, and 3s passed since last one -> evaluate
+      evaluateSequenceIfDue();
+    } else {
+      // Once solved, keep sending event once in case of reconnects
+      publishSolvedEvent();
     }
   }
 
-  updateRiddleFsm();
+  // Metrics + heartbeat
   publishMetricsIfDue();
   publishHeartbeatIfDue();
 }

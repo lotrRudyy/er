@@ -1,25 +1,35 @@
-# MQTT Quick Commands
+# Discover commands
+er1 help
 
-Log format: `[DD.MM.YYYY HH:MM:SS.mmm] topic payload` (date + ms). Logfile pattern on Pi: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
+# Logs
+er1 log                # tail today (all devices)
+er1 log knocking -n 400
+er1 log knocking -live
+er1 log knocking -errors
 
-## Local Broker (127.0.0.1)
+# Advanced logs via Pi CLI
+er1 logs help
+er1 logs today
+er1 logs date 06.12.2025
 
-### Publish
+# OTA
+er1 ota knocking
+er1 ota images_piano
 
-```
-mosquitto_pub -h 127.0.0.1 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
-```
+# Deploy Pi runtime
+er1 deploy
 
-### Subscribe (all topics)
+# Maglocks
+er1 lock images
+er1 lock door_to_r2
+er1 lock door_to_r3
+er1 lock slider
+er1 lock knocking
+er1 lock-all
 
-```
-./scripts/mqtt-logs.sh live
-```
-
-## Tailscale Broker (100.108.1.80)
-
-### Publish
-
-```
-mosquitto_pub -h 100.108.1.80 -t 'esc/ctrl/lock/images/cmd' -m "OPEN"
-```
+# Misc
+er1 mqtt-status
+er1 mqtt-restart
+er1 syslog
+er1 pi              # SSH to Pi
+er1 commit "msg"    # git add/commit/push from ER repo

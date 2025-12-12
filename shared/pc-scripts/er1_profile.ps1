@@ -1,3 +1,5 @@
+# === ER1 Helper Functions (er1_profile.ps1) ===
+
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
 $er1Cmd = "/home/rudyy/er1/er1"
@@ -30,17 +32,30 @@ $er1Devices = @(
 )
 
 $er1Commands = @{
-    "log"         = "Show logs (tail, errors, live)"
-    "ota"         = "Upload firmware to device"
-    "deploy"      = "Deploy Pi runtime"
-    "lock"        = "Open a maglock"
-    "lock-all"    = "Open ALL maglocks"
-    "syslog"      = "Show ER1 Pi syslog"
-    "mqtt-status" = "Show MQTT runtime status"
-    "mqtt-restart"= "Restart MQTT runtime"
-    "commit"      = "Commit + push repo"
-    "pi"          = "SSH into Pi"
-    "help"        = "List commands"
+    "help"         = "Show this help"
+    "log"          = "Show today’s logfile (tail, filter by device, live/errors)"
+    "logs"         = "Raw passthrough to 'er1 logs' on the Pi"
+    "ota"          = "Upload firmware to a device via ota.ps1"
+    "deploy"       = "Deploy ER1 Pi runtime from this repo"
+    "lock"         = "Open a single maglock by ID"
+    "lock-all"     = "Open ALL maglocks"
+    "syslog"       = "Show ER1 Pi syslog (journalctl wrapper)"
+    "mqtt-status"  = "Show MQTT runtime status"
+    "mqtt-restart" = "Restart MQTT runtime"
+    "commit"       = "Git add/commit/push from the ER repo root"
+    "pi"           = "SSH into the ER1 Pi"
+}
+
+# Helper to expand special log aliases into regex fragments
+function Expand-Er1LogPattern {
+    param([string]$pattern)
+
+    switch ($pattern) {
+        # All maglock controller + knocking lock topics in one go
+        "maglock" { return "room0/maglock_ctrl|ctrl/lock/knocking" }
+
+        default   { return $pattern }
+    }
 }
 
 # ---- Main dispatcher ----
@@ -49,11 +64,9 @@ function er1 {
         [Parameter(Position=0)]
         [string]$cmd,
 
-        [Parameter(Position=1)]
-        [string]$arg1,
-
-        [Parameter(Position=2)]
-        [string]$arg2,
+        # Everything after cmd comes in here; we parse it per subcommand
+        [Parameter(Position=1, ValueFromRemainingArguments = $true)]
+        [string[]]$args,
 
         [switch]$live,
         [switch]$errors,
@@ -63,10 +76,39 @@ function er1 {
     switch ($cmd) {
 
         "help" {
-            Write-Host "`nAvailable ER1 commands:`n" -ForegroundColor Cyan
+            Write-Host "`nER1 helper – commands:`n" -ForegroundColor Cyan
+
             foreach ($k in $er1Commands.Keys) {
                 "{0,-14} {1}" -f $k, $er1Commands[$k]
             }
+
+            Write-Host "`nLog command examples:" -ForegroundColor Cyan
+            Write-Host "  er1 log                          # tail today’s log (all devices, $n lines)"
+            Write-Host "  er1 log -n 500                   # tail 500 lines of today’s log"
+            Write-Host "  er1 log images_piano             # filter today’s log for one device"
+            Write-Host "  er1 log images_piano -n 50       # same, but only last 50 lines"
+            Write-Host "  er1 log knocking maglock 400     # knocking + maglock_ctrl+knocking-lock, 400 lines"
+            Write-Host "  er1 log -live                    # live stream from Pi (all devices)"
+            Write-Host "  er1 log images_piano -live       # live filtered stream for one device"
+            Write-Host "  er1 log -errors                  # only error lines from today (all devices)"
+            Write-Host "  er1 log images_piano -errors     # only error lines for one device"
+            Write-Host ""
+            Write-Host "Advanced logs (Pi CLI passthrough):" -ForegroundColor Cyan
+            Write-Host "  er1 logs help                    # show full 'er1 logs' help on the Pi"
+            Write-Host "  er1 logs today                   # whatever 'er1 logs today' does on Pi"
+            Write-Host "  er1 logs date 06.12.2025         # example date-based usage (if supported)"
+            Write-Host ""
+            Write-Host "Other examples:" -ForegroundColor Cyan
+            Write-Host "  er1 ota images_piano             # upload firmware for images_piano"
+            Write-Host "  er1 deploy                       # deploy ER1 runtime to Pi"
+            Write-Host "  er1 lock images                  # open images maglock"
+            Write-Host "  er1 lock-all                     # open ALL maglocks"
+            Write-Host "  er1 mqtt-status                  # check MQTT runtime"
+            Write-Host "  er1 mqtt-restart                 # restart MQTT runtime"
+            Write-Host "  er1 commit ""tweak logs""           # git add/commit/push from ER repo"
+            Write-Host ""
+            Write-Host "Tip: use TAB after 'er1 ' to autocomplete commands,"
+            Write-Host "     and after 'er1 log/ota/lock ' to autocomplete devices."
             return
         }
 
@@ -76,34 +118,116 @@ function er1 {
         }
 
         "log" {
-            $dev = if ($arg1) { $arg1 } else { "*" }
+            # Parse args:
+            # - any number of string filters (patterns)
+            # - optional last raw number = override for -n
+            # Examples:
+            #   er1 log                            -> all devices, default -n
+            #   er1 log images_piano               -> filter by 'images_piano'
+            #   er1 log knocking maglock 400       -> filters 'knocking' + 'maglock', n=400
+            #   er1 log -live                      -> no patterns, just live tail
+            #   er1 log knocking -live             -> live filtered
+            #   er1 log knocking -errors -n 300    -> errors only, numeric via named -n
 
+            $patterns = @()
+            $localN   = $n
+
+            if ($args -and $args.Count -gt 0) {
+                # Check if last arg is a bare integer -> treat as n override
+                $last = $args[-1]
+                $intRef = 0
+                if ([int]::TryParse($last, [ref]$intRef)) {
+                    $localN = $intRef
+                    if ($args.Count -gt 1) {
+                        $patterns = $args[0..($args.Count - 2)]
+                    }
+                }
+                else {
+                    $patterns = $args
+                }
+            }
+
+            if ($patterns.Count -eq 0) {
+                # No filters means: all devices
+                $patterns = @("*")
+            }
+
+            # Expand special aliases like "maglock"
+            $expandedPatterns = @()
+            foreach ($p in $patterns) {
+                if ($p -eq "*") {
+                    $expandedPatterns = @("*")
+                    break
+                }
+                $expandedPatterns += (Expand-Er1LogPattern $p)
+            }
+
+            $useAll = ($expandedPatterns.Count -eq 1 -and $expandedPatterns[0] -eq "*")
+            $regex  = $null
+            if (-not $useAll) {
+                $regex = $expandedPatterns -join "|"
+            }
+
+            # LIVE mode
             if ($live) {
-                if ($dev -eq "*") { ssh -t $er1Pi "$er1Cmd logs live" }
-                else { ssh -t $er1Pi "$er1Cmd logs grep $dev" }
+                if ($useAll) {
+                    ssh -t $er1Pi "$er1Cmd logs live"
+                }
+                else {
+                    ssh -t $er1Pi "$er1Cmd logs live | grep -E '$regex'"
+                }
                 return
             }
+
+            # Today’s logfile path on Pi
+            $todayFile = "logs/er1-`$(date +%d.%m.%Y).log"
 
             if ($errors) {
-                if ($dev -eq "*") { ssh -t $er1Pi "$er1Cmd logs live" | Select-String '"lv":"ERR"' }
-                else { ssh -t $er1Pi "$er1Cmd logs grep $dev" | Select-String '"lv":"ERR"' }
-                return
+                if ($useAll) {
+                    # All devices, only ERR
+                    $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
+                }
+                else {
+                    # Filter by regex AND only ERR
+                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                }
             }
-
-            if ($dev -eq "*") {
-                $remoteCmd = "cd ~/er1; tail -n $n logs/er1-`$(date +%d.%m.%Y).log"
-            } else {
-                $remoteCmd = "cd ~/er1; grep $dev logs/er1-`$(date +%d.%m.%Y).log | tail -n $n"
+            else {
+                if ($useAll) {
+                    # All devices
+                    $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
+                }
+                else {
+                    # Filter by regex
+                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | tail -n $localN"
+                }
             }
 
             ssh $er1Pi $remoteCmd
             return
         }
 
+        "logs" {
+            # Raw passthrough to the Pi's 'er1 logs' CLI for anything not covered by 'er1 log'
+            # Examples:
+            #   er1 logs help
+            #   er1 logs today
+            #   er1 logs date 06.12.2025
+            $joined = $args -join " "
+            if ([string]::IsNullOrWhiteSpace($joined)) {
+                ssh -t $er1Pi "$er1Cmd logs help"
+            }
+            else {
+                ssh -t $er1Pi "$er1Cmd logs $joined"
+            }
+            return
+        }
+
         "ota" {
-            if (-not $arg1) { Write-Error "Usage: er1 ota <device>"; return }
+            $target = if ($args.Count -ge 1) { $args[0] } else { $null }
+            if (-not $target) { Write-Error "Usage: er1 ota <device>"; return }
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
-            pwsh -File $otaScript -Target $arg1
+            pwsh -File $otaScript -Target $target
             return
         }
 
@@ -114,8 +238,9 @@ function er1 {
         }
 
         "lock" {
-            if (-not $arg1) { Write-Error "Usage: er1 lock <id>"; return }
-            ssh -t $er1Pi "$er1Cmd lock open $arg1"
+            $id = if ($args.Count -ge 1) { $args[0] } else { $null }
+            if (-not $id) { Write-Error "Usage: er1 lock <id>"; return }
+            ssh -t $er1Pi "$er1Cmd lock open $id"
             return
         }
 
@@ -140,7 +265,9 @@ function er1 {
         }
 
         "commit" {
-            param([string]$Message = "update")
+            # Use all remaining args as the commit message; default to "update" if empty.
+            $Message = if ($args -and $args.Count -gt 0) { ($args -join " ") } else { "update" }
+
             Push-Location $erRepoRoot
             git add .
             git commit -m $Message
@@ -176,7 +303,7 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
     $cmd = $tokens[1].Value
 
     if ($cmd -in @("log","ota","lock")) {
-        $list = @("*") + $er1Devices
+        $list = @("*") + $er1Devices + @("maglock")
         return $list |
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object {
