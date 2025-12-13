@@ -99,7 +99,7 @@ er1-ota <Dev>
 Examples:
 
 ```
-er1-ota images_piano
+er1-ota images
 er1-ota chess
 ```
 
@@ -112,7 +112,7 @@ pwsh ota.ps1 -Target <Dev>
 Firmware must exist at:
 
 ```
-er1/firmware/.pio/build/<env>/<Dev>.bin
+firmware/.pio/build/<env>/<Dev>.bin
 ```
 
 ---
@@ -161,8 +161,8 @@ er1-lock-knocking
 Lock MQTT topics:
 
 ```
-er1/ctrl/lock/<id>/cmd
-er1/ctrl/lock/<id>/state
+maglock/lock/<id>/cmd
+maglock/lock/<id>/state
 ```
 
 Lock IDs (canonical):

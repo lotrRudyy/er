@@ -218,41 +218,14 @@ W5500 pins:
 
 ## 2.2 MQTT topic pattern
 
-For all ESP32 nodes:
+For all ESP32 nodes the namespace is roomless and uses:
 
 ```
-er1/<room>/<dev>/hb
-er1/<room>/<dev>/event
-er1/<room>/<dev>/cmd
-er1/<room>/<dev>/log
-er1/<room>/<dev>/metric
+<node>/<channel>
 ```
 
-Where:
-
-- `<room>` ∈ {room0, room1, room2, room3}
-- `<dev>` = canonical device name (section 3)
-
-QoS:
-
-- hb: QoS0 retained
-- event: QoS0/1 not retained
-- cmd: QoS1 not retained
-- log: QoS0
-- metric: QoS0
-
----
-
-## 2.3 MQTT namespace migration (esc -> er1)
-
-- All firmware, scripts, docs, and broker tools now publish/subscribe under `er1/...`. Node-RED flows are **not** in this repo; TODO: update every Node-RED MQTT topic manually to the new root.
-- After deploying this change, restart Node-RED and any other subscribers so they reconnect with the new topic root. Legacy retained messages may continue to exist under the old `esc` namespace (pattern `` `esc`/`#` ``); clear them with your standard broker method if desired.
-- Verify the repo by running (from repo root) and expecting zero matches:
-
-```
-rg -n '"?esc\/' .
-rg -n '\besc\/' .
-```
+Channels in use: `cmd`, `hb`, `evt`, `state`, `dbg`, `log`, `cfg`.
+See docs/mqtt-topics.md for details.
 
 ---
 
@@ -277,7 +250,7 @@ Cadence:
 Commands arrive on:
 
 ```
-er1/<room>/<dev>/cmd
+<node>/cmd
 ```
 
 Supported:
@@ -311,7 +284,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-pwsh ota.ps1 -Target images_piano
+pwsh ota.ps1 -Target images
 ```
 
 OTA lookup via deviceMap inside `ota.ps1`.
@@ -323,7 +296,7 @@ Always bump `FW_VERSION`.
 Each ESP32 node publishes OTA state to:
 
 ```
-er1/<room>/<dev>/ota
+<node>/ota
 ```
 
 Payload format (compact JSON, same logging schema as hb/log):
@@ -341,7 +314,7 @@ Retained semantics: `start` stays until `ok`/`fail` overwrites it so operators c
 
 ### Pi OTA verification
 
-`pi-runtime/scripts/ota_verify.py` subscribes to `er1/+/+/cmd` + `er1/+/+/hb`. When an `UPDATE` command is seen it opens a 90 s window and waits for:
+`pi-runtime/scripts/ota_verify.py` subscribes to `+/cmd` + `+/hb`. When an `UPDATE` command is seen it opens a 90 s window and waits for:
 
 1. Device to go offline at least once (LWT `offline`) **or** its heartbeat uptime to reset.
 2. Device to publish a new heartbeat after reconnecting.
@@ -363,45 +336,47 @@ Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and systemd journal
 
 ---
 
-# 3. Device map (Env / Dev / Room / IP / OTA)
+# 3. Device map (Env / Dev / IP / OTA)
 
-| Role               | Env name             | Dev name      | Room   | IP            | OTA path                        |
-|--------------------|-----------------------|----------------|--------|----------------|----------------------------------|
-| Maglock controller | room0_maglock_ctrl   | maglock_ctrl  | room0  | 192.168.0.11  | /firmware/maglock_ctrl.bin      |
-| Images + piano     | room1_images_piano   | images_piano  | room1  | 192.168.0.12  | /firmware/images_piano.bin      |
-| Chess              | room2_chess          | chess         | room2  | 192.168.0.13  | /firmware/chess.bin             |
-| Knocking           | room3_knocking       | knocking      | room3  | 192.168.0.14  | /firmware/knocking.bin          |
-| Candles            | room3_candles        | candles       | room3  | 192.168.0.15  | /firmware/candles.bin           |
-| Star sky           | room3_star_sky       | star_sky      | room3  | 192.168.0.16  | /firmware/star_sky.bin          |
-| Star slider        | room3_star_slider    | star_slider   | room3  | 192.168.0.17  | /firmware/star_slider.bin       |
-| Stop timer         | room3_stop_timer     | stop_timer    | room3  | 192.168.0.18  | /firmware/stop_timer.bin        |
+| Role               | Env name   | Dev name  | IP            | OTA path                    |
+|--------------------|------------|-----------|----------------|-----------------------------|
+| Maglock controller | maglock    | maglock   | 192.168.0.11  | /firmware/maglock_ctrl.bin  |
+| Images + piano     | images     | images    | 192.168.0.12  | /firmware/images.bin        |
+| Chess              | chess      | chess     | 192.168.0.13  | /firmware/chess.bin         |
+| Knocking           | knocking   | knocking  | 192.168.0.14  | /firmware/knocking.bin      |
+| Candles            | candles    | candles   | 192.168.0.15  | /firmware/candles.bin       |
+| Star sky           | star_sky   | star_sky  | 192.168.0.16  | /firmware/star_sky.bin      |
+| Star slider        | star_slider| star_slider| 192.168.0.17 | /firmware/star_slider.bin   |
+| Stop timer         | stop_timer | stop_timer| 192.168.0.18  | /firmware/stop_timer.bin    |
 
 Examples:
 
-- `er1/room2/chess/hb`
-- `er1/room3/star_sky/event`
-- `er1/room3/stop_timer/hb`
+- `chess/hb`
+- `star_sky/evt`
+- `stop_timer/hb`
 
 Maglock controller node topics:
 
 ```
-er1/room0/maglock_ctrl/hb
-er1/room0/maglock_ctrl/cmd
-er1/room0/maglock_ctrl/log
-er1/room0/maglock_ctrl/metric
+maglock/hb
+maglock/cmd
+maglock/log
+maglock/dbg
+maglock/lock/<id>/cmd
+maglock/lock/<id>/state
 ```
 
 ## 3.1 Firmware module layout
 
-| Env name           | Core shell file             | Module(s)                                  |
-|--------------------|-----------------------------|--------------------------------------------|
-| room1_images_piano | `room1_images_piano.cpp`    | `images_riddle.cpp`, `piano_riddle.cpp`    |
-| room0_maglock_ctrl | `room0_maglock_ctrl.cpp`    | `maglock_controller.cpp`                   |
-| room3_knocking     | `room3_knocking.cpp`        | `knocking_riddle.cpp`                      |
-| room3_candles      | `room3_candles.cpp`         | `candles_riddle.cpp`                       |
-| room3_star_sky     | `room3_star_sky.cpp`        | `star_sky_riddle.cpp`                      |
-| room2_chess        | `room2_chess.cpp`           | `chess_riddle.cpp`                         |
-| room3_star_slider  | `room3_star_slider.cpp`     | `star_slider_riddle.cpp`                   |
+| Env name   | Core shell file         | Module(s)                                  |
+|------------|-------------------------|--------------------------------------------|
+| images     | `images_piano_main.cpp` | `images_riddle.cpp`, `piano_riddle.cpp`    |
+| maglock    | `maglock_main.cpp`      | `maglock_controller.cpp`                   |
+| knocking   | `knocking_main.cpp`     | `knocking_riddle.cpp`                      |
+| candles    | `candles_main.cpp`      | `candles_riddle.cpp`                       |
+| star_sky   | `star_sky_main.cpp`     | `star_sky_riddle.cpp`                      |
+| chess      | `chess_main.cpp`        | `chess_riddle.cpp`                         |
+| star_slider| `star_slider_main.cpp`  | `star_slider_riddle.cpp`                   |
 
 Each listed env uses the reusable core node scaffolding (Ethernet/MQTT/OTA/log/heartbeat) plus the modules shown above for puzzle logic. Update this table as additional nodes adopt the pattern.
 
@@ -429,8 +404,8 @@ Canonical lock IDs:
 MQTT topics:
 
 ```
-er1/ctrl/lock/<id>/cmd
-er1/ctrl/lock/<id>/state
+maglock/lock/<id>/cmd
+maglock/lock/<id>/state
 ```
 
 Allowed commands:

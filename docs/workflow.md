@@ -112,7 +112,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-er1-ota images_piano
+er1-ota images
 ```
 
 The OTA binary must exist at:
@@ -144,7 +144,7 @@ All logs originate from `/home/rudyy/er1/scripts/mqtt_logs.sh`.
 High-level helpers that publish to:
 
 ```
-er1/ctrl/lock/<id>/cmd
+maglock/lock/<id>/cmd
 ```
 
 Available lock IDs:
@@ -220,7 +220,7 @@ ssh rudyy@100.108.1.80 "sudo systemctl restart er1-runtime.service"
 OTA tool:
 
 ```
-er1/firmware/ota.ps1
+firmware/ota.ps1
 ```
 
 Correct usage:
@@ -232,7 +232,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-pwsh ota.ps1 -Target images_piano
+pwsh ota.ps1 -Target images
 ```
 
 OTA steps:

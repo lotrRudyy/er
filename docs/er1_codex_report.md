@@ -16,7 +16,7 @@
 - Snippet:
 
   ```bash
-  mosquitto_sub -h "$LOCAL_BROKER" -t 'er1/#' -v \
+  mosquitto_sub -h "$LOCAL_BROKER" -t '+/log' -t '+/hb' -t '+/evt' -t '+/state' -v \
     | ts "$TS_FORMAT" \
     | while IFS= read -r line; do
         today=$(date +%Y-%m-%d)
@@ -59,7 +59,7 @@
 - Snippet:
 
   ```markdown
-  ./scripts/mqtt_logs.sh daemon  # writes to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log with date+ms prefix
+  ./scripts/mqtt_logs.sh daemon  # writes to <deploy_root>/logs/er1-DD.MM.YYYY.log with date+ms prefix
   ```
 
 ### docs/er/commands.md

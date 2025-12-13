@@ -14,15 +14,15 @@ Lock IDs: `images`, `r2`, `r3`, `slider`, `knocking`.
 ### Local broker
 
 ```bash
-mosquitto_pub -h 127.0.0.1 -t 'er1/ctrl/lock/<id>/cmd' -m "OPEN"
-mosquitto_pub -h 127.0.0.1 -t 'er1/ctrl/lock/<id>/cmd' -m "CLOSE"
+mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/<id>/cmd' -m "OPEN"
+mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/<id>/cmd' -m "CLOSE"
 ```
 
 ### Remote broker
 
 ```bash
-mosquitto_pub -h 100.108.1.80 -t 'er1/ctrl/lock/<id>/cmd' -m "OPEN"
-mosquitto_pub -h 100.108.1.80 -t 'er1/ctrl/lock/<id>/cmd' -m "CLOSE"
+mosquitto_pub -h 100.108.1.80 -t 'maglock/lock/<id>/cmd' -m "OPEN"
+mosquitto_pub -h 100.108.1.80 -t 'maglock/lock/<id>/cmd' -m "CLOSE"
 ```
 
 Replace `<id>` with one of the canonical lock IDs.
@@ -39,7 +39,7 @@ Replace `<id>` with one of the canonical lock IDs.
 ./scripts/mqtt_logs.sh daemon
 ```
 
-Each line is prefixed by `date +"[%d.%m.%Y %H:%M:%S.%3N]"` and written to `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
+Each line is prefixed by `date +"[%d.%m.%Y %H:%M:%S.%3N]"` and written to `<deploy_root>/logs/er1-DD.MM.YYYY.log`.
 
 ## Scripts & Aliases
 

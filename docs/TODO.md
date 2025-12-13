@@ -23,7 +23,7 @@ SOURCE OF TRUTH: only the checked-out repository files. Do not assume anything n
 
 Goal: perform a production-grade audit of this escape-room system repo. Focus on reliability, safety, maintainability, observability, deployment, and recoverability.
 
-Repo layout hint: look for er1/, er2/, er3/, and shared/ (firmware, pi-runtime, docs, scripts).
+Repo layout hint: look for er1, er2, er3, and shared (firmware, pi-runtime, docs, scripts).
 
 Process:
 
