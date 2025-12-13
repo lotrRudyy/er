@@ -76,7 +76,7 @@ TimestampFields Logger::timestamp() {
   }
   TimestampFields ts{};
   ts.epoch = core_epoch_seconds();
-  ts.hasLocal = core_format_ts(ts.ts, sizeof(ts.ts));
+  ts.timeValid = core_format_ts(ts.ts, sizeof(ts.ts));
   return ts;
 }
 
@@ -102,7 +102,7 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
     ok = client_->publish(topic_, payload.c_str());
   }
 
-  if (!ts.hasLocal) {
+  if (!ts.timeValid) {
     emitMissingTsWarning(ts);
   }
 
@@ -113,12 +113,12 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 }
 
 bool Logger::emitMissingTsWarning(const TimestampFields& ts) {
-  if (warnedMissingTs_ || warningActive_) return false;
+  if (warnedMissingTs_ || warningActive_ || ts.timeValid) return false;
   if (!client_ || !topic_) return false;
 
   warnedMissingTs_ = true;
   warningActive_ = true;
-  String msg = "wall-clock time not available; ts omitted";
+  String msg = "wall-clock time not available; time_valid=false";
   LogMessage lm{"WRN", &msg, nullptr};
   String payload = buildPayload(lm, ts);
   bool ok = client_->publish(topic_, payload.c_str());
@@ -130,11 +130,10 @@ String Logger::buildPayload(const LogMessage& msg, const TimestampFields& ts) co
   String payload = "{";
   payload += "\"t\":";
   payload += static_cast<long long>(ts.epoch);
-  if (ts.hasLocal) {
-    payload += ",\"ts\":\"";
-    payload += ts.ts;
-    payload += "\"";
-  }
+  payload += ",\"ts\":\"";
+  payload += ts.ts;
+  payload += "\",\"time_valid\":";
+  payload += ts.timeValid ? "true" : "false";
 
   const String level = escapeJsonString(msg.level ? msg.level : "");
   const String message = msg.msg ? escapeJsonString(*(msg.msg)) : "";

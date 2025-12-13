@@ -7,7 +7,7 @@ namespace Core {
 
 struct TimestampFields {
   int64_t epoch = 0;
-  bool hasLocal = false;
+  bool timeValid = false;
   char ts[24] = {0};
 };
 

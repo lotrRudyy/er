@@ -12,7 +12,6 @@ static const char* NODE_ID = "star_sky";
 static const char* FW_VERSION = "1.2";
 static const char* FW_DESC =
     "star_sky 1.2 - core shell + module, candles gate + pattern preserved";
-static const char* BUILD_ID = __DATE__ " " __TIME__;
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};
@@ -93,7 +92,6 @@ static void publishOtaStatus(const char* st, const String& dataJson, bool retain
 void setup() {
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
-  cfg.buildId = BUILD_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
   cfg.startEnabled = true;

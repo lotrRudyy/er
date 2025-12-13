@@ -110,12 +110,15 @@ NodeCore::NodeCore() : ctx_(*this) {}
 
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
+  buildIdBuf_[0] = '\0';
+  if (!core_format_build_ts(buildIdBuf_, sizeof(buildIdBuf_))) {
+    buildIdBuf_[0] = '\0';
+  }
+
   if (!cfg_.nodeId || cfg_.nodeId[0] == '\0') {
     cfg_.nodeId = cfg_.net.clientId;
   }
-  if (!cfg_.buildId || cfg_.buildId[0] == '\0') {
-    cfg_.buildId = __DATE__ " " __TIME__;
-  }
+  cfg_.buildId = buildIdBuf_;
   cfg_.topics = makeTopicConfig(cfg_.nodeId, cfg.topics);
   if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
     cfg_.ota.targetFw = cfg_.fwVersion;
@@ -414,8 +417,9 @@ void NodeCore::persistEnabledState(const char* reason) {
 TimestampFields NodeCore::currentTimestamp() {
   TimestampFields ts{};
   ts.epoch = core_epoch_seconds();
-  ts.hasLocal = core_format_ts(ts.ts, sizeof(ts.ts));
-  if (!ts.hasLocal) {
+  ts.timeValid = core_format_ts(ts.ts, sizeof(ts.ts));
+  if (!ts.timeValid) {
+    ts.ts[0] = '\0';
     maybeWarnMissingTs();
   }
   return ts;
@@ -430,14 +434,13 @@ bool NodeCore::publishEnvelope(const char* topic, const char* type, uint32_t ver
   String tStr = escapeJson(type);
   String idStr = escapeJson(id);
   String payload;
-  payload.reserve(dataJson.length() + tStr.length() + idStr.length() + 64);
+  payload.reserve(dataJson.length() + tStr.length() + idStr.length() + 80);
   payload = "{\"t\":";
   payload += static_cast<long long>(ts.epoch);
-  if (ts.hasLocal) {
-    payload += ",\"ts\":\"";
-    payload += ts.ts;
-    payload += "\"";
-  }
+  payload += ",\"ts\":\"";
+  payload += ts.ts;
+  payload += "\",\"time_valid\":";
+  payload += ts.timeValid ? "true" : "false";
   payload += ",\"type\":\"";
   payload += tStr;
   payload += "\",\"v\":";
@@ -462,7 +465,7 @@ void NodeCore::maybeWarnMissingTs() {
   if (missingTsWarned_ || missingTsWarningActive_) return;
   missingTsWarningActive_ = true;
   missingTsWarned_ = true;
-  logger_.publish("WRN", "wall-clock time not available; ts omitted");
+  logger_.publish("WRN", "wall-clock time not available; time_valid=false");
   missingTsWarningActive_ = false;
 }
 
@@ -527,9 +530,10 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   const char* health = (hb.health && hb.health[0]) ? hb.health : "ok";
   const char* mem = (hb.mem && hb.mem[0]) ? hb.mem : "ok";
   const char* lastErr = (hb.lastErr && hb.lastErr[0]) ? hb.lastErr : "0";
-  char ts[32];
-  bool timeValid = core_format_ts(ts, sizeof(ts));
-  if (!timeValid) ts[0] = '\0';
+  TimestampFields tsFields{};
+  tsFields.epoch = core_epoch_seconds();
+  tsFields.timeValid = core_format_ts(tsFields.ts, sizeof(tsFields.ts));
+  if (!tsFields.timeValid) tsFields.ts[0] = '\0';
 
   String nodeEsc = escapeJson(node);
   String fwEsc = escapeJson(fw);
@@ -538,7 +542,7 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   String memEsc = escapeJson(mem);
   String lastErrEsc = escapeJson(lastErr);
 
-  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(ts) + 96);
+  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(tsFields.ts) + 96);
   out = "{\"node\":\"";
   out += nodeEsc;
   out += "\",\"fw\":\"";
@@ -548,9 +552,9 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   out += "\",\"up\":";
   out += hb.uptime;
   out += ",\"ts\":\"";
-  out += ts;
+  out += tsFields.ts;
   out += "\",\"time_valid\":";
-  out += timeValid ? "true" : "false";
+  out += tsFields.timeValid ? "true" : "false";
   out += ",\"health\":\"";
   out += healthEsc;
   out += "\",\"mem\":\"";

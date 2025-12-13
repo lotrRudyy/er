@@ -10,7 +10,7 @@
 
 ### scripts/mqtt_logs.sh
 
-- Rebuilt the script around the new daily logging model: only the local broker is subscribed, every message is stamped with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`, and midnight rollover automatically switches to the next `logs/er1-DD.MM.YYYY.log`.
+- Rebuilt the script around the new daily logging model: only the local broker is subscribed, every message is stamped with `date +"%Y.%m.%d %H:%M:%S.%3N"`, and midnight rollover automatically switches to the next `logs/er1-DD.MM.YYYY.log`.
 - Added `live`, `tail`, `grep`, and `help` subcommands so aliases can call the same entrypoint.
 - Dropped the obsolete `scripts/logging/aliases_logging.sh`; `scripts/mqtt_logs.sh` is now the sole logging entrypoint.
 - Snippet:
@@ -73,7 +73,7 @@
 - Snippet:
 
   ```markdown
-  ./scripts/mqtt_logs.sh live  # date +"[%d.%m.%Y %H:%M:%S.%3N]" prefix
+  ./scripts/mqtt_logs.sh live  # date +"%Y.%m.%d %H:%M:%S.%3N" prefix
   ```
 
 ## Config

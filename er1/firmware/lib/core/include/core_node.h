@@ -172,6 +172,7 @@ private:
   uint32_t lastHeartbeatMs_ = 0;
   uint32_t heartbeatIntervalMs_ = 0;
   bool heartbeatImmediate_ = false;
+  char buildIdBuf_[24] = {0};
 
   static constexpr size_t kMaxSubscriptions = 10;
   struct SubscriptionEntry {

@@ -11,7 +11,6 @@ using namespace Core;
 static const char* NODE_ID = "knocking";
 static const char* FW_VERSION = "1.17";
 static const char* FW_DESC = "knocking 1.17 - core shell + DFPlayer module, same sequence and logs";
-static const char* BUILD_ID = __DATE__ " " __TIME__;
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
@@ -81,7 +80,6 @@ static void publishOtaStatus(const char* st, const String& dataJson, bool retain
 void setup() {
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
-  cfg.buildId = BUILD_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
   cfg.startEnabled = true;

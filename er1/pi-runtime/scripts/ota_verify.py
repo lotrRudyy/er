@@ -15,6 +15,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from datetime import datetime
 
 BROKER = os.getenv("LOCAL_BROKER", "127.0.0.1")
 PORT = int(os.getenv("LOCAL_BROKER_PORT", "1883"))
@@ -63,7 +64,7 @@ _suppress_malformed = False
 
 
 def log_line(msg: str) -> None:
-    timestamp = time.strftime("[%d.%m.%Y %H:%M:%S]", time.localtime())
+    timestamp = datetime.now().strftime("%Y.%m.%d %H:%M:%S.%f")[:-3]
     line = f"{timestamp} {msg}"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with LOG_FILE.open("a", encoding="utf-8") as handle:

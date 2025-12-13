@@ -5,7 +5,7 @@ Fast references for ER1 MQTT work. Constants:
 - `LOCAL_BROKER = 127.0.0.1`
 - `REMOTE_BROKER = 100.108.1.80`
 
-Logging format: `[DD.MM.YYYY HH:MM:SS.mmm] topic payload` with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`. Logfile pattern on Pi: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
+Logging format: `YYYY.MM.DD HH:MM:SS.mmm topic payload` with `date +"%Y.%m.%d %H:%M:%S.%3N"`. Logfile pattern on Pi: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
 
 ## OTA (secured)
 
@@ -45,7 +45,7 @@ Replace `<id>` with one of the canonical lock IDs.
 ./scripts/mqtt_logs.sh daemon
 ```
 
-Each line is prefixed by `date +"[%d.%m.%Y %H:%M:%S.%3N]"` and written to `<deploy_root>/logs/er1-DD.MM.YYYY.log`.
+Each line is prefixed by `date +"%Y.%m.%d %H:%M:%S.%3N"` and written to `<deploy_root>/logs/er1-DD.MM.YYYY.log`.
 
 ## Scripts & Aliases
 

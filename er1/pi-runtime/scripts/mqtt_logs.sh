@@ -15,7 +15,7 @@ log_file_for_date() {
 }
 
 timestamp() {
-  date +"[%d.%m.%Y %H:%M:%S.%3N]"
+  date +"%Y.%m.%d %H:%M:%S.%3N"
 }
 
 write_stream() {
@@ -83,7 +83,7 @@ Commands:
   help            Show this help text.
 Notes:
   - Broker is taken from $LOCAL_BROKER (default: 127.0.0.1).
-  - Log timestamp uses: date +"[%d.%m.%Y %H:%M:%S.%3N]".
+  - Log timestamp uses: date +"%Y.%m.%d %H:%M:%S.%3N".
 EOF
 }
 
