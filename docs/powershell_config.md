@@ -8,25 +8,30 @@ If this document conflicts with anything else about PowerShell setup, **this win
 
 ## 1. Profile files (canonical locations)
 
-Windows user profile:
+Windows user profile files:
 
-- Global VS Code PowerShell profile
+- VS Code PowerShell profile (primary for ER work):
   `C:\Users\<USER>\Documents\PowerShell\Microsoft.VSCode_profile.ps1`
 
-- Optional general PowerShell profile (Windows Terminal / plain PS)
+- Optional general PowerShell profile (Windows Terminal / plain PS):
   `C:\Users\<USER>\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`
 
-For ER1 we primarily care about **Microsoft.VSCode_profile.ps1**. The repo-side logic lives in `er/pc-scripts/er1_profile.ps1`.
+Repo-side ER1 logic lives in a file named `er1_profile.ps1` inside the ER repo.
+This repo-side profile is the single source of truth for ER commands (`er1`, deploy, logs, status, doctor, etc).
 
 ---
 
 ## 2. Canonical VS Code profile
 
-This is the recommended content of:
+Recommended content for:
 
 `C:\Users\<USER>\Documents\PowerShell\Microsoft.VSCode_profile.ps1`
 
-It auto-detects the ER repo location (PC vs laptop) and dot-sources the repo-side profile.
+Responsibilities:
+- Auto-detect ER repo location (PC vs laptop).
+- Dot-source the repo-side ER profile if found.
+- Set PSReadLine options.
+- Provide a short prompt.
 
 ```powershell
 # === ER1 VS Code Profile (Canonical) ===
@@ -48,22 +53,26 @@ else {
     return
 }
 
-$erProfile = Join-Path $erRepoRoot "pc-scripts\er1_profile.ps1"
+# We allow a few repo-side layouts so the profile keeps working if folders move.
+$candidates = @(
+    (Join-Path $erRepoRoot "pc-scripts\er1_profile.ps1"),
+    (Join-Path $erRepoRoot "shared\pc-scripts\er1_profile.ps1"),
+    (Join-Path $erRepoRoot "shared\pc-scripts\er1_profile.ps1")  # duplicate harmless, keeps copy/paste simple
+)
 
-if (Test-Path $erProfile) {
+$erProfile = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($erProfile) {
     . $erProfile
     Write-Host "[er1] Loaded repo-side profile: $erProfile" -ForegroundColor Cyan
 }
 else {
-    Write-Warning "[er1] er1_profile.ps1 not found at $erProfile"
+    Write-Warning "[er1] er1_profile.ps1 not found. Checked:`n  - $($candidates -join "`n  - ")"
 }
 
 # Better history navigation
 Import-Module PSReadLine -ErrorAction SilentlyContinue
 Set-PSReadLineOption -HistorySearchCursorMovesToEnd
-
-# Optional: tweak TAB behavior if you want
-# Set-PSReadLineKeyHandler -Chord Tab -Function ForwardWord
 
 # Short prompt path
 function prompt {
