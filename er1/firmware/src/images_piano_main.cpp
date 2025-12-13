@@ -10,10 +10,10 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* NODE_IMAGES = "images";
+static const char* NODE_IMAGES = "images_piano";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.16";
-static const char* FW_DESC = "images+piano split nodes (roomless)";
+static const char* FW_VERSION = "1.17";
+static const char* FW_DESC = "images_piano+piano split nodes (roomless)";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -27,7 +27,7 @@ static constexpr uint16_t MQTT_PORT = 1883;
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/images.bin";
+static const char* OTA_PATH = "/firmware/images_piano.bin";
 
 // ======================= MODULES =============================
 static NodeCore nodeCore;
@@ -121,7 +121,7 @@ void setup() {
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
   cfg.startEnabled = true;
-  cfg.prefsNamespace = "images";
+  cfg.prefsNamespace = "images_piano";
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
   cfg.net.ip = NET_IP;

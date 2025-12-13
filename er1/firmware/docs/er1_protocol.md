@@ -284,7 +284,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-pwsh ota.ps1 -Target images
+pwsh ota.ps1 -Target images_piano
 ```
 
 OTA lookup via deviceMap inside `ota.ps1`.
@@ -341,7 +341,7 @@ Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and systemd journal
 | Role               | Env name   | Dev name  | IP            | OTA path                    |
 |--------------------|------------|-----------|----------------|-----------------------------|
 | Maglock controller | maglock    | maglock   | 192.168.0.11  | /firmware/maglock_ctrl.bin  |
-| Images + piano     | images     | images    | 192.168.0.12  | /firmware/images.bin        |
+| Images + piano     | images_piano | images_piano | 192.168.0.12  | /firmware/images_piano.bin  |
 | Chess              | chess      | chess     | 192.168.0.13  | /firmware/chess.bin         |
 | Knocking           | knocking   | knocking  | 192.168.0.14  | /firmware/knocking.bin      |
 | Candles            | candles    | candles   | 192.168.0.15  | /firmware/candles.bin       |
@@ -370,7 +370,7 @@ maglock/lock/<id>/state
 
 | Env name   | Core shell file         | Module(s)                                  |
 |------------|-------------------------|--------------------------------------------|
-| images     | `images_piano_main.cpp` | `images_riddle.cpp`, `piano_riddle.cpp`    |
+| images_piano | `images_piano_main.cpp` | `images_riddle.cpp`, `piano_riddle.cpp`    |
 | maglock    | `maglock_main.cpp`      | `maglock_controller.cpp`                   |
 | knocking   | `knocking_main.cpp`     | `knocking_riddle.cpp`                      |
 | candles    | `candles_main.cpp`      | `candles_riddle.cpp`                       |
@@ -382,7 +382,7 @@ Each listed env uses the reusable core node scaffolding (Ethernet/MQTT/OTA/log/h
 
 ## 3.2 Images riddle rule
 
-- Images + piano node: the images riddle now solves only when all four image buttons are pressed simultaneously and held stable for ALL_DOWN_HOLD_MS (200 ms). No sequence/buffer logic is considered; releasing any button before the hold completes cancels the attempt and requires a fresh all-down hold.
+- Images_piano + piano node: the images riddle now solves only when all four image buttons are pressed simultaneously and held stable for ALL_DOWN_HOLD_MS (200 ms). No sequence/buffer logic is considered; releasing any button before the hold completes cancels the attempt and requires a fresh all-down hold.
 
 ---
 

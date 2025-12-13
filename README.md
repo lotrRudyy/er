@@ -99,7 +99,7 @@ er1-ota <Dev>
 Examples:
 
 ```
-er1-ota images
+er1-ota images_piano
 er1-ota chess
 ```
 

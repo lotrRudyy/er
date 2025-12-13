@@ -26,7 +26,7 @@ $script:ER1_REPO = $erRepoRoot
 # ---- Device list (for log/ota completion) ----
 $er1Devices = @(
     "maglock_ctrl",
-    "images",
+    "images_piano",
     "piano",
     "chess",
     "knocking",
@@ -440,11 +440,11 @@ function er1 {
 
             Write-Host "`nLog examples:" -ForegroundColor Cyan
             Write-Host "  er1 log"
-            Write-Host "  er1 log images"
-            Write-Host "  er1 log images 50"
+            Write-Host "  er1 log images_piano"
+            Write-Host "  er1 log images_piano 50"
             Write-Host "  er1 log -live"
             Write-Host "  er1 log -errors"
-            Write-Host "  er1 log images --save"
+            Write-Host "  er1 log images_piano --save"
             Write-Host ""
             return
         }

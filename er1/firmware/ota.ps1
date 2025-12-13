@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("maglock","images","chess","knocking","candles","star_sky","star_slider","stop_timer")]
+    [ValidateSet("maglock","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
     [string]$Target,
     [string]$Env,
     [string]$Dev,
@@ -12,10 +12,10 @@ try {
 
 # ============ DEVICE MAP ============
 # Valid -Target values:
-#   maglock, images, chess, knocking, candles, star_sky, star_slider, stop_timer
+#   maglock, images_piano, chess, knocking, candles, star_sky, star_slider, stop_timer
 $deviceMap = @{
     "maglock"     = @{ Env = "maglock";       Dev = "maglock"      }
-    "images"      = @{ Env = "images";  Dev = "images"       }
+    "images_piano" = @{ Env = "images_piano"; Dev = "images_piano" }
     "chess"       = @{ Env = "chess";         Dev = "chess"        }
     "knocking"    = @{ Env = "knocking";      Dev = "knocking"     }
     "candles"     = @{ Env = "candles";       Dev = "candles"      }

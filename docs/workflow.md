@@ -112,7 +112,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-er1-ota images
+er1-ota images_piano
 ```
 
 The OTA binary must exist at:
@@ -232,7 +232,7 @@ pwsh ota.ps1 -Target <Dev>
 Example:
 
 ```
-pwsh ota.ps1 -Target images
+pwsh ota.ps1 -Target images_piano
 ```
 
 OTA steps:
