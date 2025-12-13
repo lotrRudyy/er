@@ -300,7 +300,8 @@ Validation (fails closed):
 
 Build + tooling requirements:
 
-- Set `OTA_PSK` in the environment before building (`platformio.ini` pulls `${sysenv.OTA_PSK}`) and before running `ota.ps1` so it can compute the required HMAC.
+- `OTA_PSK` must be available at build time (`platformio.ini` pulls `${sysenv.OTA_PSK}`); export it temporarily from the Pi and avoid saving it on PCs.
+- `ota.ps1` now uploads the binary and SSHes into `~/er1/scripts/ota_publish.py`, which reads `/etc/er1/ota_psk` on the Pi to compute sha256 + HMAC and publish `UPDATE` to `<Dev>/cmd` (no PSK on the PC side).
 - Optional: define `OTA_VALIDATION_SELF_TEST` at build time to run a small self-test of the hash/HMAC helpers at startup.
 
 ### OTA status topic (per node)

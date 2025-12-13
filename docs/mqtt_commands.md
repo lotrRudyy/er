@@ -11,7 +11,7 @@ Logging format: `[DD.MM.YYYY HH:MM:SS.mmm] topic payload` with `date +"[%d.%m.%Y
 
 - Payload: `UPDATE sha256=<64-hex> hmac=<64-hex> url=/firmware/<Dev>.bin`
 - Host is pinned to `192.168.0.10`; paths must stay under `/firmware/`.
-- `sha256` is the firmware hash; `hmac` is HMAC-SHA256 of that hash using `OTA_PSK` (computed automatically by `ota.ps1`).
+- `sha256` is the firmware hash; `hmac` is HMAC-SHA256 of that hash using the PSK stored at `/etc/er1/ota_psk` on the Pi. `ota.ps1` uploads the binary and SSHes into `ota_publish.py` to compute + publish; no PSK is kept on PCs.
 
 ## Lock Control
 

@@ -237,9 +237,9 @@ pwsh ota.ps1 -Target images_piano
 
 OTA steps:
 
-1. Build firmware via PlatformIO
-2. Copy `<Dev>.bin` into `/home/rudyy/er1/firmware/`
-3. Publish MQTT message on the device's `cmd` topic
+1. Build firmware via PlatformIO (requires `OTA_PSK` at build time; retrieve it from `/etc/er1/ota_psk` on the Pi without storing locally)
+2. Upload `<Dev>.bin` into `/home/rudyy/firmware/` on the Pi (handled by `ota.ps1`)
+3. `ota.ps1` SSHes into the Pi to run `~/er1/scripts/ota_publish.py --dev <Dev> --url /firmware/<Dev>.bin --broker 192.168.0.10`, which reads `/etc/er1/ota_psk`, computes sha256 + HMAC, and publishes `UPDATE sha256=... hmac=... url=...` to `<Dev>/cmd`
 4. ESP32 fetches OTA binary over HTTP
 5. ESP32 reboots
 6. Node publishes new heartbeat with updated FW_VERSION

@@ -169,20 +169,6 @@ if (-not (Test-Path $firmwarePath)) {
 
 $remoteFirmwareName = Get-RemoteFirmwareName $Dev
 
-if (-not $env:OTA_PSK) {
-    Write-Error "OTA_PSK environment variable is required for HMAC validation."
-    exit 1
-}
-
-$psk = $env:OTA_PSK
-Write-Host "== Computing SHA-256 + HMAC for $firmwarePath =="
-$sha256 = (Get-FileHash -Algorithm SHA256 -Path $firmwarePath).Hash.ToLower()
-$hmacProvider = New-Object System.Security.Cryptography.HMACSHA256 ([Text.Encoding]::UTF8.GetBytes($psk))
-$hmacBytes = $hmacProvider.ComputeHash([Text.Encoding]::UTF8.GetBytes($sha256))
-$hmac = ([BitConverter]::ToString($hmacBytes) -replace "-", "").ToLower()
-Write-Host "SHA256: $sha256"
-Write-Host "HMAC  : $hmac"
-
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
 $piHost        = "100.108.1.80"    # Tailscale IP of Pi
@@ -218,9 +204,20 @@ if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
 # ============ TRIGGER OTA ============
 Write-Host "== Triggering OTA on $topicUpdate =="
 
-# MQTT remains LAN IP because the Pi itself runs mosquitto on 192.168.0.10
-$otaCmd = "UPDATE sha256=$sha256 hmac=$hmac url=/firmware/$remoteFirmwareName"
-ssh "$piUser@$piHost" "mosquitto_pub -h 192.168.0.10 -t '$topicUpdate' -m '$otaCmd'"
+$otaPublishCmd = @(
+    "python3"
+    "/home/rudyy/er1/scripts/ota_publish.py"
+    "--dev", "$Dev"
+    "--broker", "192.168.0.10"
+    "--url", "/firmware/$remoteFirmwareName"
+    "--file", "$piFirmwareDir/$remoteFirmwareName"
+) -join " "
+
+ssh "$piUser@$piHost" $otaPublishCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "OTA publish failed via $piUser@$piHost (exit $LASTEXITCODE)"
+    exit 1
+}
 
 Write-Host "== DONE. Device will update. =="
 
