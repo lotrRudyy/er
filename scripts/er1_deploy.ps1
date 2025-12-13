@@ -10,6 +10,45 @@ param(
     [switch]$Verify
 )
 
+$script:Er1RemoteRoot  = "/home/rudyy/er1"
+$script:Er1ExcludeArgs = @("--exclude=__pycache__/", "--exclude=*.pyc")
+
+function Join-RemotePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Child
+    )
+
+    $r = $Root.Replace('\','/').TrimEnd('/')
+    $c = $Child.Replace('\','/').Trim('/')
+    return "$r/$c"
+}
+
+function Get-RemoteDestinationParts {
+    param(
+        [Parameter(Mandatory = $true)][string]$Dest,
+        [string]$Prefix = "[er1 deploy]"
+    )
+
+    if ($Dest -notmatch "^(?<host>[^:]+):(?<path>.+)$") {
+        throw "$Prefix Remote dest must be user@host:/abs/path (got '$Dest')"
+    }
+
+    $host = $Matches.host
+    $path = $Matches.path.Replace('\', '/')
+    $path = "/" + $path.TrimStart("/")
+
+    if ($path -notlike "$($script:Er1RemoteRoot)*") {
+        throw "$Prefix Refusing to deploy outside $($script:Er1RemoteRoot). Got: $path"
+    }
+
+    return @{
+        Host       = $host
+        Path       = $path
+        Normalized = "{0}:{1}" -f $host, $path
+    }
+}
+
 function Invoke-Er1Sync {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
@@ -19,13 +58,16 @@ function Invoke-Er1Sync {
         [string]$Prefix = "[er1 deploy]"
     )
 
+    $destInfo      = Get-RemoteDestinationParts -Dest $Dest -Prefix $Prefix
+    $destNormalized = $destInfo.Normalized
+    $excludeArgs    = $ExtraArgs | Where-Object { $_ -like "--exclude=*" }
     $rsyncCmd = Get-Command rsync -ErrorAction SilentlyContinue
 
     if ($rsyncCmd) {
         $rsyncArgs = @("-avz", "--delete")
         if ($DryRun) { $rsyncArgs += @("--dry-run", "--itemize-changes") }
         $rsyncArgs += ($ExtraArgs | Where-Object { $_ })
-        $rsyncArgs += @($Source, $Dest)
+        $rsyncArgs += @($Source, $destNormalized)
 
         Write-Host "$Prefix rsync $($rsyncArgs -join ' ')"
         & rsync @rsyncArgs
@@ -39,11 +81,29 @@ function Invoke-Er1Sync {
         throw "DryRun requested but rsync not installed. Install rsync or run without -DryRun."
     }
 
-    Write-Host "$Prefix rsync not found, falling back to scp -r (no delete semantics)" -ForegroundColor Yellow
-    Write-Host "$Prefix scp -r `"$Source`" `"$Dest`""
-    & scp -r "$Source" "$Dest"
-    if ($LASTEXITCODE -ne 0) {
-        throw "scp failed with exit code $LASTEXITCODE"
+    $sourceItem = Get-Item -LiteralPath $Source
+    $isDirectory = $sourceItem.PSIsContainer
+
+    if ($isDirectory) {
+        $tarArgs = @()
+        foreach ($ex in $excludeArgs) { $tarArgs += $ex }
+        $tarArgs += @("-cf", "-", "-C", $sourceItem.FullName, ".")
+        $extractCmd = "tar -xf - -C '$($destInfo.Path)'"
+
+        Write-Host "$Prefix rsync not found, falling back to tar|ssh (no delete semantics; excludes honored)" -ForegroundColor Yellow
+        Write-Host "$Prefix tar $($tarArgs -join ' ') | ssh $($destInfo.Host) $extractCmd"
+        & tar @tarArgs | ssh $destInfo.Host $extractCmd
+        if ($LASTEXITCODE -ne 0) {
+            throw "tar|ssh fallback failed with exit code $LASTEXITCODE"
+        }
+    }
+    else {
+        Write-Host "$Prefix rsync not found, falling back to scp (no delete semantics)" -ForegroundColor Yellow
+        Write-Host "$Prefix scp `"$($sourceItem.FullName)`" `"$destNormalized`""
+        & scp "$($sourceItem.FullName)" "$destNormalized"
+        if ($LASTEXITCODE -ne 0) {
+            throw "scp failed with exit code $LASTEXITCODE"
+        }
     }
 }
 
@@ -58,7 +118,14 @@ function Invoke-Er1Deploy {
     )
 
     $prefix     = "[er1 deploy]"
-    $remoteRoot = Split-Path -Parent $Er1Cmd
+    $remoteRoot = $script:Er1RemoteRoot.Replace('\','/').TrimEnd('/')
+    if ($remoteRoot -like "*/scripts") {
+        $remoteRoot = Split-Path -Parent $remoteRoot
+    }
+    if ($remoteRoot -notlike "/*") {
+        $remoteRoot = "/" + $remoteRoot.TrimStart("/")
+    }
+
     if (-not $remoteRoot -or $remoteRoot.Trim() -eq "" -or $remoteRoot -eq "/") {
         throw "Refusing deploy: remoteRoot invalid ($remoteRoot)"
     }
@@ -88,29 +155,16 @@ function Invoke-Er1Deploy {
     Write-Host "  full    = entire pi-runtime folder (still not whole repo)"
     Write-Host "$prefix Ensuring ota_publish.py will be synced: $otaPublish"
 
-    $requiredRemoteDirs = @(
-        $remoteRoot,
-        "$remoteRoot/scripts",
-        "$remoteRoot/config",
-        "$remoteRoot/systemd",
-        "$remoteRoot/docs"
-    )
-
-    $uniqueRemoteDirs = $requiredRemoteDirs |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique
-
-    if ($uniqueRemoteDirs.Count -gt 0) {
-        $joined = $uniqueRemoteDirs -join "' '"
-        ssh $Er1Pi "mkdir -p '$joined'"
-        if ($LASTEXITCODE -ne 0) { throw "Unable to ensure remote path(s) (exit $LASTEXITCODE)." }
-    }
+    $ensureRuntimeDirsCmd = "mkdir -p {0}/{{scripts,config,systemd,docs}}" -f $remoteRoot
+    Write-Host "$prefix Ensuring remote runtime directories exist..."
+    ssh $Er1Pi $ensureRuntimeDirsCmd
+    if ($LASTEXITCODE -ne 0) { throw "Unable to ensure remote runtime paths (exit $LASTEXITCODE)." }
 
     if ($Mode -eq "full") {
         Invoke-Er1Sync `
             -Source ("{0}/" -f $runtimeRoot) `
-            -Dest ("{0}:{1}/" -f $Er1Pi, $remoteRoot) `
-            -ExtraArgs @("--exclude=.pio", "--exclude=.sconsign*", "--exclude=.vscode") `
+            -Dest ("{0}:{1}/" -f $Er1Pi, ($remoteRoot.TrimEnd('/') + "/")) `
+            -ExtraArgs @("--exclude=.pio", "--exclude=.sconsign*", "--exclude=.vscode") + $script:Er1ExcludeArgs `
             -DryRun:$DryRun `
             -Prefix $prefix
     } else {
@@ -119,36 +173,25 @@ function Invoke-Er1Deploy {
             Invoke-Er1Sync `
                 -Source $cliWrapper `
                 -Dest ("{0}:{1}/" -f $Er1Pi, $remoteRoot) `
-                -ExtraArgs @() `
+                -ExtraArgs $script:Er1ExcludeArgs `
                 -DryRun:$DryRun `
                 -Prefix $prefix
         }
 
         $runtimeItems = @(
-            @{ Path = (Join-Path $runtimeRoot "scripts"); Remote = "/scripts/"; Extra = @() },
-            @{ Path = (Join-Path $runtimeRoot "config");  Remote = "/config/";  Extra = @("--exclude=local.env") },
-            @{ Path = (Join-Path $runtimeRoot "systemd"); Remote = "/systemd/"; Extra = @() },
-            @{ Path = (Join-Path $runtimeRoot "docs");    Remote = "/docs/";    Extra = @() }
+            @{ Path = (Join-Path $runtimeRoot "scripts"); RemoteRel = "scripts"; Extra = @() },
+            @{ Path = (Join-Path $runtimeRoot "config");  RemoteRel = "config";  Extra = @("--exclude=local.env") },
+            @{ Path = (Join-Path $runtimeRoot "systemd"); RemoteRel = "systemd"; Extra = @() },
+            @{ Path = (Join-Path $runtimeRoot "docs");    RemoteRel = "docs";    Extra = @() }
         )
-
-        $remoteDirs = $runtimeItems |
-            ForEach-Object {
-                $r = "{0}{1}" -f $remoteRoot, $_.Remote
-                $r.TrimEnd("/")
-            } | Sort-Object -Unique
-
-        if ($remoteDirs.Count -gt 0) {
-            $joinedRuntime = $remoteDirs -join "' '"
-            ssh $Er1Pi "mkdir -p '$joinedRuntime'"
-            if ($LASTEXITCODE -ne 0) { throw "Unable to ensure remote runtime subdirectories (exit $LASTEXITCODE)." }
-        }
 
         foreach ($item in $runtimeItems) {
             if (Test-Path $item.Path) {
+                $remoteTarget = Join-RemotePath -Root $remoteRoot -Child $item.RemoteRel
                 Invoke-Er1Sync `
                     -Source ("{0}/" -f $item.Path) `
-                    -Dest ("{0}:{1}{2}" -f $Er1Pi, $remoteRoot, $item.Remote) `
-                    -ExtraArgs $item.Extra `
+                    -Dest ("{0}:{1}/" -f $Er1Pi, $remoteTarget) `
+                    -ExtraArgs ($item.Extra + $script:Er1ExcludeArgs) `
                     -DryRun:$DryRun `
                     -Prefix $prefix
             }
@@ -189,7 +232,12 @@ sudo systemctl restart er1-ota-verify.service
         if ($LASTEXITCODE -ne 0) { throw "status_mqtt failed" }
     }
 
+    $otaRemotePath = "/home/rudyy/er1/scripts/ota_publish.py"
+    ssh $Er1Pi "test -f '$otaRemotePath'"
+    if ($LASTEXITCODE -ne 0) { throw "ota_publish.py missing after deploy: $otaRemotePath" }
+
     Write-Host "$prefix Deploy complete." -ForegroundColor Green
+    Write-Host "$prefix Verify publisher exists: ssh rudyy@<pi> \"ls -la /home/rudyy/er1/scripts/ota_publish.py\"" -ForegroundColor Cyan
 }
 
 Invoke-Er1Deploy -Mode $Mode -DryRun:$DryRun -RestartServices:$RestartServices -Verify:$Verify
