@@ -2,18 +2,11 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run Codex (auto-squash)",
+      "label": "Codex (auto-commit before/after)",
       "type": "shell",
       "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}/shared/pc-scripts/codex-vscode.ps1"
-      ],
-      "problemMatcher": [],
-      "presentation": { "reveal": "always" }
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\shared\\pc-scripts\\codex-commit.ps1"],
+      "problemMatcher": []
     }
   ]
 }
