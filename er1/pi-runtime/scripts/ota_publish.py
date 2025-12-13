@@ -108,14 +108,16 @@ def main() -> int:
         psk = read_psk(psk_path)
         sha_hex = sha256_file(firmware_path)
         hmac_hex = compute_hmac(psk, sha_hex)
-        topic = f"{args.dev}/cmd"
+        cmd_node = "images" if args.dev == "images_piano" else args.dev
+        topic = f"{cmd_node}/cmd"
         payload = f"UPDATE sha256={sha_hex} hmac={hmac_hex} url={url}"
 
         print(f"PSK path : {psk_path}")
         print(f"Firmware : {firmware_path}")
         print(f"SHA256   : {sha_hex}")
         print(f"HMAC     : {hmac_hex}")
-        print(f"Topic    : {topic}")
+        print(f"Dev      : {args.dev}")
+        print(f"CmdTopic : {topic}")
         print(f"Payload  : {payload}")
 
         if args.dry_run:
