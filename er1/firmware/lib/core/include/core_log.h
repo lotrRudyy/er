@@ -57,6 +57,9 @@ public:
   void setFilter(LogFilterFn fn, void* user) { filter_ = fn; filterUser_ = user; }
   void setFormat(LogFormat fmt) { format_ = fmt; }
   void setIncludeData(bool enabled) { includeData_ = enabled; }
+#ifdef CORE_LOG_SELFTEST
+  String buildPayloadForTest(const LogMessage& msg, const TimestampFields& ts) const { return buildPayload(msg, ts); }
+#endif
 
 private:
   bool shouldLog(const char* level) const;

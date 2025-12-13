@@ -149,7 +149,7 @@ function Invoke-Er1Deploy {
             -DryRun:$DryRun `
             -Prefix $prefix
     }
-    else {
+        else {
         # Wrapper CLI (if present)
         $cliWrapper = Join-Path $envRoot "er1"
         if (Test-Path $cliWrapper) {
@@ -168,6 +168,18 @@ function Invoke-Er1Deploy {
             @{ Path = (Join-Path $runtimeRoot "systemd"); Remote = "/systemd/"; Extra = @() },
             @{ Path = (Join-Path $runtimeRoot "docs");    Remote = "/docs/";    Extra = @() }
         )
+
+        $remoteDirs = $runtimeItems |
+            ForEach-Object {
+                $r = "{0}{1}" -f $remoteRoot, $_.Remote
+                $r.TrimEnd("/")
+            } | Sort-Object -Unique
+
+        if ($remoteDirs.Count -gt 0) {
+            $joined = $remoteDirs -join "' '"
+            ssh $er1Pi "mkdir -p '$joined'"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to ensure remote runtime subdirectories (exit $LASTEXITCODE)." }
+        }
 
         foreach ($item in $runtimeItems) {
             if (Test-Path $item.Path) {

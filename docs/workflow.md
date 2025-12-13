@@ -205,6 +205,8 @@ Deploy steps:
 4. Re-apply execute bits on `~/er1/er1` and scripts/.
 5. Print a reminder to commit+push so Git matches what was deployed.
 
+Run deploy before using OTA, because Pi-side publisher must exist.
+
 `er1 deploy full` mirrors the entire `pi-runtime/` tree with the same safeguards.
 
 If services need a bounce after copying, restart them manually, e.g.:

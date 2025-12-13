@@ -1,5 +1,6 @@
 #include "core_log.h"
 
+#include <ArduinoJson.h>
 #include <cctype>
 #include <cstdio>
 
@@ -8,14 +9,19 @@
 namespace Core {
 
 namespace {
-bool isJsonObjectString(const String& in) {
+bool isValidJsonObject(const String& in) {
   if (in.length() == 0) return false;
   size_t start = 0;
   size_t end = in.length();
   while (start < end && std::isspace(static_cast<unsigned char>(in.charAt(start)))) start++;
   while (end > start && std::isspace(static_cast<unsigned char>(in.charAt(end - 1)))) end--;
   if (end <= start) return false;
-  return in.charAt(start) == '{' && in.charAt(end - 1) == '}';
+  if (in.charAt(start) != '{' || in.charAt(end - 1) != '}') return false;
+
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, in);
+  if (err) return false;
+  return doc.is<JsonObject>();
 }
 
 String escapeJsonString(const String& in) {
@@ -140,7 +146,11 @@ String Logger::buildPayload(const LogMessage& msg, const TimestampFields& ts) co
 
   if (includeData_ && msg.dataJson && msg.dataJson->length() > 0) {
     const String& data = *(msg.dataJson);
-    if (isJsonObjectString(data)) {
+    const bool dataIsObject = isValidJsonObject(data);
+    payload += ",\"d_type\":\"";
+    payload += dataIsObject ? "object" : "string";
+    payload += "\"";
+    if (dataIsObject) {
       payload += ",\"d\":";
       payload += data;
     } else {

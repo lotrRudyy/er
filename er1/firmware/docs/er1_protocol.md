@@ -156,6 +156,8 @@ Mapping from repo → Pi:
    state survives each deploy.
 4. Re-applies execute bits on the remote runtime tree.
 
+Run deploy before using OTA, because Pi-side publisher must exist.
+
 After deploying, immediately commit + push your changes with `er1 push`
 to keep Pi + Git history aligned.
 
