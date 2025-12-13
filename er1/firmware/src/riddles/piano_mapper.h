@@ -7,7 +7,7 @@
 
 class PianoMapper {
 public:
-  void begin(Core::NodeContext& ctx);
+  void begin(Core::NodeContext& ctx, Core::Logger* logger = nullptr);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
 
@@ -32,6 +32,7 @@ private:
   void logStatus(const char* msg) const;
 
   Core::NodeContext* ctx_ = nullptr;
+  Core::Logger* logger_ = nullptr;
   bool active_ = false;
   uint32_t lastWindowMs_ = 0;
   uint16_t targetWindows_ = 64;

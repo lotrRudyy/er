@@ -2,7 +2,13 @@
 
 #include <cstdio>
 
+#include "core_time.h"
+
 namespace Core {
+
+namespace {
+String escapeJson(const char* s);
+}
 
 // -------- NodeContext --------
 NodeContext::NodeContext(NodeCore& core) : core_(&core) {}
@@ -15,6 +21,26 @@ bool NodeContext::publish(const char* topic, const String& payload, bool retaine
 bool NodeContext::publish(const char* topic, const char* payload, bool retained, int) {
   if (!core_) return false;
   return core_->publish(topic, payload, retained);
+}
+
+bool NodeContext::publishEvent(const char* type, const String& dataJson, uint32_t version, const char* id) {
+  if (!core_) return false;
+  const auto& topics = core_->cfg_.topics;
+  if (topics.evt.length() == 0) return false;
+  return core_->publishEnvelope(topics.evt.c_str(), type, version, dataJson, id, false);
+}
+
+bool NodeContext::publishState(const String& dataJson, bool retained) {
+  if (!core_) return false;
+  const auto& topics = core_->cfg_.topics;
+  if (topics.state.length() == 0) return false;
+  return core_->publishEnvelope(topics.state.c_str(), "state", 1, dataJson, nullptr, retained);
+}
+
+bool NodeContext::publishEnvelope(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                                  const char* id, bool retained) {
+  if (!core_) return false;
+  return core_->publishEnvelope(topic, type, version, dataJson, id, retained);
 }
 
 void NodeContext::log(const char* level, const String& msg) {
@@ -59,6 +85,14 @@ Preferences& NodeContext::prefs() {
   return core_->prefs_;
 }
 
+PubSubClient* NodeContext::mqttClient() {
+  if (!core_) return nullptr;
+  return &core_->mqtt_.client();
+}
+
+TimestampSource* NodeContext::timestampSource() {
+  return core_;
+}
 void NodeContext::requestHeartbeat() {
   if (core_) core_->publishHeartbeatNow();
 }
@@ -101,6 +135,7 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   logOpts.topic = cfg_.topics.log.c_str();
   logOpts.fwVersion = cfg.fwVersion;
   logger_.begin(&mqtt_.client(), logOpts);
+  logger_.setTimestampSource(this);
 
   ota_.begin(cfg.ota, &logger_);
 
@@ -374,6 +409,61 @@ void NodeCore::persistEnabledState(const char* reason) {
   }
   logger_.publish("INF", msg);
   prefs_.putBool("enabled", enabled_);
+}
+
+TimestampFields NodeCore::currentTimestamp() {
+  TimestampFields ts{};
+  ts.epoch = core_epoch_seconds();
+  ts.hasLocal = core_format_ts(ts.ts, sizeof(ts.ts));
+  if (!ts.hasLocal) {
+    maybeWarnMissingTs();
+  }
+  return ts;
+}
+
+bool NodeCore::publishEnvelope(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                               const char* id, bool retained) {
+  if (!topic || !type) return false;
+
+  TimestampFields ts = currentTimestamp();
+
+  String tStr = escapeJson(type);
+  String idStr = escapeJson(id);
+  String payload;
+  payload.reserve(dataJson.length() + tStr.length() + idStr.length() + 64);
+  payload = "{\"t\":";
+  payload += static_cast<long long>(ts.epoch);
+  if (ts.hasLocal) {
+    payload += ",\"ts\":\"";
+    payload += ts.ts;
+    payload += "\"";
+  }
+  payload += ",\"type\":\"";
+  payload += tStr;
+  payload += "\",\"v\":";
+  payload += version;
+  if (id && id[0]) {
+    payload += ",\"id\":\"";
+    payload += idStr;
+    payload += "\"";
+  }
+  payload += ",\"d\":";
+  if (dataJson.length() > 0) {
+    payload += dataJson;
+  } else {
+    payload += "{}";
+  }
+  payload += "}";
+
+  return mqtt_.publish(topic, payload, retained);
+}
+
+void NodeCore::maybeWarnMissingTs() {
+  if (missingTsWarned_ || missingTsWarningActive_) return;
+  missingTsWarningActive_ = true;
+  missingTsWarned_ = true;
+  logger_.publish("WRN", "wall-clock time not available; ts omitted");
+  missingTsWarningActive_ = false;
 }
 
 TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg) {

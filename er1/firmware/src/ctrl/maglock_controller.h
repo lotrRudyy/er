@@ -60,6 +60,7 @@ private:
   void applyLockOutput(LockState& lk);
   const char* lockStateName(const LockState& lk) const;
   void publishLockState(const LockState& lk, const char* reason);
+  void publishStateSnapshot();
   LockState* findLockById(const String& id);
   void startPulse(LockState& lk, const char* reason);
   void setFailSafe(LockState& lk, bool locked, const char* reason);

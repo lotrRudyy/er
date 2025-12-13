@@ -1,7 +1,6 @@
 #include "star_sky_riddle.h"
 
 namespace {
-constexpr const char* kTopicMetric = "er1/room3/star_sky/metric";
 constexpr uint32_t kLedcFreq = 1000;
 constexpr uint8_t kLedcRes = 8;
 constexpr const char* kPrefsKey = "candles";
@@ -9,6 +8,8 @@ constexpr const char* kPrefsKey = "candles";
 
 void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+  const char* node = ctx.nodeId() ? ctx.nodeId() : "star_sky";
+  topicDbg_ = Core::topic(node, "dbg");
   loadState();
   for (int i = 0; i < 4; i++) {
     ledcSetup(i, kLedcFreq, kLedcRes);
@@ -17,6 +18,7 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   }
   cycleStartMs_ = millis();
   lastMetricMs_ = millis();
+  publishState();
 }
 
 void StarSkyRiddle::tick(uint32_t nowMs) {
@@ -40,7 +42,10 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
 }
 
 void StarSkyRiddle::handleCandlesEvent(const String& payload) {
-  if (payload.indexOf("\"event\"") == -1 || payload.indexOf("SOLVED") == -1) {
+  if (payload.indexOf("\"type\"") == -1 || payload.indexOf("\"riddle_solved\"") == -1) {
+    return;
+  }
+  if (payload.indexOf("\"id\":\"candles\"") == -1) {
     return;
   }
   if (!candlesSolved_) {
@@ -48,6 +53,7 @@ void StarSkyRiddle::handleCandlesEvent(const String& payload) {
     persistState();
     cycleStartMs_ = millis();
     log("INF", "Candles SOLVED event received, enabling pattern");
+    publishState();
   } else {
     log("DBG", "Candles SOLVED event (already enabled)");
   }
@@ -115,7 +121,7 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"candles\":" + (candlesSolved_ ? "1" : "0") +
                    ",\"phase\":\"" + phase + "\"" +
                    "}";
-  ctx_->publish(kTopicMetric, payload);
+  ctx_->publish(topicDbg_.c_str(), payload);
 }
 
 void StarSkyRiddle::persistState() {
@@ -134,4 +140,10 @@ void StarSkyRiddle::loadState() {
     prefs_.putBool(kPrefsKey, candlesSolved_);
   }
   cycleStartMs_ = millis();
+}
+
+void StarSkyRiddle::publishState() {
+  if (!ctx_) return;
+  String data = String("{\"candles\":") + (candlesSolved_ ? "true" : "false") + "}";
+  ctx_->publishState(data, true);
 }

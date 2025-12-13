@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "core_time.h"
+
 namespace Core {
 
 namespace {
@@ -51,6 +53,16 @@ bool Logger::shouldLog(const char* level) const {
   return filter_(level, filterUser_);
 }
 
+TimestampFields Logger::timestamp() {
+  if (tsSource_) {
+    return tsSource_->currentTimestamp();
+  }
+  TimestampFields ts{};
+  ts.epoch = core_epoch_seconds();
+  ts.hasLocal = core_format_ts(ts.ts, sizeof(ts.ts));
+  return ts;
+}
+
 bool Logger::publish(const char* level, const String& msg) {
   String empty;
   return publish(level, msg, empty);
@@ -61,36 +73,65 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 
   bool allowed = shouldLog(level);
   bool isError = (strcmp(level, "ERR") == 0);
-  if (!allowed) {
-    if (isError) {
-      errorCount_++;
-    }
+  if (!allowed && !isError) {
     return false;
   }
 
-  LogMessage lm{level, &msg, &dataJson, static_cast<uint32_t>(millis() / 1000)};
-  String payload = buildPayload(lm);
-  bool ok = client_->publish(topic_, payload.c_str());
+  LogMessage lm{level, &msg, &dataJson};
+  TimestampFields ts = timestamp();
+  String payload = buildPayload(lm, ts);
+  bool ok = true;
+  if (allowed) {
+    ok = client_->publish(topic_, payload.c_str());
+  }
+
+  if (!ts.hasLocal) {
+    emitMissingTsWarning(ts);
+  }
+
   if (isError) {
     errorCount_++;
   }
   return ok;
 }
 
-String Logger::buildPayload(const LogMessage& msg) const {
-  (void)msg.uptime;
+bool Logger::emitMissingTsWarning(const TimestampFields& ts) {
+  if (warnedMissingTs_ || warningActive_) return false;
+  if (!client_ || !topic_) return false;
+
+  warnedMissingTs_ = true;
+  warningActive_ = true;
+  String msg = "wall-clock time not available; ts omitted";
+  LogMessage lm{"WRN", &msg, nullptr};
+  String payload = buildPayload(lm, ts);
+  bool ok = client_->publish(topic_, payload.c_str());
+  warningActive_ = false;
+  return ok;
+}
+
+String Logger::buildPayload(const LogMessage& msg, const TimestampFields& ts) const {
   String payload = "{";
+  payload += "\"t\":";
+  payload += static_cast<long long>(ts.epoch);
+  if (ts.hasLocal) {
+    payload += ",\"ts\":\"";
+    payload += ts.ts;
+    payload += "\"";
+  }
+
   const String level = escapeJsonString(msg.level ? msg.level : "");
   const String message = msg.msg ? escapeJsonString(*(msg.msg)) : "";
-  payload += "\"lv\":\"";
+  payload += ",\"lv\":\"";
   payload += level;
   payload += "\",\"msg\":\"";
   payload += message;
   payload += "\"";
 
   if (includeData_ && msg.dataJson && msg.dataJson->length() > 0) {
-    payload += ",\"d\":";
-    payload += *(msg.dataJson);
+    const String dataEscaped = escapeJsonString(*(msg.dataJson));
+    payload += ",\"d\":\"";
+    payload += dataEscaped;
+    payload += "\"";
   }
 
   payload += "}";

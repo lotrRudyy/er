@@ -2,14 +2,11 @@
 
 #include <cstring>
 
-namespace {
-constexpr const char* kTopicMetric = "er1/room3/star_slider/metric";
-constexpr const char* kTopicEvent = "er1/room3/star_slider/event";
-}  // namespace
-
 void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   prefs_ = &ctx.prefs();
+  const char* node = ctx.nodeId() ? ctx.nodeId() : "star_slider";
+  topicDbg_ = Core::topic(node, "dbg");
 
   pinMode(kButtonPin, INPUT_PULLUP);
   btnPrevState_ = digitalRead(kButtonPin);
@@ -34,6 +31,7 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   } else {
     log("INF", "STATE default solved=0 (no prefs)");
   }
+  publishState();
 }
 
 void StarSliderRiddle::tick(uint32_t nowMs) {
@@ -134,6 +132,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
     }
     log("INF", "pattern SOLVED");
     publishSolvedEvent(solveAttempts_);
+    publishState();
   } else {
     String data = "{";
     for (uint8_t i = 0; i < kReaderCount; i++) {
@@ -180,11 +179,8 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
 
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
-  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"event\":\"SOLVED\",\"attempt\":" + String(attemptIdx) +
-                   "}";
-  ctx_->publish(kTopicEvent, payload);
+  String payload = String("{\"id\":\"star_slider\",\"attempt\":") + attemptIdx + "}";
+  ctx_->publishEvent("riddle_solved", payload);
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
@@ -199,5 +195,13 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"attempts\":" + String(solveAttempts_) +
                    ",\"success\":" + String(solveSuccess_) +
                    "}";
-  ctx_->publish(kTopicMetric, payload);
+  ctx_->publish(topicDbg_.c_str(), payload);
+}
+
+void StarSliderRiddle::publishState() {
+  if (!ctx_) return;
+  String data = String("{\"solved\":") + (solvedFlag_ ? "true" : "false") +
+                ",\"attempts\":" + solveAttempts_ +
+                ",\"success\":" + solveSuccess_ + "}";
+  ctx_->publishState(data, true);
 }

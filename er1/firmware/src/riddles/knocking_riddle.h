@@ -61,9 +61,9 @@ private:
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetSequence();
   void publishSolvedEvent();
+  void publishState();
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicEvent_;
   HardwareSerial* dfSerial_ = nullptr;
   DFRobotDFPlayerMini dfPlayer_;
   bool dfOk_ = false;
@@ -85,4 +85,5 @@ private:
   uint32_t lastSeqActivityMs_ = 0;
 
   uint32_t errorCount_ = 0;
+  bool solved_ = false;
 };

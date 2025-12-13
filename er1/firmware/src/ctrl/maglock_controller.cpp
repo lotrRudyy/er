@@ -4,9 +4,9 @@
 
 namespace {
 
-constexpr const char* kTopicMetric = "er1/room0/maglock_ctrl/metric";
-constexpr const char* kLockCmdPrefix = "er1/ctrl/lock/";
-constexpr const char* kLockStatePrefix = "er1/ctrl/lock/";
+constexpr const char* kTopicMetric = "maglock/dbg";
+constexpr const char* kLockCmdPrefix = "maglock/lock/";
+constexpr const char* kLockStatePrefix = "maglock/lock/";
 constexpr const char* kLockCmdSuffix = "/cmd";
 
 String makeLockStateTopic(const char* id) {
@@ -50,6 +50,7 @@ void MaglockController::begin(Core::NodeContext& ctx) {
 
   lastMetricMs_ = millis();
   applyHeartbeatInterval();
+  publishStateSnapshot();
 }
 
 void MaglockController::tick(uint32_t nowMs) {
@@ -96,11 +97,12 @@ void MaglockController::onGameModeMessage(const String& msg) {
                   "\",\"to\":\"" + modeName(gameMode_) + "\"}";
     log("INF", "gameMode changed", data);
     applyHeartbeatInterval();
+    publishStateSnapshot();
   }
 }
 
 void MaglockController::onKnockingEvent(const String& msg) {
-  if (msg.indexOf("SOLVED") < 0) return;
+  if (msg.indexOf("\"type\":\"riddle_solved\"") < 0 || msg.indexOf("\"id\":\"knocking\"") < 0) return;
   LockState* lk = findLockById("knocking");
   if (!lk) {
     log("ERR", "Knocking SOLVED event but lock 'knocking' not found");
@@ -166,6 +168,7 @@ void MaglockController::publishLockState(const LockState& lk, const char* reason
   payload += String(lk.pulseCount);
   payload += "}";
   ctx_->publish(topic.c_str(), payload);
+  publishStateSnapshot();
 }
 
 MaglockController::LockState* MaglockController::findLockById(const String& id) {
@@ -262,6 +265,33 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
   payload += "]}";
 
   ctx_->publish(kTopicMetric, payload);
+}
+
+void MaglockController::publishStateSnapshot() {
+  if (!ctx_) return;
+  auto modeName = [](GameMode m) -> const char* {
+    switch (m) {
+      case GameMode::InGame: return "INGAME";
+      case GameMode::Maint: return "MAINT";
+      case GameMode::Off:
+      default: return "OFF";
+    }
+  };
+  String data = String("{\"mode\":\"") + modeName(gameMode_) + "\",\"locks\":[";
+  for (size_t i = 0; i < kLockCount; i++) {
+    if (i > 0) data += ",";
+    data += "{\"id\":\"";
+    data += locks_[i].id;
+    data += "\",\"coil\":";
+    data += locks_[i].coilOn ? "1" : "0";
+    data += ",\"pulse\":";
+    data += locks_[i].pulsing ? "1" : "0";
+    data += ",\"cooldown\":";
+    data += locks_[i].cooldown ? "1" : "0";
+    data += "}";
+  }
+  data += "]}";
+  ctx_->publishState(data, true);
 }
 
 void MaglockController::handleLockCommand(LockState& lk, const String& cmd) {

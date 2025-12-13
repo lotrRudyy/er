@@ -38,10 +38,10 @@ private:
   bool anyTagPresent() const;
   void evaluatePattern();
   void publishSolvedEvent();
+  void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicEvent_;
   String topicMetric_;
   HardwareSerial* rfidSerial_ = &Serial2;
   String readerUid_[kReaderCount];

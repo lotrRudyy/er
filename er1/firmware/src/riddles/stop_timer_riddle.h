@@ -15,6 +15,7 @@ public:
   uint32_t errorCount() const { return errorCount_; }
 
 private:
+  void publishState(const char* status);
   void log(const char* level, const String& msg);
   void log(const char* level, const String& msg, const String& dataJson);
 

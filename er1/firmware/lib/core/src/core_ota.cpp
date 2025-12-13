@@ -29,6 +29,7 @@ bool OtaUpdater::perform() {
   bool connected = client.connect(cfg_.host, cfg_.port);
   while (!connected && (millis() - connStart) < kConnectTimeoutMs) {
     delay(10);
+    delay(0);
     connected = client.connect(cfg_.host, cfg_.port);
   }
   if (!connected) {
@@ -47,6 +48,7 @@ bool OtaUpdater::perform() {
   uint32_t headerStart = millis();
   while (!client.available() && (millis() - headerStart) < kHeaderTimeoutMs) {
     delay(10);
+    delay(0);
   }
 
   String statusLine = client.readStringUntil('\n');

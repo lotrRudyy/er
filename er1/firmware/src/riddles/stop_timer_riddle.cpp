@@ -12,6 +12,7 @@ void StopTimerRiddle::begin(Core::NodeContext& ctx) {
     msg += String(" fw=") + fw;
   }
   log("INF", msg);
+  publishState("idle");
 }
 
 void StopTimerRiddle::tick(uint32_t nowMs) {
@@ -30,6 +31,13 @@ bool StopTimerRiddle::shouldAllowLog(const char* level) {
     return true;
   }
   return true;
+}
+
+void StopTimerRiddle::publishState(const char* status) {
+  if (!ctx_) return;
+  const char* st = (status && status[0]) ? status : "idle";
+  String data = String("{\"status\":\"") + st + "\"}";
+  ctx_->publishState(data, true);
 }
 
 void StopTimerRiddle::log(const char* level, const String& msg) {

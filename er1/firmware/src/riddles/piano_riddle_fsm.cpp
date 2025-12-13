@@ -12,8 +12,6 @@ constexpr uint32_t kNoteDebounceMs = 140;
 constexpr float kMinConfidence = 0.3f;
 constexpr float kMinMagnitude = 1200.0f;
 constexpr size_t kTotalNotes = 88;
-constexpr const char* kTopicEvent = "er1/room1/images_piano/event";
-constexpr const char* kTopicLockR2Cmd = "er1/ctrl/lock/r2/cmd";
 
 const char* kSequenceNames[] = {
     "C4", "D4", "E4", "F4", "G4", "F4", "E4", "D4", "C4",
@@ -202,9 +200,16 @@ Detection analyzeWindow(const int16_t* samples, size_t sampleCount) {
 
 }  // namespace piano
 
-void PianoRiddleFSM::begin(Core::NodeContext& ctx) {
+void PianoRiddleFSM::begin(Core::NodeContext& ctx, const char* nodeId, Core::Logger* logger) {
   ctx_ = &ctx;
+  logger_ = logger;
   prefs_ = &ctx_->prefs();
+  nodeId_ = (nodeId && nodeId[0]) ? nodeId : (ctx.nodeId() ? ctx.nodeId() : "piano");
+  topicEvt_ = Core::topic(nodeId_.c_str(), "evt");
+  topicState_ = Core::topic(nodeId_.c_str(), "state");
+  topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");
+  topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
+
   sequence_ = piano::defaultSequence(&sequenceLen_);
   resetBuffer();
   analogReadResolution(12);
@@ -214,20 +219,21 @@ void PianoRiddleFSM::begin(Core::NodeContext& ctx) {
     solved_ = prefs_->getBool(kPrefsSolvedKey, false);
     solvedPublished_ = solved_;
     if (hasKey) {
-      ctx_->log("INF", String("STATE restore piano_solved=") + (solved_ ? "1" : "0"));
+      log("INF", String("STATE restore piano_solved=") + (solved_ ? "1" : "0"));
     } else {
-      ctx_->log("INF", "STATE default piano_solved=0");
+      log("INF", "STATE default piano_solved=0");
       prefs_->putBool(kPrefsSolvedKey, solved_);
     }
   } else {
-    ctx_->log("INF", "STATE default piano_solved=0 (no prefs)");
+    log("INF", "STATE default piano_solved=0 (no prefs)");
   }
 
   if (solved_) {
-    ctx_->log("INF", "PIANO_BOOT_SOLVED");
+    log("INF", "PIANO_BOOT_SOLVED");
   } else {
-    ctx_->log("INF", "PIANO_READY");
+    log("INF", "PIANO_READY");
   }
+  publishState();
 }
 
 void PianoRiddleFSM::tick(uint32_t nowMs) {
@@ -277,7 +283,7 @@ void PianoRiddleFSM::tick(uint32_t nowMs) {
     solved_ = true;
     if (prefs_) {
       prefs_->putBool(kPrefsSolvedKey, true);
-      ctx_->log("INF", "STATE save piano_solved=1");
+      log("INF", "STATE save piano_solved=1");
     }
     handleSolved();
   }
@@ -285,21 +291,24 @@ void PianoRiddleFSM::tick(uint32_t nowMs) {
 
 bool PianoRiddleFSM::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
-  if (equalsCmd(cmd, "PIANO_ENABLE")) {
+  if (equalsCmd(cmd, "PIANO_ENABLE") || equalsCmd(cmd, "ENABLE")) {
     setModuleEnabled(true);
+    publishState();
     return true;
   }
-  if (equalsCmd(cmd, "PIANO_DISABLE")) {
+  if (equalsCmd(cmd, "PIANO_DISABLE") || equalsCmd(cmd, "DISABLE")) {
     setModuleEnabled(false);
+    publishState();
     return true;
   }
-  if (equalsCmd(cmd, "PIANO_RESET")) {
+  if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET")) {
     clearSolvedState();
-    ctx_->log("INF", "PIANO_RESET");
+    log("INF", "PIANO_RESET");
+    publishState();
     return true;
   }
-  if (equalsCmd(cmd, "PIANO_SET_SEQ")) {
-    ctx_->log("WRN", "PIANO_SET_SEQ_TODO");
+  if (equalsCmd(cmd, "PIANO_SET_SEQ") || equalsCmd(cmd, "SET_SEQ")) {
+    log("WRN", "PIANO_SET_SEQ_TODO");
     return true;
   }
   return false;
@@ -338,25 +347,28 @@ bool PianoRiddleFSM::checkSequenceSolved() const {
 
 void PianoRiddleFSM::logNote(const piano::Detection& det) {
   if (!ctx_) return;
-  String data = String("{\"no\":\"") + safeName(det.noteIndex) +
-                "\",\"hz\":" + String(det.noteHz, 2) +
-                ",\"cf\":" + String(det.confidence, 3) +
-                ",\"mag\":" + String(det.magnitude, 1) +
-                ",\"i\":" + String(bufferLen_) +
-                "}";
-  ctx_->log("INF", "PIANO_NOTE", data);
+  const auto* table = piano::noteTable();
+  size_t tableCount = piano::noteCount();
+  const char* name = (det.noteIndex >= 0 && static_cast<size_t>(det.noteIndex) < tableCount)
+                         ? table[det.noteIndex].name
+                         : "UNK";
+  String data = String("{\"note\":\"") + name +
+                "\",\"hz\":" + det.noteHz +
+                ",\"conf\":" + det.confidence +
+                ",\"mag\":" + det.magnitude +
+                ",\"best\":true}";
+  log("INF", "PIANO_NOTE", data);
 }
 
 void PianoRiddleFSM::logBuffer(bool hit) const {
   if (!ctx_) return;
-  if (bufferLen_ == 0) return;
+  String bufStr;
   const auto* table = piano::noteTable();
   size_t tableCount = piano::noteCount();
-  String bufStr;
   for (size_t i = 0; i < bufferLen_; ++i) {
+    if (i > 0) bufStr += ",";
     size_t idx = (bufferHead_ + kBufferSize - bufferLen_ + i) % kBufferSize;
     int noteIdx = noteBuffer_[idx];
-    if (i > 0) bufStr += ",";
     if (noteIdx >= 0 && static_cast<size_t>(noteIdx) < tableCount) {
       bufStr += table[noteIdx].name;
     } else {
@@ -364,20 +376,21 @@ void PianoRiddleFSM::logBuffer(bool hit) const {
     }
   }
   String data = String("{\"buf\":\"") + bufStr + "\",\"hit\":" + (hit ? "1" : "0") + "}";
-  ctx_->log("DBG", "PIANO_BUF", data);
+  log("DBG", "PIANO_BUF", data);
 }
 
 void PianoRiddleFSM::handleSolved() {
   if (solvedPublished_) return;
   solvedPublished_ = true;
-  ctx_->log("INF", "PIANO_SOLVED");
+  log("INF", "PIANO_SOLVED");
   publishSolvedEvent();
   openLock();
+  publishState();
 }
 
 void PianoRiddleFSM::publishSolvedEvent() {
   if (!ctx_) return;
-  String payload = String("{\"type\":\"SOLVED\",\"rid\":\"piano\",\"seq\":\"");
+  String payload = String("{\"id\":\"piano\",\"seq\":\"");
   if (sequence_ && sequenceLen_ > 0) {
     for (size_t i = 0; i < sequenceLen_; ++i) {
       if (i > 0) payload += ",";
@@ -385,12 +398,19 @@ void PianoRiddleFSM::publishSolvedEvent() {
     }
   }
   payload += "\"}";
-  ctx_->publish(kTopicEvent, payload);
+  ctx_->publishEnvelope(topicEvt_.c_str(), "riddle_solved", 1, payload, nullptr, false);
+}
+
+void PianoRiddleFSM::publishState() {
+  if (!ctx_) return;
+  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
+                ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") + "}";
+  ctx_->publishEnvelope(topicState_.c_str(), "state", 1, data, nullptr, true);
 }
 
 void PianoRiddleFSM::openLock() const {
   if (!ctx_) return;
-  ctx_->publish(kTopicLockR2Cmd, "OPEN");
+  ctx_->publish(topicLockCmd_.c_str(), "OPEN");
 }
 
 bool PianoRiddleFSM::equalsCmd(const char* cmd, const char* ref) const {
@@ -400,7 +420,7 @@ bool PianoRiddleFSM::equalsCmd(const char* cmd, const char* ref) const {
 
 void PianoRiddleFSM::setModuleEnabled(bool en) {
   moduleEnabled_ = en;
-  ctx_->log("INF", en ? "PIANO_ENABLE" : "PIANO_DISABLE");
+  log("INF", en ? "PIANO_ENABLE" : "PIANO_DISABLE");
 }
 
 void PianoRiddleFSM::clearSolvedState() {
@@ -411,6 +431,24 @@ void PianoRiddleFSM::clearSolvedState() {
   lastAcceptedMs_ = 0;
   if (prefs_) {
     prefs_->putBool(kPrefsSolvedKey, false);
-    ctx_->log("INF", "STATE save piano_solved=0");
+    log("INF", "STATE save piano_solved=0");
+  }
+}
+
+void PianoRiddleFSM::log(const char* level, const String& msg) const {
+  if (!ctx_) return;
+  if (logger_) {
+    logger_->publish(level, msg);
+  } else {
+    ctx_->log(level, msg);
+  }
+}
+
+void PianoRiddleFSM::log(const char* level, const String& msg, const String& dataJson) const {
+  if (!ctx_) return;
+  if (logger_) {
+    logger_->publish(level, msg, dataJson);
+  } else {
+    ctx_->log(level, msg, dataJson);
   }
 }

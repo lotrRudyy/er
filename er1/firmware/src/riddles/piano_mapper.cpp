@@ -11,8 +11,9 @@ namespace {
 constexpr uint32_t kMapperWindowMs = 60;
 }
 
-void PianoMapper::begin(Core::NodeContext& ctx) {
+void PianoMapper::begin(Core::NodeContext& ctx, Core::Logger* logger) {
   ctx_ = &ctx;
+  logger_ = logger;
   resetAccum();
   currentIdx_ = 0;
 }
@@ -205,5 +206,9 @@ void PianoMapper::logStatus(const char* msg) const {
                 "\",\"n\":" + targetWindows_ +
                 ",\"active\":" + (active_ ? "1" : "0") +
                 "}";
-  ctx_->log("DBG", msg, data);
+  if (logger_) {
+    logger_->publish("DBG", msg, data);
+  } else {
+    ctx_->log("DBG", msg, data);
+  }
 }

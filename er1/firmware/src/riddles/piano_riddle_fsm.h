@@ -42,9 +42,10 @@ Detection analyzeWindow(const int16_t* samples, size_t sampleCount);
 
 class PianoRiddleFSM {
 public:
-  void begin(Core::NodeContext& ctx);
+  void begin(Core::NodeContext& ctx, const char* nodeId = nullptr, Core::Logger* logger = nullptr);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
+  void publishState();
 
 private:
   void resetBuffer();
@@ -58,9 +59,17 @@ private:
   bool equalsCmd(const char* cmd, const char* ref) const;
   void setModuleEnabled(bool en);
   void clearSolvedState();
+  void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
 
   Core::NodeContext* ctx_ = nullptr;
+  Core::Logger* logger_ = nullptr;
   Preferences* prefs_ = nullptr;
+  String nodeId_;
+  String topicEvt_;
+  String topicState_;
+  String topicDbg_;
+  String topicLockCmd_;
   bool moduleEnabled_ = true;
   bool solved_ = false;
   bool solvedPublished_ = false;
@@ -78,4 +87,3 @@ private:
   size_t sequenceLen_ = 0;
   const int* sequence_ = nullptr;
 };
-

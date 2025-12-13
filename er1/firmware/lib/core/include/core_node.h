@@ -77,6 +77,11 @@ public:
   bool publish(const char* topic, const String& payload, bool retained = false, int /*qos*/ = 0);
   bool publish(const char* topic, const char* payload, bool retained = false, int /*qos*/ = 0);
 
+  bool publishEvent(const char* type, const String& dataJson, uint32_t version = 1, const char* id = nullptr);
+  bool publishState(const String& dataJson, bool retained = true);
+  bool publishEnvelope(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                       const char* id = nullptr, bool retained = false);
+
   void log(const char* level, const String& msg);
   void log(const char* level, const String& msg, const String& dataJson);
 
@@ -85,6 +90,8 @@ public:
 
   uint32_t uptimeSeconds() const;
   uint32_t nowMs() const { return millis(); }
+  PubSubClient* mqttClient();
+  TimestampSource* timestampSource();
 
   const char* fwVersion() const;
   const char* buildId() const;
@@ -104,7 +111,7 @@ private:
 using CommandHandler = bool (*)(const char* cmd, const char* payload, void* userData);
 using SubscriptionHandler = void (*)(NodeContext& ctx, const char* topic, const String& payload, void* userData);
 
-class NodeCore : public MqttDelegate {
+class NodeCore : public MqttDelegate, public TimestampSource {
 public:
   friend class NodeContext;
 
@@ -137,6 +144,9 @@ public:
   void onMqttConnected() override;
   void onMqttMessage(const char* topic, const uint8_t* payload, size_t length) override;
 
+  // TimestampSource override
+  TimestampFields currentTimestamp() override;
+
 private:
   void handleCommandMessage(const String& raw);
   bool handleCoreCommand(const char* cmd, const char* arg);
@@ -147,6 +157,9 @@ private:
   void forceRestart();
   void restoreEnabledState();
   void persistEnabledState(const char* reason);
+  bool publishEnvelope(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                       const char* id, bool retained);
+  void maybeWarnMissingTs();
 
   NodeCoreConfig cfg_{};
   HeartbeatConfig hbCfg_{};
@@ -179,6 +192,8 @@ private:
   char payloadBuf_[kPayloadBufSize];
 
   NodeContext ctx_;
+  bool missingTsWarned_ = false;
+  bool missingTsWarningActive_ = false;
 };
 
 TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg = {});

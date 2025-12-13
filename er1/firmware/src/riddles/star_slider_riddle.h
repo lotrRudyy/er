@@ -38,6 +38,7 @@ private:
   void evaluateSolveAttempt();
   void handleButton(uint32_t nowMs);
   void publishSolvedEvent(uint32_t attemptIdx);
+  void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
   Core::NodeContext* ctx_ = nullptr;
@@ -60,4 +61,5 @@ private:
   uint32_t lastPollMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
+  String topicDbg_;
 };

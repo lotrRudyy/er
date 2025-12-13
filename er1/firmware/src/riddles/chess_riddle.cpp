@@ -3,13 +3,13 @@
 void ChessRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "chess";
-  topicEvent_ = Core::topic(node, "evt");
   topicMetric_ = Core::topic(node, "dbg");
   rfidSerial_->begin(115200, SERIAL_8N1, kUartRxPin, kUartTxPin);
   for (int i = 0; i < kReaderCount; i++) {
     readerUid_[i] = "NONE";
   }
   lastMetricMs_ = millis();
+  publishState();
 }
 
 void ChessRiddle::tick(uint32_t nowMs) {
@@ -100,6 +100,7 @@ void ChessRiddle::evaluatePattern() {
   bool correct = patternCorrect();
   bool anyPresent = anyTagPresent();
 
+  RiddleState prevState = riddleState_;
   switch (riddleState_) {
     case RiddleState::Idle:
       if (correct) {
@@ -129,12 +130,31 @@ void ChessRiddle::evaluatePattern() {
       }
       break;
   }
+
+  if (prevState != riddleState_) {
+    publishState();
+  }
 }
 
 void ChessRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-  String payload = "{\"type\":\"SOLVED\",\"rid\":\"chess\"}";
-  ctx_->publish(topicEvent_.c_str(), payload);
+  String payload = "{\"id\":\"chess\"}";
+  ctx_->publishEvent("riddle_solved", payload);
+  publishState();
+}
+
+void ChessRiddle::publishState() {
+  if (!ctx_) return;
+  const char* stateName = "idle";
+  switch (riddleState_) {
+    case RiddleState::Partial: stateName = "partial"; break;
+    case RiddleState::Solved: stateName = "solved"; break;
+    case RiddleState::Idle:
+    default: stateName = "idle"; break;
+  }
+  String data = String("{\"state\":\"") + stateName + "\",\"solved_count\":" + solvedCount_ +
+                ",\"enabled\":" + (ctx_->enabled() ? "true" : "false") + "}";
+  ctx_->publishState(data, true);
 }
 
 void ChessRiddle::publishMetricsIfDue(uint32_t nowMs) {

@@ -12,8 +12,12 @@ String prefixedMessage(const char* prefix, const String& msg) {
 
 }  // namespace
 
-void ImagesRiddle::begin(Core::NodeContext& ctx) {
+void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   ctx_ = &ctx;
+  nodeId_ = (nodeId && nodeId[0]) ? nodeId : (ctx.nodeId() ? ctx.nodeId() : "images");
+  topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");
+  topicLockImagesCmd_ = Core::topic("maglock", "lock/images/cmd");
+
   for (int i = 0; i < kButtonCount; i++) {
     buttons_[i].pin = kButtonPins[i];
     buttons_[i].presses = 0;
@@ -28,6 +32,7 @@ void ImagesRiddle::begin(Core::NodeContext& ctx) {
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
+  publishState();
 }
 
 void ImagesRiddle::tick(uint32_t nowMs) {
@@ -51,12 +56,14 @@ void ImagesRiddle::tick(uint32_t nowMs) {
   if (solved_) return;
 
   handleAllDownHold(nowMs);
+  publishMetricsIfDue();
 }
 
 bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
   if (strcasecmp(cmd, "RESET_IMAGES") == 0) {
     resetState("reset_images");
+    publishState();
     return true;
   }
   return false;
@@ -128,6 +135,7 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
   publishSolvedEvent("images");
   openImagesMaglock();
+  publishState();
 }
 
 void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
@@ -157,7 +165,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       ",\"state\":" + (b.cur ? 1 : 0) +
                       ",\"presses\":" + b.presses +
                       "}";
-  ctx_->publish(kTopicMetric, payloadBtn);
+  ctx_->publish(topicDbg_.c_str(), payloadBtn);
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
@@ -171,7 +179,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->publish(kTopicMetric, payloadAll);
+  ctx_->publish(topicDbg_.c_str(), payloadAll);
 }
 
 void ImagesRiddle::publishMetricsIfDue() {
@@ -190,7 +198,7 @@ void ImagesRiddle::publishMetricsIfDue() {
                      ",\"state\":" + (b.cur ? 1 : 0) +
                      ",\"presses\":" + b.presses +
                      "}";
-    ctx_->publish(kTopicMetric, payload);
+    ctx_->publish(topicDbg_.c_str(), payload);
   }
 
   bool allPressedNow = true;
@@ -205,18 +213,26 @@ void ImagesRiddle::publishMetricsIfDue() {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->publish(kTopicMetric, payloadAll);
+  ctx_->publish(topicDbg_.c_str(), payloadAll);
 }
 
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
-  String payload = String("{\"type\":\"SOLVED\",\"rid\":\"") + rid + "\"}";
-  ctx_->publish(kTopicEvent, payload);
+  solved_ = true;
+  String data = String("{\"id\":\"") + rid + "\"}";
+  ctx_->publishEvent("riddle_solved", data);
+  publishState();
   log("INF", String("SOLVED event sent for rid=") + rid);
 }
 
 void ImagesRiddle::openImagesMaglock() {
-  ctx_->publish(kTopicLockImagesCmd, "OPEN");
+  ctx_->publish(topicLockImagesCmd_.c_str(), "OPEN");
   log("INF", "Sent OPEN to images maglock");
+}
+
+void ImagesRiddle::publishState() {
+  if (!ctx_) return;
+  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
+  ctx_->publishState(data, true);
 }
 
 void ImagesRiddle::log(const char* level, const String& msg) {

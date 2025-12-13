@@ -2,8 +2,6 @@
 
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-  const char* node = ctx.nodeId() ? ctx.nodeId() : "knocking";
-  topicEvent_ = Core::topic(node, "evt");
   dfSerial_ = &Serial2;
   dfSerial_->begin(9600, SERIAL_8N1, 16, 17);
 
@@ -36,6 +34,9 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   soundPlaying_ = false;
   lastSoundStartMs_ = 0;
   currentTrack_ = 0;
+
+  solved_ = false;
+  publishState();
 }
 
 void KnockingRiddle::tick(uint32_t nowMs) {
@@ -280,6 +281,14 @@ void KnockingRiddle::resetSequence() {
 
 void KnockingRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-  String payload = "{\"event\":\"SOLVED\",\"rid\":\"knocking\"}";
-  ctx_->publish(topicEvent_.c_str(), payload);
+  solved_ = true;
+  String data = "{\"id\":\"knocking\"}";
+  ctx_->publishEvent("riddle_solved", data);
+  publishState();
+}
+
+void KnockingRiddle::publishState() {
+  if (!ctx_) return;
+  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
+  ctx_->publishState(data, true);
 }

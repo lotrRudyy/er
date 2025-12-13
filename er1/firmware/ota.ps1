@@ -1,9 +1,8 @@
 param(
-    [ValidateSet("maglock_ctrl","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
+    [ValidateSet("maglock","images","chess","knocking","candles","star_sky","star_slider","stop_timer")]
     [string]$Target,
     [string]$Env,
     [string]$Dev,
-    [string]$Room,
     [switch]$NoBuild
 )
 
@@ -13,19 +12,19 @@ try {
 
 # ============ DEVICE MAP ============
 # Valid -Target values:
-#   maglock_ctrl, images_piano, chess, knocking, candles, star_sky, star_slider, stop_timer
+#   maglock, images, chess, knocking, candles, star_sky, star_slider, stop_timer
 $deviceMap = @{
-    "maglock_ctrl" = @{ Env = "room0_maglock_ctrl"; Dev = "maglock_ctrl";   Room = "room0"  }
-    "images_piano" = @{ Env = "room1_images_piano"; Dev = "images_piano";   Room = "room1" }
-    "chess"        = @{ Env = "room2_chess";        Dev = "chess";          Room = "room2" }
-    "knocking"     = @{ Env = "room3_knocking";     Dev = "knocking";       Room = "room3" }
-    "candles"      = @{ Env = "room3_candles";      Dev = "candles";        Room = "room3" }
-    "star_sky"     = @{ Env = "room3_star_sky";     Dev = "star_sky";       Room = "room3" }
-    "star_slider"  = @{ Env = "room3_star_slider";  Dev = "star_slider";    Room = "room3" }
-    "stop_timer"   = @{ Env = "room3_stop_timer";   Dev = "stop_timer";     Room = "room3" }
+    "maglock"     = @{ Env = "maglock";       Dev = "maglock"      }
+    "images"      = @{ Env = "images_piano";  Dev = "images"       }
+    "chess"       = @{ Env = "chess";         Dev = "chess"        }
+    "knocking"    = @{ Env = "knocking";      Dev = "knocking"     }
+    "candles"     = @{ Env = "candles";       Dev = "candles"      }
+    "star_sky"    = @{ Env = "star_sky";      Dev = "star_sky"     }
+    "star_slider" = @{ Env = "star_slider";   Dev = "star_slider"  }
+    "stop_timer"  = @{ Env = "stop_timer";    Dev = "stop_timer"   }
 }
 
-# ============ Resolve Env/Dev/Room ============
+# ============ Resolve Env/Dev ============
 if ($Target) {
     if (-not $deviceMap.ContainsKey($Target)) {
         Write-Error "Unknown Target '$Target'. Valid: $($deviceMap.Keys -join ', ')"
@@ -36,15 +35,14 @@ if ($Target) {
 
     if (-not $Env)  { $Env  = $cfg.Env }
     if (-not $Dev)  { $Dev  = $cfg.Dev }
-    if (-not $Room) { $Room = $cfg.Room }
 }
 
-if (-not $Env -or -not $Dev -or -not $Room) {
-    Write-Error "You must either: -Target <name> OR provide -Env/-Dev/-Room manually."
+if (-not $Env -or -not $Dev) {
+    Write-Error "You must either: -Target <name> OR provide -Env/-Dev manually."
     exit 1
 }
 
-Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev  Room=$Room =="
+Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev =="
 
 # ============ Locate platformio.exe ============
 $possiblePaths = @(
@@ -85,11 +83,11 @@ if (-not (Test-Path $firmwarePath)) {
 
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
-$piHost        = "100.108.1.80"    # Tailscale IP of er1-pi
+$piHost        = "100.108.1.80"    # Tailscale IP of Pi
 $piFirmwareDir = "/home/rudyy/firmware"
 
-# Topic form: er1/<room>/<dev>/cmd
-$topicUpdate = "er1/$Room/$Dev/cmd"
+# Topic form: <node>/cmd
+$topicUpdate = "$Dev/cmd"
 
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $Dev.bin =="

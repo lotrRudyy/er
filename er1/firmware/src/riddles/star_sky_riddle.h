@@ -32,15 +32,16 @@ private:
   void setStripRaw(int idx, uint8_t duty);
   void setAllStripsOff();
   void publishMetricsIfDue(uint32_t nowMs);
+  void publishState();
   void persistState();
   void loadState();
 
   Core::NodeContext* ctx_ = nullptr;
   Preferences prefs_;
+  String topicDbg_;
 
   bool candlesSolved_ = false;
   uint32_t cycleStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
 };
-

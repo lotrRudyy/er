@@ -6,7 +6,7 @@
 
 class ImagesRiddle {
 public:
-  void begin(Core::NodeContext& ctx);
+  void begin(Core::NodeContext& ctx, const char* nodeId = nullptr);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
 
@@ -28,11 +28,15 @@ private:
   void publishButtonMetricsOnChange(int idx);
   void publishMetricsIfDue();
   void publishSolvedEvent(const char* rid);
+  void publishState();
   void openImagesMaglock();
   void log(const char* level, const String& msg);
   void log(const char* level, const String& msg, const String& dataJson);
 
   Core::NodeContext* ctx_ = nullptr;
+  String topicDbg_;
+  String topicLockImagesCmd_;
+  String nodeId_;
 
   static constexpr int kButtonCount = 4;
   static constexpr int kButtonPins[kButtonCount] = {25, 26, 14, 12};
@@ -40,10 +44,6 @@ private:
   static constexpr uint32_t kEdgeMinLogMs = 100;
   static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kAllDownHoldMs = 200;
-
-  static constexpr const char* kTopicMetric = "er1/room1/images_piano/metric";
-  static constexpr const char* kTopicEvent = "er1/room1/images_piano/event";
-  static constexpr const char* kTopicLockImagesCmd = "er1/ctrl/lock/images/cmd";
 
   ButtonState buttons_[kButtonCount];
   bool solved_ = false;
