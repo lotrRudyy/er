@@ -22,11 +22,16 @@ write_stream() {
   local echo_output="$1"
   ensure_log_dir
 
+  local subs=(-t "+/log" -t "+/hb" -t "+/evt" -t "+/state")
+  if [[ "${INCLUDE_DBG:-0}" == "1" ]]; then
+    subs+=(-t "+/dbg")
+  fi
+
   local current_date file today stamped
   current_date=$(date +%d.%m.%Y)
   file="$(log_file_for_date "$current_date")"
 
-  mosquitto_sub -h "$BROKER" -t 'er1/#' -v | while IFS= read -r line; do
+  mosquitto_sub -h "$BROKER" "${subs[@]}" -v | while IFS= read -r line; do
     today=$(date +%d.%m.%Y)
     if [[ "$today" != "$current_date" ]]; then
       current_date="$today"
@@ -70,7 +75,8 @@ print_help() {
 Usage: scripts/mqtt_logs.sh <command> [args]
 
 Commands:
-  daemon          Run er1/# capture to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
+  daemon          Capture +/log,+/hb,+/evt,+/state to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
+                  Set INCLUDE_DBG=1 to also subscribe to +/dbg.
   live            Same as daemon but also echoes to stdout.
   tail            tail -f today's logfile.
   grep <pattern>  Search today's logfile for <pattern>.

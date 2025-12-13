@@ -15,7 +15,7 @@ try {
 #   maglock, images, chess, knocking, candles, star_sky, star_slider, stop_timer
 $deviceMap = @{
     "maglock"     = @{ Env = "maglock";       Dev = "maglock"      }
-    "images"      = @{ Env = "images_piano";  Dev = "images"       }
+    "images"      = @{ Env = "images";  Dev = "images"       }
     "chess"       = @{ Env = "chess";         Dev = "chess"        }
     "knocking"    = @{ Env = "knocking";      Dev = "knocking"     }
     "candles"     = @{ Env = "candles";       Dev = "candles"      }

@@ -1,5 +1,5 @@
 [Unit]
-Description=ER1 MQTT logger (er1/# -> /home/rudyy/er1/logs/er1-DD.MM.YYYY.log)
+Description=ER1 MQTT logger (+/log|hb|evt|state -> /home/rudyy/er1/logs/er1-DD.MM.YYYY.log)
 After=network-online.target
 Wants=network-online.target
 

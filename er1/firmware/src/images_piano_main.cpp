@@ -12,8 +12,8 @@ using namespace Core;
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.15";
-static const char* FW_DESC = "images+piano split nodes";
+static const char* FW_VERSION = "1.16";
+static const char* FW_DESC = "images+piano split nodes (roomless)";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -27,7 +27,7 @@ static constexpr uint16_t MQTT_PORT = 1883;
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/images_piano.bin";
+static const char* OTA_PATH = "/firmware/images.bin";
 
 // ======================= MODULES =============================
 static NodeCore nodeCore;
@@ -130,7 +130,7 @@ void setup() {
   cfg.net.subnet = NET_SUBNET;
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
-  cfg.net.clientId = "images_piano";
+  cfg.net.clientId = NODE_IMAGES;
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;

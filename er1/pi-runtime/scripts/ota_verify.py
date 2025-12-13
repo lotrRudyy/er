@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 OTA verification watcher.
 
-Subscribes to er1/+/+/cmd and er1/+/+/hb to track UPDATE commands.
+Subscribes to +/cmd and +/hb to track UPDATE commands.
 Emits OTA_RESULT lines once success/failure is determined.
 
 Dependencies:
@@ -39,20 +39,10 @@ class DeviceState:
 
 
 class Attempt:
-    __slots__ = (
-        "room",
-        "dev",
-        "old_fw",
-        "last_fw",
-        "start",
-        "deadline",
-        "saw_offline",
-        "saw_return",
-    )
+    __slots__ = ("node", "old_fw", "last_fw", "start", "deadline", "saw_offline", "saw_return")
 
-    def __init__(self, room: str, dev: str, old_fw: str) -> None:
-        self.room = room
-        self.dev = dev
+    def __init__(self, node: str, old_fw: str) -> None:
+        self.node = node
         self.old_fw = old_fw or "?"
         self.last_fw = self.old_fw
         self.start = time.time()
@@ -77,12 +67,12 @@ def log_line(msg: str) -> None:
     print(line, flush=True)
 
 
-def key_for(room: str, dev: str) -> str:
-    return f"{room}/{dev}"
+def key_for(node: str) -> str:
+    return node
 
 
-def ensure_state(room: str, dev: str) -> DeviceState:
-    key = key_for(room, dev)
+def ensure_state(node: str) -> DeviceState:
+    key = key_for(node)
     state = devices.get(key)
     if state is None:
         state = DeviceState()
@@ -97,49 +87,46 @@ def complete_attempt(key: str, success: bool, *, reason: str | None = None, new_
     if success:
         final_fw = new_fw or attempt.last_fw or attempt.old_fw
         log_line(
-            f"OTA_RESULT dev={attempt.dev} room={attempt.room} result=OK "
+            f"OTA_RESULT dev={attempt.node} result=OK "
             f"old_fw={attempt.old_fw} new_fw={final_fw}"
         )
     else:
         why = reason or "timeout"
         last_fw = attempt.last_fw or attempt.old_fw
         log_line(
-            f"OTA_RESULT dev={attempt.dev} room={attempt.room} result=FAIL "
+            f"OTA_RESULT dev={attempt.node} result=FAIL "
             f"reason={why} old_fw={attempt.old_fw} last_fw={last_fw}"
         )
 
 
-def start_attempt(room: str, dev: str) -> None:
-    key = key_for(room, dev)
+def start_attempt(node: str) -> None:
+    key = key_for(node)
     prior = attempts.get(key)
     if prior is not None:
         complete_attempt(key, False, reason="timeout")
 
-    state = ensure_state(room, dev)
-    attempts[key] = Attempt(room, dev, state.fw)
+    state = ensure_state(node)
+    attempts[key] = Attempt(node, state.fw)
 
 
-def parse_topic(topic: str) -> tuple[str, str, str] | None:
+def parse_topic(topic: str) -> tuple[str, str] | None:
     parts = topic.split("/")
-    if len(parts) != 4:
+    if len(parts) != 2:
         log_malformed("topic_parts", topic)
         return None
-    root, room, dev, suffix = parts
-    if root != "er1":
-        log_malformed("topic_root", topic)
-        return None
+    node, suffix = parts
     if suffix not in ("cmd", "hb"):
         log_malformed("topic_suffix", topic)
         return None
-    return room, dev, suffix
+    return node, suffix
 
 
-def handle_cmd(room: str, dev: str, payload: str) -> None:
+def handle_cmd(node: str, payload: str) -> None:
     cmd = payload.strip()
     if not cmd:
         return
     if cmd.upper().startswith("UPDATE"):
-        start_attempt(room, dev)
+        start_attempt(node)
 
 
 def detect_offline_via_uptime(prev: int | None, current: int | None) -> bool:
@@ -149,9 +136,9 @@ def detect_offline_via_uptime(prev: int | None, current: int | None) -> bool:
     return current + 5 < prev
 
 
-def handle_offline(room: str, dev: str) -> None:
-    key = key_for(room, dev)
-    state = ensure_state(room, dev)
+def handle_offline(node: str) -> None:
+    key = key_for(node)
+    state = ensure_state(node)
     state.online = False
     state.uptime = None
     state.last_seen = time.time()
@@ -171,22 +158,22 @@ def parse_uptime(data: dict) -> int | None:
     return None
 
 
-def handle_hb(room: str, dev: str, payload: str) -> None:
+def handle_hb(node: str, payload: str) -> None:
     text = payload.strip()
     if not text:
         return
     if text.lower() == "offline":
-        handle_offline(room, dev)
+        handle_offline(node)
         return
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        log_malformed("hb_json", f"er1/{room}/{dev}/hb", text)
+        log_malformed("hb_json", f"{node}/hb", text)
         return
 
-    key = key_for(room, dev)
-    state = ensure_state(room, dev)
+    key = key_for(node)
+    state = ensure_state(node)
     prev_uptime = state.uptime
 
     fw = data.get("fw") or data.get("firmware")
@@ -217,20 +204,20 @@ def on_connect(client, _userdata, _flags, rc: int) -> None:
     if rc != 0:
         print(f"[ota-verify] MQTT connect failed rc={rc}", file=sys.stderr, flush=True)
         return
-    client.subscribe("er1/+/+/cmd")
-    client.subscribe("er1/+/+/hb")
+    client.subscribe("+/cmd")
+    client.subscribe("+/hb")
 
 
 def on_message(_client, _userdata, msg) -> None:
     parsed = parse_topic(msg.topic)
     if not parsed:
         return
-    room, dev, suffix = parsed
+    node, suffix = parsed
     payload = msg.payload.decode("utf-8", errors="ignore")
     if suffix == "cmd":
-        handle_cmd(room, dev, payload)
+        handle_cmd(node, payload)
     elif suffix == "hb":
-        handle_hb(room, dev, payload)
+        handle_hb(node, payload)
 
 
 def check_timeouts() -> None:
@@ -278,11 +265,11 @@ def self_test() -> int:
     global _suppress_malformed
     _suppress_malformed = True
     cases = [
-        ("er1/room3/dev/cmd", ("room3", "dev", "cmd")),
-        ("er1/room1/images_piano/hb", ("room1", "images_piano", "hb")),
-        ("esc/room2/chess/cmd", None),
-        ("er1/room3/stop_timer/ota", None),
-        ("er1/room3", None),
+        ("stop_timer/cmd", ("stop_timer", "cmd")),
+        ("stop_timer/hb", ("stop_timer", "hb")),
+        ("maglock/hb", ("maglock", "hb")),
+        ("stop_timer/ota", None),
+        ("stop_timer", None),
     ]
     failures = 0
     for topic, expected in cases:
