@@ -19,6 +19,9 @@ else {
     return
 }
 
+# Canonical repo root variable for helper functions
+$script:ER1_REPO = $erRepoRoot
+
 # ---- Common lists ----
 $er1Devices = @(
     "maglock_ctrl",
@@ -33,7 +36,7 @@ $er1Devices = @(
 
 $er1Commands = @{
     "help"         = "Show this help"
-    "log"          = "Show today’s logfile (tail, filter by device, live/errors)"
+    "log"          = "Show today's logfile (tail, filter by device, live/errors) OR MQTT stream with -mqtt"
     "logs"         = "Raw passthrough to 'er1 logs' on the Pi"
     "ota"          = "Upload firmware to a device via ota.ps1"
     "deploy"       = "Deploy ER1 Pi runtime from this repo"
@@ -42,8 +45,241 @@ $er1Commands = @{
     "syslog"       = "Show ER1 Pi syslog (journalctl wrapper)"
     "mqtt-status"  = "Show MQTT runtime status"
     "mqtt-restart" = "Restart MQTT runtime"
-    "commit"       = "Git add/commit/push from the ER repo root"
+    "push"         = "Stage, commit, and push from the ER repo root"
+    "commit"       = "Legacy alias for 'er1 push'"
     "pi"           = "SSH into the ER1 Pi"
+}
+
+<#
+Next candidates for consolidation:
+- er1 status        (repo + service health in one go)
+- er1 doctor        (Pi + MQTT diagnostics bundle)
+- er1 mqtt          (combined status/log/restart helper)
+- er1 nodered       (runtime restart + log tail)
+- er1 backup        (Pi runtime backup pull)
+- er1 update-fw     (batch OTA helper)
+#>
+
+function Invoke-Er1Sync {
+    param(
+        [string]$Source,
+        [string]$Dest,
+        [string[]]$ExtraArgs,
+        [string]$Prefix = "[er1 deploy]"
+    )
+
+    $rsyncCmd = Get-Command rsync -ErrorAction SilentlyContinue
+
+    if ($rsyncCmd) {
+        $args = @("-avz", "--delete") + ($ExtraArgs | Where-Object { $_ }) + @($Source, $Dest)
+        Write-Host "$Prefix rsync $($args -join ' ')"
+        & rsync @args
+        if ($LASTEXITCODE -ne 0) {
+            throw "rsync failed with exit code $LASTEXITCODE"
+        }
+    }
+    else {
+        Write-Host "$Prefix rsync not found, falling back to scp -r" -ForegroundColor Yellow
+        Write-Host "$Prefix scp -r `"$Source`" `"$Dest`""
+        & scp -r "$Source" "$Dest"
+        if ($LASTEXITCODE -ne 0) {
+            throw "scp failed with exit code $LASTEXITCODE"
+        }
+    }
+}
+
+function Invoke-Er1Deploy {
+    param(
+        [ValidateSet("runtime", "full")]
+        [string]$Mode = "runtime"
+    )
+
+    $prefix       = "[er1 deploy]"
+    $remoteRoot   = Split-Path -Parent $er1Cmd
+    $envRoot      = Join-Path $erRepoRoot "er1"
+    $runtimeRoot  = Join-Path $envRoot "pi-runtime"
+
+    if (-not (Test-Path $runtimeRoot)) {
+        Write-Error "$prefix Pi runtime folder not found: $runtimeRoot"
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    Write-Host "$prefix Target Pi:   $er1Pi"
+    Write-Host "$prefix Remote root: $remoteRoot"
+    Write-Host "$prefix Mode:        $Mode"
+    Write-Host "$prefix Local root:  $runtimeRoot"
+
+    try {
+        ssh $er1Pi "mkdir -p '$remoteRoot'"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to ensure remote path (exit $LASTEXITCODE)."
+        }
+
+        if ($Mode -eq "full") {
+            Invoke-Er1Sync -Source ("{0}/" -f $runtimeRoot) `
+                           -Dest ("{0}:{1}/" -f $er1Pi, $remoteRoot) `
+                           -ExtraArgs @(
+                               "--exclude=.pio",
+                               "--exclude=.sconsign*",
+                               "--exclude=.vscode"
+                           ) `
+                           -Prefix $prefix
+        }
+        else {
+            $cliWrapper = Join-Path $envRoot "er1"
+            if (Test-Path $cliWrapper) {
+                Invoke-Er1Sync -Source $cliWrapper `
+                               -Dest ("{0}:{1}/" -f $er1Pi, $remoteRoot) `
+                               -ExtraArgs @() `
+                               -Prefix $prefix
+            }
+
+            $runtimeItems = @(
+                @{ Path = (Join-Path $runtimeRoot "scripts"); Remote = "/scripts/"; Extra = @() },
+                @{ Path = (Join-Path $runtimeRoot "config");  Remote = "/config/";  Extra = @("--exclude=local.env") },
+                @{ Path = (Join-Path $runtimeRoot "systemd"); Remote = "/systemd/"; Extra = @() },
+                @{ Path = (Join-Path $runtimeRoot "docs");    Remote = "/docs/";    Extra = @() }
+            )
+
+            foreach ($item in $runtimeItems) {
+                if (Test-Path $item.Path) {
+                    Invoke-Er1Sync -Source $item.Path `
+                                   -Dest ("{0}:{1}{2}" -f $er1Pi, $remoteRoot, $item.Remote) `
+                                   -ExtraArgs $item.Extra `
+                                   -Prefix $prefix
+                }
+            }
+        }
+
+        ssh $er1Pi @"
+set -e
+cd '$remoteRoot'
+chmod +x ./er1 2>/dev/null || true
+if [ -d scripts ]; then
+  chmod +x scripts/*.sh 2>/dev/null || true
+  chmod +x scripts/ota 2>/dev/null || true
+fi
+"@
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to refresh remote permissions (exit $LASTEXITCODE)."
+        }
+
+        Write-Host "$prefix Deploy complete." -ForegroundColor Green
+        Write-Host "$prefix Next: review, commit, then 'er1 push'." -ForegroundColor Yellow
+        $global:LASTEXITCODE = 0
+    }
+    catch {
+        Write-Error "$prefix $($_.Exception.Message)"
+        $global:LASTEXITCODE = 1
+    }
+}
+
+function Invoke-Er1Push {
+    param(
+        [string]$Message,
+        [string]$Tag = "push"
+    )
+
+    $prefix       = "[er1 $Tag]"
+    $messageToUse = if ([string]::IsNullOrWhiteSpace($Message)) { "update" } else { $Message }
+
+    Push-Location $erRepoRoot
+    try {
+        $isRepo = git rev-parse --is-inside-work-tree 2>$null
+        if ($LASTEXITCODE -ne 0 -or $isRepo.Trim().ToLower() -ne "true") {
+            Write-Error "$prefix Repo root '$erRepoRoot' is not a git repository."
+            $global:LASTEXITCODE = 1
+            return
+        }
+
+        $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "$prefix Unable to resolve current branch."
+            $global:LASTEXITCODE = $LASTEXITCODE
+            return
+        }
+
+        $remotes = git remote
+        $originExists = $false
+        foreach ($remote in $remotes) {
+            if ($remote.Trim() -eq "origin") {
+                $originExists = $true
+                break
+            }
+        }
+
+        $upstreamName = git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>$null
+        $hasUpstream = ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($upstreamName))
+        if (-not $hasUpstream) {
+            $global:LASTEXITCODE = 0
+        }
+
+        Write-Host "$prefix Branch: $branch"
+        if ($hasUpstream) {
+            Write-Host "$prefix Upstream: $($upstreamName.Trim())"
+        }
+        else {
+            Write-Host "$prefix Upstream: (not set)" -ForegroundColor Yellow
+            if ($originExists) {
+                $targetUpstream = "origin/$branch"
+                Write-Host "$prefix Setting upstream -> $targetUpstream"
+                git branch --set-upstream-to=$targetUpstream | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "$prefix Failed to set upstream."
+                    $global:LASTEXITCODE = $LASTEXITCODE
+                    return
+                }
+                $hasUpstream = $true
+                $upstreamName = $targetUpstream
+            }
+            else {
+                Write-Host "$prefix No 'origin' remote configured. Set it with:" -ForegroundColor Yellow
+                Write-Host "       git remote add origin https://github.com/<you>/er.git"
+                Write-Host "       git push -u origin $branch"
+            }
+        }
+
+        git add .
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "$prefix git add failed."
+            $global:LASTEXITCODE = $LASTEXITCODE
+            return
+        }
+
+        $changes = git status --porcelain
+        if (-not $changes) {
+            Write-Host "$prefix No changes to commit." -ForegroundColor Yellow
+            $global:LASTEXITCODE = 0
+            return
+        }
+
+        git commit -m $messageToUse
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "$prefix git commit failed."
+            $global:LASTEXITCODE = $LASTEXITCODE
+            return
+        }
+
+        if (-not $originExists -and -not $hasUpstream) {
+            Write-Host "$prefix Changes committed locally; configure 'origin' before pushing." -ForegroundColor Yellow
+            $global:LASTEXITCODE = 0
+            return
+        }
+
+        git push
+        $pushExit = $LASTEXITCODE
+        if ($pushExit -ne 0) {
+            Write-Error "$prefix git push failed with exit code $pushExit."
+        }
+        else {
+            Write-Host "$prefix Push complete." -ForegroundColor Green
+        }
+        $global:LASTEXITCODE = $pushExit
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 # Helper to expand special log aliases into regex fragments
@@ -53,8 +289,57 @@ function Expand-Er1LogPattern {
     switch ($pattern) {
         # All maglock controller + knocking lock topics in one go
         "maglock" { return "room0/maglock_ctrl|ctrl/lock/knocking" }
-
         default   { return $pattern }
+    }
+}
+
+# MQTT stream helper (LOCAL mosquitto_sub -> timestamp -> logs/ file)
+function Invoke-Er1MqttStream {
+    param(
+        [Parameter(Mandatory=$true)][string]$dev,
+        [ValidateSet("log","hb","metric","cmd","event","#")]
+        [string]$stream = "log",
+        [string]$filter = ""
+    )
+
+    $root = $script:ER1_REPO
+    if (-not $root) { throw "ER1_REPO not set in er1_profile.ps1" }
+
+    $logs = Join-Path $root "logs"
+    New-Item -ItemType Directory -Force -Path $logs | Out-Null
+
+    $topicRoot = switch ($dev) {
+        "maglock_ctrl" { "esc/room0/maglock_ctrl" }
+        "#"            { "esc" }
+        "*"            { "esc" }
+        default        { "esc/*/$dev" }
+    }
+
+    $topic = if ($stream -eq "#") { "esc/#" } else { "$topicRoot/$stream" }
+
+    $stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+    $safe  = ($topic -replace '[\\/:*?"<>|#\+]', '_')
+    $out   = Join-Path $logs "${stamp}__${safe}.txt"
+
+    Write-Host "→ $topic"
+    Write-Host "→ $out"
+    Write-Host "Ctrl+C to stop"
+
+    $hasTs = (Get-Command ts -ErrorAction SilentlyContinue)
+
+    if ($hasTs) {
+        if ($filter) {
+            mosquitto_sub -h 192.168.0.10 -t $topic -v | ts |
+                Select-String -SimpleMatch $filter |
+                Tee-Object -FilePath $out
+        } else {
+            mosquitto_sub -h 192.168.0.10 -t $topic -v | ts |
+                Tee-Object -FilePath $out
+        }
+    } else {
+        mosquitto_sub -h 192.168.0.10 -t $topic -v |
+            ForEach-Object { "[{0:dd.MM.yyyy HH:mm:ss.fff}] $_" -f (Get-Date) } |
+            Tee-Object -FilePath $out
     }
 }
 
@@ -70,7 +355,17 @@ function er1 {
 
         [switch]$live,
         [switch]$errors,
-        [int]$n = 200
+        [int]$n = 200,
+
+        # NEW: local MQTT stream mode for er1 log
+        [switch]$mqtt,
+
+        # NEW: topic stream selector for -mqtt mode
+        [ValidateSet("log","hb","metric","cmd","event","#")]
+        [string]$stream = "log",
+
+        # NEW: optional substring filter for -mqtt mode
+        [string]$filter = ""
     )
 
     switch ($cmd) {
@@ -82,7 +377,7 @@ function er1 {
                 "{0,-14} {1}" -f $k, $er1Commands[$k]
             }
 
-            Write-Host "`nLog command examples:" -ForegroundColor Cyan
+            Write-Host "`nLog command examples (Pi logfile):" -ForegroundColor Cyan
             Write-Host "  er1 log                          # tail today’s log (all devices, $n lines)"
             Write-Host "  er1 log -n 500                   # tail 500 lines of today’s log"
             Write-Host "  er1 log images_piano             # filter today’s log for one device"
@@ -92,6 +387,13 @@ function er1 {
             Write-Host "  er1 log images_piano -live       # live filtered stream for one device"
             Write-Host "  er1 log -errors                  # only error lines from today (all devices)"
             Write-Host "  er1 log images_piano -errors     # only error lines for one device"
+            Write-Host ""
+            Write-Host "MQTT stream examples (LOCAL mosquitto_sub -> logs/ file):" -ForegroundColor Cyan
+            Write-Host "  er1 log images_piano -mqtt                 # subscribe esc/*/images_piano/log"
+            Write-Host "  er1 log maglock_ctrl -mqtt -stream log     # subscribe esc/room0/maglock_ctrl/log"
+            Write-Host "  er1 log images_piano -mqtt -stream hb      # subscribe esc/*/images_piano/hb"
+            Write-Host "  er1 log images_piano -mqtt -stream #       # subscribe esc/#"
+            Write-Host "  er1 log images_piano -mqtt -filter SOLVED  # substring filter + file logging"
             Write-Host ""
             Write-Host "Advanced logs (Pi CLI passthrough):" -ForegroundColor Cyan
             Write-Host "  er1 logs help                    # show full 'er1 logs' help on the Pi"
@@ -105,7 +407,8 @@ function er1 {
             Write-Host "  er1 lock-all                     # open ALL maglocks"
             Write-Host "  er1 mqtt-status                  # check MQTT runtime"
             Write-Host "  er1 mqtt-restart                 # restart MQTT runtime"
-            Write-Host "  er1 commit ""tweak logs""           # git add/commit/push from ER repo"
+            Write-Host "  er1 push ""tweak logs""             # git add/commit/push from ER repo"
+            Write-Host "  er1 commit ""tweak logs""           # legacy alias for 'er1 push'"
             Write-Host ""
             Write-Host "Tip: use TAB after 'er1 ' to autocomplete commands,"
             Write-Host "     and after 'er1 log/ota/lock ' to autocomplete devices."
@@ -118,22 +421,19 @@ function er1 {
         }
 
         "log" {
-            # Parse args:
-            # - any number of string filters (patterns)
-            # - optional last raw number = override for -n
-            # Examples:
-            #   er1 log                            -> all devices, default -n
-            #   er1 log images_piano               -> filter by 'images_piano'
-            #   er1 log knocking maglock 400       -> filters 'knocking' + 'maglock', n=400
-            #   er1 log -live                      -> no patterns, just live tail
-            #   er1 log knocking -live             -> live filtered
-            #   er1 log knocking -errors -n 300    -> errors only, numeric via named -n
+            # If -mqtt is set: do local mosquitto_sub stream + file logging
+            if ($mqtt) {
+                $dev = if ($args -and $args.Count -ge 1) { $args[0] } else { $null }
+                if (-not $dev) { Write-Error "Usage: er1 log <device> -mqtt [-stream log|hb|metric|cmd|event|#] [-filter <text>]"; return }
+                Invoke-Er1MqttStream -dev $dev -stream $stream -filter $filter
+                return
+            }
 
+            # Otherwise: existing Pi logfile logic
             $patterns = @()
             $localN   = $n
 
             if ($args -and $args.Count -gt 0) {
-                # Check if last arg is a bare integer -> treat as n override
                 $last = $args[-1]
                 $intRef = 0
                 if ([int]::TryParse($last, [ref]$intRef)) {
@@ -148,11 +448,9 @@ function er1 {
             }
 
             if ($patterns.Count -eq 0) {
-                # No filters means: all devices
                 $patterns = @("*")
             }
 
-            # Expand special aliases like "maglock"
             $expandedPatterns = @()
             foreach ($p in $patterns) {
                 if ($p -eq "*") {
@@ -168,7 +466,6 @@ function er1 {
                 $regex = $expandedPatterns -join "|"
             }
 
-            # LIVE mode
             if ($live) {
                 if ($useAll) {
                     ssh -t $er1Pi "$er1Cmd logs live"
@@ -179,26 +476,21 @@ function er1 {
                 return
             }
 
-            # Today’s logfile path on Pi
             $todayFile = "logs/er1-`$(date +%d.%m.%Y).log"
 
             if ($errors) {
                 if ($useAll) {
-                    # All devices, only ERR
                     $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
                 }
                 else {
-                    # Filter by regex AND only ERR
                     $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
                 }
             }
             else {
                 if ($useAll) {
-                    # All devices
                     $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
                 }
                 else {
-                    # Filter by regex
                     $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | tail -n $localN"
                 }
             }
@@ -208,11 +500,6 @@ function er1 {
         }
 
         "logs" {
-            # Raw passthrough to the Pi's 'er1 logs' CLI for anything not covered by 'er1 log'
-            # Examples:
-            #   er1 logs help
-            #   er1 logs today
-            #   er1 logs date 06.12.2025
             $joined = $args -join " "
             if ([string]::IsNullOrWhiteSpace($joined)) {
                 ssh -t $er1Pi "$er1Cmd logs help"
@@ -232,8 +519,19 @@ function er1 {
         }
 
         "deploy" {
-            $deployScript = Join-Path $erRepoRoot "shared\pc-scripts\deploy_pi.ps1"
-            pwsh -File $deployScript -Env "er1" -Mode "runtime"
+            $mode = "runtime"
+            if ($args -and $args.Count -gt 0) {
+                $candidate = $args[0].ToLowerInvariant()
+                if ($candidate -in @("runtime", "full")) {
+                    $mode = $candidate
+                }
+                else {
+                    Write-Error "Usage: er1 deploy [runtime|full]"
+                    return
+                }
+            }
+
+            Invoke-Er1Deploy -Mode $mode
             return
         }
 
@@ -264,15 +562,16 @@ function er1 {
             return
         }
 
-        "commit" {
-            # Use all remaining args as the commit message; default to "update" if empty.
-            $Message = if ($args -and $args.Count -gt 0) { ($args -join " ") } else { "update" }
+        "push" {
+            $Message = if ($args -and $args.Count -gt 0) { $args -join " " } else { $null }
+            Invoke-Er1Push -Message $Message -Tag "push"
+            return
+        }
 
-            Push-Location $erRepoRoot
-            git add .
-            git commit -m $Message
-            git push
-            Pop-Location
+        "commit" {
+            $Message = if ($args -and $args.Count -gt 0) { $args -join " " } else { $null }
+            Write-Host "[er1 commit] Alias for 'er1 push'. Prefer 'er1 push' going forward." -ForegroundColor Yellow
+            Invoke-Er1Push -Message $Message -Tag "commit"
             return
         }
 
@@ -311,3 +610,4 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
             }
     }
 }
+

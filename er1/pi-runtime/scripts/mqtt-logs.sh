@@ -26,7 +26,7 @@ write_stream() {
   current_date=$(date +%d.%m.%Y)
   file="$(log_file_for_date "$current_date")"
 
-  mosquitto_sub -h "$BROKER" -t 'esc/#' -v | while IFS= read -r line; do
+  mosquitto_sub -h "$BROKER" -t 'er1/#' -v | while IFS= read -r line; do
     today=$(date +%d.%m.%Y)
     if [[ "$today" != "$current_date" ]]; then
       current_date="$today"
@@ -70,7 +70,7 @@ print_help() {
 Usage: scripts/mqtt-logs.sh <command> [args]
 
 Commands:
-  daemon          Run esc/# capture to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
+  daemon          Run er1/# capture to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
   live            Same as daemon but also echoes to stdout.
   tail            tail -f today's logfile.
   grep <pattern>  Search today's logfile for <pattern>.

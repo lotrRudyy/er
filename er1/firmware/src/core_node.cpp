@@ -1,0 +1,326 @@
+#include "core_node.h"
+
+namespace Core {
+
+// -------- NodeContext --------
+NodeContext::NodeContext(NodeCore& core) : core_(&core) {}
+
+bool NodeContext::publish(const char* topic, const String& payload, bool retained, int) {
+  if (!core_) return false;
+  return core_->publish(topic, payload, retained);
+}
+
+bool NodeContext::publish(const char* topic, const char* payload, bool retained, int) {
+  if (!core_) return false;
+  return core_->publish(topic, payload, retained);
+}
+
+void NodeContext::log(const char* level, const String& msg) {
+  if (!core_) return;
+  core_->logger().publish(level, msg);
+}
+
+void NodeContext::log(const char* level, const String& msg, const String& dataJson) {
+  if (!core_) return;
+  core_->logger().publish(level, msg, dataJson);
+}
+
+bool NodeContext::enabled() const {
+  return core_ ? core_->enabled() : false;
+}
+
+void NodeContext::setEnabled(bool en) {
+  if (core_) core_->setEnabled(en);
+}
+
+uint32_t NodeContext::uptimeSeconds() const {
+  return millis() / 1000;
+}
+
+const char* NodeContext::fwVersion() const {
+  return core_ ? core_->cfg_.fwVersion : nullptr;
+}
+
+const NodeCoreConfig& NodeContext::config() const {
+  return core_->cfg_;
+}
+
+Preferences& NodeContext::prefs() {
+  return core_->prefs_;
+}
+
+void NodeContext::requestHeartbeat() {
+  if (core_) core_->publishHeartbeatNow();
+}
+
+void NodeContext::setHeartbeatInterval(uint32_t intervalMs) {
+  if (core_) core_->setHeartbeatInterval(intervalMs);
+}
+
+uint32_t NodeContext::heartbeatInterval() const {
+  return core_ ? core_->heartbeatInterval() : 0;
+}
+
+// -------- NodeCore --------
+NodeCore::NodeCore() : ctx_(*this) {}
+
+void NodeCore::begin(const NodeCoreConfig& cfg) {
+  cfg_ = cfg;
+  hbCfg_ = cfg.heartbeat;
+  heartbeatIntervalMs_ = hbCfg_.intervalMs;
+  enabled_ = cfg.startEnabled;
+  subCount_ = 0;
+  lastHeartbeatMs_ = 0;
+  heartbeatImmediate_ = true;
+
+  NetConfig netCfg = cfg.net;
+  mqtt_.begin(netCfg, this);
+
+  LogOptions logOpts = cfg.log;
+  logOpts.topic = cfg.topics.log;
+  logOpts.fwVersion = cfg.fwVersion;
+  logger_.begin(&mqtt_.client(), logOpts);
+
+  ota_.begin(cfg.ota, &logger_);
+
+  const char* prefsNs = cfg.prefsNamespace ? cfg.prefsNamespace : cfg.net.clientId;
+  if (prefsNs && prefsNs[0] != '\0') {
+    prefs_.begin(prefsNs, false);
+  }
+}
+
+void NodeCore::loop() {
+  mqtt_.loop();
+  publishHeartbeatIfDue();
+}
+
+bool NodeCore::registerCommandHandler(CommandHandler handler, void* userData) {
+  moduleCmdHandler_ = handler;
+  moduleCmdUser_ = userData;
+  return true;
+}
+
+bool NodeCore::registerSubscription(const char* topic, SubscriptionHandler handler, void* userData) {
+  if (subCount_ >= kMaxSubscriptions || !topic || !handler) {
+    return false;
+  }
+  subs_[subCount_++] = {topic, handler, userData};
+  if (mqtt_.connected()) {
+    mqtt_.subscribe(topic);
+  }
+  return true;
+}
+
+bool NodeCore::publish(const char* topic, const String& payload, bool retained) {
+  return mqtt_.publish(topic, payload, retained);
+}
+
+bool NodeCore::publish(const char* topic, const char* payload, bool retained) {
+  return mqtt_.publish(topic, payload, retained);
+}
+
+void NodeCore::publishHeartbeatNow() {
+  heartbeatImmediate_ = true;
+  publishHeartbeatIfDue();
+}
+
+void NodeCore::setHeartbeatInterval(uint32_t intervalMs) {
+  heartbeatIntervalMs_ = intervalMs;
+}
+
+void NodeCore::setEnabled(bool en) {
+  enabled_ = en;
+}
+
+void NodeCore::onMqttConnected() {
+  const char* lvl = cfg_.mqttConnectedLogLevel ? cfg_.mqttConnectedLogLevel : "INF";
+  logger_.publish(lvl, "MQTT connected");
+
+  if (cfg_.topics.cmd) {
+    mqtt_.subscribe(cfg_.topics.cmd);
+  }
+
+  for (size_t i = 0; i < subCount_; i++) {
+    mqtt_.subscribe(subs_[i].topic);
+  }
+
+  publishHeartbeatNow();
+}
+
+void NodeCore::onMqttMessage(const char* topic, const uint8_t* payload, size_t length) {
+  String msg;
+  msg.reserve(length + 1);
+  for (size_t i = 0; i < length; i++) {
+    msg += static_cast<char>(payload[i]);
+  }
+  msg.trim();
+
+  if (cfg_.topics.cmd && strcmp(topic, cfg_.topics.cmd) == 0) {
+    logCommandEnvelope(topic, msg);
+    handleCommandMessage(msg);
+    return;
+  }
+
+  dispatchSubscription(topic, msg);
+}
+
+void NodeCore::handleCommandMessage(const String& raw) {
+  String trimmed = raw;
+  trimmed.trim();
+  String cmd = trimmed;
+  String arg;
+
+  int spaceIdx = trimmed.indexOf(' ');
+  if (spaceIdx > 0) {
+    cmd = trimmed.substring(0, spaceIdx);
+    arg = trimmed.substring(spaceIdx + 1);
+    arg.trim();
+  } else {
+    arg = "";
+  }
+
+  size_t cmdLen = min(static_cast<size_t>(cmd.length()), kCmdBufSize - 1);
+  cmd.toCharArray(cmdBuf_, cmdLen + 1);
+  size_t argLen = min(static_cast<size_t>(arg.length()), kPayloadBufSize - 1);
+  arg.toCharArray(payloadBuf_, argLen + 1);
+
+  if (handleCoreCommand(cmdBuf_, payloadBuf_)) {
+    return;
+  }
+
+  if (moduleCmdHandler_ && moduleCmdHandler_(cmdBuf_, payloadBuf_, moduleCmdUser_)) {
+    return;
+  }
+
+  if (cfg_.commands.logUnknown) {
+    String msg = String(cfg_.commands.unknownPrefix ? cfg_.commands.unknownPrefix : "Unknown CMD: ") + trimmed;
+    const char* lvl = cfg_.commands.levelUnknown ? cfg_.commands.levelUnknown : "WRN";
+    logger_.publish(lvl, msg);
+  }
+}
+
+bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
+  (void)arg;
+  if (cfg_.commands.allowEnableDisable) {
+    if (strcmp(cmd, "DISABLE") == 0) {
+      setEnabled(false);
+      if (cfg_.commands.logEnableDisable) {
+        const char* lvl = cfg_.commands.levelDisable ? cfg_.commands.levelDisable : "INF";
+        logger_.publish(lvl, "CMD DISABLE");
+      }
+      return true;
+    }
+    if (strcmp(cmd, "ENABLE") == 0) {
+      setEnabled(true);
+      if (cfg_.commands.logEnableDisable) {
+        const char* lvl = cfg_.commands.levelEnable ? cfg_.commands.levelEnable : "INF";
+        logger_.publish(lvl, "CMD ENABLE");
+      }
+      return true;
+    }
+  }
+
+  if (cfg_.commands.allowPing && strcmp(cmd, "PING") == 0) {
+    if (cfg_.commands.logPing) {
+      const char* lvl = cfg_.commands.levelPing ? cfg_.commands.levelPing : "DBG";
+      logger_.publish(lvl, "CMD PING");
+    }
+    publishHeartbeatNow();
+    return true;
+  }
+
+  if (cfg_.commands.allowUpdate && strcmp(cmd, "UPDATE") == 0) {
+    if (cfg_.commands.logUpdate) {
+      const char* lvl = cfg_.commands.levelUpdate ? cfg_.commands.levelUpdate : "INF";
+      logger_.publish(lvl, "CMD UPDATE");
+    }
+    ota_.perform();
+    return true;
+  }
+
+  if (cfg_.commands.allowReboot && strcmp(cmd, "REBOOT") == 0) {
+    if (cfg_.commands.logReboot) {
+      const char* lvl = cfg_.commands.levelReboot ? cfg_.commands.levelReboot : "INF";
+      logger_.publish(lvl, "CMD REBOOT");
+    }
+    delay(200);
+    forceRestart();
+    return true;
+  }
+
+  return false;
+}
+
+void NodeCore::publishHeartbeatIfDue() {
+  if (!cfg_.topics.hb || !hbCfg_.builder) return;
+
+  uint32_t now = millis();
+  if (!heartbeatImmediate_ && (now - lastHeartbeatMs_) < heartbeatIntervalMs_) {
+    return;
+  }
+
+  heartbeatImmediate_ = false;
+  lastHeartbeatMs_ = now;
+
+  String payload;
+  payload.reserve(196);
+  payload = "";
+  hbCfg_.builder(payload, ctx_, hbCfg_.user);
+  if (payload.length() == 0) return;
+
+  mqtt_.publish(cfg_.topics.hb, payload, true);
+}
+
+void NodeCore::logCommandEnvelope(const char* topic, const String& payload) {
+  if (!cfg_.commands.cmdLogLevel) return;
+  String msg = String("CMD topic=") + topic + " msg=" + payload;
+  logger_.publish(cfg_.commands.cmdLogLevel, msg);
+}
+
+bool NodeCore::topicMatches(const char* filter, const char* topic) const {
+  if (!filter || !topic) return false;
+
+  const char* f = filter;
+  const char* t = topic;
+
+  while (*f && *t) {
+    if (*f == '#') {
+      return true;
+    }
+    if (*f == '+') {
+      // skip to next level in topic
+      while (*t && *t != '/') {
+        t++;
+      }
+      f++;
+      if (*f == '/') {
+        if (*t != '/') return false;
+        f++;
+        if (*t == '/') t++;
+      }
+      continue;
+    }
+    if (*f != *t) {
+      return false;
+    }
+    f++;
+    t++;
+  }
+
+  if (*f == '#') return true;
+  return (*f == '\0' && *t == '\0');
+}
+
+void NodeCore::dispatchSubscription(const char* topic, const String& payload) {
+  for (size_t i = 0; i < subCount_; i++) {
+    if (topicMatches(subs_[i].topic, topic)) {
+      subs_[i].handler(ctx_, topic, payload, subs_[i].user);
+    }
+  }
+}
+
+void NodeCore::forceRestart() {
+  ESP.restart();
+}
+
+}  // namespace Core

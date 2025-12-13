@@ -152,8 +152,8 @@ er1-lock-knocking
 Lock MQTT topics:
 
 ```
-esc/ctrl/lock/<id>/cmd
-esc/ctrl/lock/<id>/state
+er1/ctrl/lock/<id>/cmd
+er1/ctrl/lock/<id>/state
 ```
 
 Lock IDs (canonical):

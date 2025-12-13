@@ -28,7 +28,7 @@ static bool mqttConnectedOnce = false;
 
 // -------- Topic helper --------
 static String topicBase() {
-  // esc/<room>/<device>/
+  // er1/<room>/<device>/
   String t = String(ROOT) + "/" + ROOM + "/" + DEVICE + "/";
   return t;
 }
@@ -44,7 +44,7 @@ bool mqttPublish(const String& t, const String& p, bool retained, int /*qos*/) {
 // -------- Incoming messages (extend if you want commands) --------
 static void onMqttMsg(char* t, uint8_t* payload, unsigned int len) {
   (void)payload; (void)len;
-  // Example: handle commands on esc/<room>/<device>/cmd if you subscribe to it
+  // Example: handle commands on er1/<room>/<device>/cmd if you subscribe to it
   // For now, no-op. You can parse JSON here.
 }
 

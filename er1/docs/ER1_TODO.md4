@@ -1,0 +1,4 @@
+- [ ] Decide Room2 Chess architecture: single-ESP shared-SPI (W5500 + 4×RC522) vs dual-ESP UART bridge.
+  - Gather exact wiring/power/cable lengths + RC522 library used.
+  - Evaluate SPI coexistence (CS pullups, decoupling, reset, SPI clocks, transactions).
+  - If needed: define UART bridge protocol + failure modes.

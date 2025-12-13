@@ -32,4 +32,5 @@ er1 mqtt-status
 er1 mqtt-restart
 er1 syslog
 er1 pi              # SSH to Pi
-er1 commit "msg"    # git add/commit/push from ER repo
+er1 push "msg"      # git add/commit/push from repo root
+er1 commit "msg"    # legacy alias for er1 push

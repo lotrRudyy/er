@@ -88,8 +88,8 @@ $piUser        = "rudyy"
 $piHost        = "100.108.1.80"    # Tailscale IP of er1-pi
 $piFirmwareDir = "/home/rudyy/firmware"
 
-# Topic form: esc/<room>/<dev>/cmd
-$topicUpdate = "esc/$Room/$Dev/cmd"
+# Topic form: er1/<room>/<dev>/cmd
+$topicUpdate = "er1/$Room/$Dev/cmd"
 
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $Dev.bin =="

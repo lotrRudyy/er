@@ -1,389 +1,136 @@
 #include <Arduino.h>
-#include <SPI.h>
-#include <Ethernet.h>
-#include <PubSubClient.h>
-#include <Update.h>
-#include <Preferences.h>
+#include <IPAddress.h>
+#include <cstring>
+
+#include "core_node.h"
+#include "star_sky_riddle.h"
+
+using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-// Simple numeric version used in all MQTT payloads
-static const char *FW_VERSION = "1.0";
-// Human-readable description for changelog / docs
-static const char *FW_DESC    = "star_sky 1.0 – 4-strip sequencer, gated by candles SOLVED, HB/log/metric v2, prefs";
-
-// ======================= ETHERNET PINS =======================
-#define ETH_CS   15
-#define ETH_RST  27
-#define ETH_SCK  18
-#define ETH_MISO 19
-#define ETH_MOSI 23
+static const char* FW_VERSION = "1.1";
+static const char* FW_DESC =
+    "star_sky 1.1 - core shell + module, candles gate + pattern preserved";
 
 // ======================= NETWORK CONFIG ======================
-byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55 };  // unique-ish MAC
-IPAddress ip     (192, 168, 0, 16);
-IPAddress dns    (0, 0, 0, 0);
-IPAddress gw     (0, 0, 0, 0);
-IPAddress subnet (255, 255, 255, 0);
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};
+static const IPAddress NET_IP(192, 168, 0, 16);
+static const IPAddress NET_DNS(0, 0, 0, 0);
+static const IPAddress NET_GW(0, 0, 0, 0);
+static const IPAddress NET_SUBNET(255, 255, 255, 0);
+static const IPAddress MQTT_SERVER(192, 168, 0, 10);
+static constexpr uint16_t MQTT_PORT = 1883;
 
-// MQTT broker
-IPAddress mqttServer(192, 168, 0, 10);
-const uint16_t mqttPort = 1883;
-
-// ======================= NODE TOPICS =========================
-static const char *CLIENT_ID      = "star_sky";
-static const char *TOPIC_HB       = "esc/room3/star_sky/hb";
-static const char *TOPIC_CMD      = "esc/room3/star_sky/cmd";
-static const char *TOPIC_LOG      = "esc/room3/star_sky/log";
-static const char *TOPIC_METRIC   = "esc/room3/star_sky/metric";
-// external event we subscribe to:
-static const char *TOPIC_CANDLES_EVENT = "esc/room3/candles/event";
+// ======================= TOPICS ==============================
+static const char* TOPIC_HB = "er1/room3/star_sky/hb";
+static const char* TOPIC_CMD = "er1/room3/star_sky/cmd";
+static const char* TOPIC_LOG = "er1/room3/star_sky/log";
+static const char* TOPIC_CANDLES_EVENT = "er1/room3/candles/event";
+static const char* TOPIC_OTA = "er1/room3/star_sky/ota";
 
 // ======================= OTA CONFIG ==========================
-static const char *OTA_HOST  = "192.168.0.10";
-static const uint16_t OTA_PORT = 80;
-static const char *OTA_PATH  = "/firmware/star_sky.bin";
+static const char* OTA_HOST = "192.168.0.10";
+static constexpr uint16_t OTA_PORT = 80;
+static const char* OTA_PATH = "/firmware/star_sky.bin";
 
-// ======================= LIGHTING CONFIG =====================
-// LED strips on PWM via MOSFETs
-// Channel 0 / pin 16 -> set 1 (always on after candles solved)
-// Channel 1 / pin 17 -> set 2
-// Channel 2 / pin 18 -> set 3
-// Channel 3 / pin 19 -> set 4
-static const int LED_PINS[4] = {16, 17, 18, 19};
+// ======================= CORE + MODULE =======================
+static NodeCore nodeCore;
+static StarSkyRiddle starSky;
 
-// Timing:
-// total cycle = 27 s
-// 0–4 s: set2
-// 4–8 s: set3
-// 8–12 s: set4
-// 12–27 s: all off (except set1 always on)
-static const unsigned long STEP_MS  = 4000;    // 4 s per active set
-static const unsigned long PAUSE_MS = 15000;   // 15 s pause after 3 sets
-static const unsigned long CYCLE_MS = STEP_MS * 3 + PAUSE_MS; // 12 + 15 = 27
-
-// ======================= STATE ===============================
-EthernetClient ethClient;
-PubSubClient mqtt(ethClient);
-Preferences prefs;
-
-bool enabled = true;
-
-// candles_solved -> whether we should run the pattern
-bool candlesSolved = false;
-
-// timer anchor for cycle
-unsigned long cycleStartMs = 0;
-
-// telemetry
-unsigned long lastHbMs     = 0;
-unsigned long lastMetricMs = 0;
-
-static const unsigned long HB_INTERVAL_MS     = 5000;
-static const unsigned long METRIC_INTERVAL_MS = 10000;
-
-// error counter used in HB/log payloads
-uint32_t g_errorCount = 0;
-
-// ======================= HELPERS: LED CONTROL =================
-void setStripRaw(int idx, uint8_t duty) {
-  if (idx < 0 || idx >= 4) return;
-  ledcWrite(idx, duty);
+static bool logFilter(const char* level, void* user) {
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  if (!module) return true;
+  bool isErr = (strcmp(level, "ERR") == 0);
+  if (isErr) return true;
+  return true;  // star_sky logs everything but still tracks errors via module if needed
 }
 
-void setAllStripsOff() {
-  for (int i = 0; i < 4; i++) setStripRaw(i, 0);
+static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  uint32_t err = module ? module->errorCount() : 0;
+  const char* st = (!ctx.enabled() || err > 0) ? "warn" : "ok";
+  out = String("{\"fw\":\"") + ctx.fwVersion() +
+        "\",\"up\":" + String(ctx.uptimeSeconds()) +
+        ",\"st\":\"" + st + "\",\"err\":" + String(err) +
+        "}";
 }
 
-void applyPattern() {
-  if (!candlesSolved) {
-    // everything off until candles are solved
-    setAllStripsOff();
-    return;
-  }
-
-  unsigned long now   = millis();
-  unsigned long delta = (now - cycleStartMs) % CYCLE_MS;
-
-  // set1 always ON
-  setStripRaw(0, 255);
-
-  // default: sets 2–4 off
-  setStripRaw(1, 0);
-  setStripRaw(2, 0);
-  setStripRaw(3, 0);
-
-  if (delta < STEP_MS) {
-    // 0–4 s: set 2 on
-    setStripRaw(1, 255);
-  } else if (delta < STEP_MS * 2) {
-    // 4–8 s: set 3 on
-    setStripRaw(2, 255);
-  } else if (delta < STEP_MS * 3) {
-    // 8–12 s: set 4 on
-    setStripRaw(3, 255);
-  } else {
-    // 12–27 s: pause, only set1 on, 2–4 already off
-  }
+static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  return module ? module->onCmd(cmd, payload) : false;
 }
 
-// ======================= LOG / HB HELPERS ====================
-void publishLog(const char *lvl, const String &msg, const String &dataJson = String()) {
-  // lvl: "DBG","INF","WRN","ERR"
-  String payload = String("{\"fw\":\"") + FW_VERSION +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"lv\":\"" + lvl + "\",\"msg\":\"" + msg + "\"";
-  if (dataJson.length() > 0) {
-    payload += ",\"d\":" + dataJson;
-  }
-  payload += "}";
-  mqtt.publish(TOPIC_LOG, payload.c_str());
-
-  if (strcmp(lvl, "ERR") == 0) {
-    g_errorCount++;
-  }
+static void candlesEventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  if (module) module->handleCandlesEvent(payload);
 }
 
-void publishHeartbeatIfDue() {
-  unsigned long now = millis();
-  if (now - lastHbMs < HB_INTERVAL_MS) return;
-  lastHbMs = now;
-
-  const char *st;
-  if (!enabled) {
-    st = "warn";
-  } else if (g_errorCount > 0) {
-    st = "warn";
-  } else {
-    st = "ok";
-  }
-
-  String hb = String("{\"fw\":\"") + FW_VERSION +
-              "\",\"up\":" + String(now / 1000) +
-              ",\"st\":\"" + st + "\",\"err\":" + String(g_errorCount) +
-              "}";
-  mqtt.publish(TOPIC_HB, hb.c_str(), true);
+static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
+  if (!TOPIC_OTA || !st) return;
+  NodeContext& ctx = nodeCore.context();
+  const char* fw = ctx.fwVersion() ? ctx.fwVersion() : FW_VERSION;
+  String payload;
+  payload.reserve(96 + dataJson.length());
+  payload = String("{\"fw\":\"") + fw + "\",\"up\":" + String(ctx.uptimeSeconds()) +
+            ",\"st\":\"" + st + "\",\"d\":" + dataJson + "}";
+  ctx.publish(TOPIC_OTA, payload, retained);
 }
 
-void publishMetricsIfDue() {
-  unsigned long now = millis();
-  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
-  lastMetricMs = now;
-
-  unsigned long delta = (now - cycleStartMs) % CYCLE_MS;
-  const char *phase =
-    (!candlesSolved)              ? "OFF" :
-    (delta < STEP_MS)             ? "SET2" :
-    (delta < STEP_MS * 2)         ? "SET3" :
-    (delta < STEP_MS * 3)         ? "SET4" : "PAUSE";
-
-  // Metrics format: {"fw":FW_VERSION,"up":uptime_s,"k":"metric_key",...}
-  String payload = String("{\"fw\":\"") + FW_VERSION +
-                   "\",\"up\":" + String(now / 1000) +
-                   ",\"k\":\"star_sky\"" +
-                   ",\"candles\":" + (candlesSolved ? "1" : "0") +
-                   ",\"phase\":\"" + phase + "\"" +
-                   "}";
-  mqtt.publish(TOPIC_METRIC, payload.c_str());
-}
-
-// ======================= OTA (HTTP pull) =====================
-bool doHttpOta() {
-  EthernetClient client;
-  String url = String("http://") + OTA_HOST + OTA_PATH;
-  publishLog("INF", String("CMD UPDATE -> HTTP OTA ") + url);
-
-  if (!client.connect(OTA_HOST, OTA_PORT)) {
-    publishLog("ERR", "OTA connect failed");
-    return false;
-  }
-
-  client.print("GET ");
-  client.print(OTA_PATH);
-  client.print(" HTTP/1.1\r\nHost: ");
-  client.print(OTA_HOST);
-  client.print("\r\nConnection: close\r\n\r\n");
-
-  long contentLength = -1;
-
-  while (client.connected()) {
-    String line = client.readStringUntil('\n');
-    if (line == "\r" || line.length() == 0) break;
-
-    String low = line;
-    low.toLowerCase();
-    if (low.startsWith("content-length:")) {
-      low.replace("content-length:", "");
-      low.trim();
-      contentLength = low.toInt();
-    }
-  }
-
-  if (contentLength <= 0) {
-    publishLog("ERR", "OTA invalid content-length");
-    return false;
-  }
-
-  if (!Update.begin(contentLength)) {
-    publishLog("ERR", "OTA Update.begin failed");
-    return false;
-  }
-
-  uint8_t buf[512];
-  long total = 0;
-
-  while (client.connected() && total < contentLength) {
-    int len = client.read(buf, sizeof(buf));
-    if (len <= 0) {
-      delay(10);
-      continue;
-    }
-    Update.write(buf, len);
-    total += len;
-  }
-
-  if (!Update.end(true)) {
-    publishLog("ERR", "OTA Update.end failed");
-    return false;
-  }
-
-  publishLog("INF", "OTA OK, rebooting");
-  delay(500);
-  ESP.restart();
-  return true;
-}
-
-// ======================= CMD HANDLING ========================
-void handleCmd(const String &msg) {
-  if (msg == "DISABLE") {
-    enabled = false;
-    publishLog("INF", "CMD DISABLE");
-    return;
-  }
-  if (msg == "ENABLE") {
-    enabled = true;
-    publishLog("INF", "CMD ENABLE");
-    return;
-  }
-  if (msg == "PING") {
-    publishLog("DBG", "CMD PING");
-    publishHeartbeatIfDue();
-    return;
-  }
-  if (msg == "UPDATE") {
-    doHttpOta();
-    return;
-  }
-  if (msg == "REBOOT") {
-    publishLog("INF", "CMD REBOOT");
-    delay(200);
-    ESP.restart();
-    return;
-  }
-
-  publishLog("WRN", String("Unknown CMD: ") + msg);
-}
-
-// ======================= MQTT HANDLING =======================
-void mqttCallback(char *topicC, byte *payload, unsigned int length) {
-  String topic(topicC);
-  String msg;
-  msg.reserve(length);
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  msg.trim();
-
-  if (topic == TOPIC_CMD) {
-    handleCmd(msg);
-    return;
-  }
-
-  if (topic == TOPIC_CANDLES_EVENT) {
-    // Very simple JSON sniff: look for `"event":"SOLVED"`
-    if (msg.indexOf("\"event\"") != -1 && msg.indexOf("SOLVED") != -1) {
-      if (!candlesSolved) {
-        candlesSolved = true;
-        prefs.putBool("candles", true);
-        cycleStartMs = millis();
-        publishLog("INF", "Candles SOLVED event received, enabling pattern");
-      } else {
-        publishLog("DBG", "Candles SOLVED event (already enabled)");
-      }
-    }
-    return;
-  }
-}
-
-void mqttReconnect() {
-  while (!mqtt.connected()) {
-    if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
-      publishLog("INF", "MQTT connected");
-      mqtt.subscribe(TOPIC_CMD);
-      mqtt.subscribe(TOPIC_CANDLES_EVENT);
-      publishHeartbeatIfDue();  // initial HB
-    } else {
-      delay(2000);
-    }
-  }
-}
-
-// ======================= ETHERNET INIT =======================
-void setupEthernet() {
-  pinMode(ETH_RST, OUTPUT);
-  digitalWrite(ETH_RST, LOW);
-  delay(50);
-  digitalWrite(ETH_RST, HIGH);
-  delay(50);
-
-  SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI, ETH_CS);
-  Ethernet.init(ETH_CS);
-  Ethernet.begin(mac, ip, dns, gw, subnet);
-
-  mqtt.setServer(mqttServer, mqttPort);
-  mqtt.setCallback(mqttCallback);
-}
-
-// ======================= STATE PERSISTENCE ===================
-void loadStateFromPrefs() {
-  prefs.begin("star_sky", false);
-  candlesSolved = prefs.getBool("candles", false);
-
-  if (candlesSolved) {
-    publishLog("INF", "BOOT candles=1, starting pattern");
-  } else {
-    publishLog("INF", "BOOT candles=0, pattern disabled");
-  }
-  cycleStartMs = millis();
-}
-
-// ======================= SETUP / LOOP ========================
+// ======================= ARDUINO LIFECYCLE ===================
 void setup() {
-  Serial.begin(115200);
-  delay(200);
+  NodeCoreConfig cfg;
+  cfg.fwVersion = FW_VERSION;
+  cfg.fwDescription = FW_DESC;
+  cfg.startEnabled = true;
+  cfg.prefsNamespace = "star_sky";
 
-  // PWM setup for 4 strips
-  for (int i = 0; i < 4; i++) {
-    ledcSetup(i, 1000, 8);      // channel i, 1 kHz, 8-bit
-    ledcAttachPin(LED_PINS[i], i);
-    setStripRaw(i, 0);
-  }
+  std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
+  cfg.net.ip = NET_IP;
+  cfg.net.dns = NET_DNS;
+  cfg.net.gateway = NET_GW;
+  cfg.net.subnet = NET_SUBNET;
+  cfg.net.mqttServer = MQTT_SERVER;
+  cfg.net.mqttPort = MQTT_PORT;
+  cfg.net.clientId = "star_sky";
+  cfg.net.topicLwt = TOPIC_HB;
 
-  setupEthernet();
-  mqttReconnect();
+  cfg.topics = {TOPIC_HB, TOPIC_CMD, TOPIC_LOG, TOPIC_OTA};
+  cfg.log.format = LogFormat::FwUptimeLevelMsg;
+  cfg.log.filter = logFilter;
+  cfg.log.filterUser = &starSky;
 
-  loadStateFromPrefs();
+  cfg.heartbeat.intervalMs = 5000;
+  cfg.heartbeat.builder = heartbeatBuilder;
+  cfg.heartbeat.user = &starSky;
+
+  cfg.commands.cmdLogLevel = nullptr;
+  cfg.commands.levelEnable = "INF";
+  cfg.commands.levelDisable = "INF";
+  cfg.commands.levelPing = "DBG";
+  cfg.commands.allowReboot = true;
+  cfg.commands.levelReboot = "INF";
+  cfg.commands.logUnknown = true;
+  cfg.commands.levelUnknown = "WRN";
+  cfg.commands.logUpdate = false;
+
+  cfg.ota.host = OTA_HOST;
+  cfg.ota.port = OTA_PORT;
+  cfg.ota.path = OTA_PATH;
+  cfg.ota.infoLevel = "INF";
+  cfg.ota.errLevel = "ERR";
+  cfg.ota.statusPublisher = publishOtaStatus;
+
+  nodeCore.begin(cfg);
+  nodeCore.registerCommandHandler(moduleCommandHandler, &starSky);
+  nodeCore.registerSubscription(TOPIC_CANDLES_EVENT, candlesEventSubscription, &starSky);
+
+  NodeContext& ctx = nodeCore.context();
+  starSky.begin(ctx);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC);
 }
 
 void loop() {
-  if (!mqtt.connected()) {
-    mqttReconnect();
-  }
-  mqtt.loop();
-
-  if (enabled) {
-    applyPattern();
-  } else {
-    setAllStripsOff();
-  }
-
-  publishMetricsIfDue();
-  publishHeartbeatIfDue();
+  nodeCore.loop();
+  starSky.tick(millis());
 }

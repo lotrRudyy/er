@@ -4,6 +4,53 @@ If this document conflicts with anything else, **this wins**.
 
 ---
 
+# Codex Execution Rules
+
+## No-Permission Execution Rule
+
+- Codex never asks for permission, confirmation, or approval before making changes; every request is executed end-to-end.
+- Tasks are completed fully with no partial hand-offs or pauses awaiting chat confirmation.
+- Git history is the rollback mechanism; safety reviews happen via diffs, not conversational checkpoints.
+- If you ask for permission/confirmation, that is a protocol violation. Continue immediately and execute the task without further       questions.
+
+- Only ask a question if execution is impossible due to missing concrete input (e.g., file not present, ambiguous target file name). Otherwise assume defaults and proceed.
+
+## Mandatory Change Summary
+
+- Every Codex response ends with a summary block in this exact format:
+
+```
+CHANGES MADE:
+- <file>: <precise description of change>
+- <file>: <precise description of change>
+```
+
+- When no files change, respond with:
+
+```
+CHANGES MADE:
+- none (analysis / design only)
+```
+
+## Explicitly Forbidden
+
+- Asking “should I proceed”
+- Asking “do you want me to”
+- Waiting for confirmation
+- Partial execution pending approval
+
+The user reviews diffs and reverts via Git when needed.
+
+### Runtime Enforcement
+
+Every Codex task prompt MUST end with:
+--ask-for-approval never
+
+This flag disables Codex’s internal approval system.
+Prompt text alone is insufficient.
+
+---
+
 # 0. Repo & Pi layout
 
 ## 0.1 Git repo structure
@@ -14,13 +61,11 @@ Repo root (PC / GitHub):
 er/
   shared/
     pc-scripts/
-      er1_profile.ps1
+      er1_profile.ps1               # single source of truth for 'er1 <cmd>'
       open_er1_pi_terminals.ps1
-      push.ps1
       reset_repo.ps1
       push.sh
       reset_repo.sh
-      deploy_pi.ps1   # deploys er1/pi-runtime -> /home/rudyy/er1 and restarts the runtime
     libs/          # reserved for shared C++ libs
     docs/          # reserved for cross-ER docs
 
@@ -55,7 +100,6 @@ er/
       mqtt_commands.md
       commands.md
       er1_logging_and_tools.md
-      pwsh_profile.md
       pwsh_setup.md
 
   er2/
@@ -108,18 +152,18 @@ Mapping from repo → Pi:
 - `/home/rudyy/er1/logs/` exists only on Pi (repo only stores `.gitkeep`)
 
 ### Deploy behavior (canonical)
-`deploy_pi.ps1`:
+`er1 deploy` (defined in `er1_profile.ps1`):
 
-1. Syncs **pi-runtime/** into `/home/rudyy/er1/`
-   (scripts, systemd, docs, config template)
-2. **Preserves**:
-   - `/home/rudyy/er1/logs/`
-   - `/home/rudyy/er1/config/local.env`
-3. Restarts runtime:
+1. Detects repo root (PC vs laptop) and the Pi target via `$er1Pi`.
+2. Syncs **er1/pi-runtime/** into `/home/rudyy/er1/`
+   (scripts, systemd, docs, config template) using `rsync -avz --delete`
+   when available, else `scp -r` fallback.
+3. Excludes `/home/rudyy/er1/logs/` and `config/local.env` so Pi-specific
+   state survives each deploy.
+4. Re-applies execute bits on the remote runtime tree.
 
-```
-sudo systemctl restart er1-runtime.service
-```
+After deploying, immediately commit + push your changes with `er1 push`
+to keep Pi + Git history aligned.
 
 ---
 
@@ -183,11 +227,11 @@ W5500 pins:
 For all ESP32 nodes:
 
 ```
-esc/<room>/<dev>/hb
-esc/<room>/<dev>/event
-esc/<room>/<dev>/cmd
-esc/<room>/<dev>/log
-esc/<room>/<dev>/metric
+er1/<room>/<dev>/hb
+er1/<room>/<dev>/event
+er1/<room>/<dev>/cmd
+er1/<room>/<dev>/log
+er1/<room>/<dev>/metric
 ```
 
 Where:
@@ -205,7 +249,20 @@ QoS:
 
 ---
 
-## 2.3 Heartbeats, metrics, logs
+## 2.3 MQTT namespace migration (esc -> er1)
+
+- All firmware, scripts, docs, and broker tools now publish/subscribe under `er1/...`. Node-RED flows are **not** in this repo; TODO: update every Node-RED MQTT topic manually to the new root.
+- After deploying this change, restart Node-RED and any other subscribers so they reconnect with the new topic root. Legacy retained messages may continue to exist under the old `esc` namespace (pattern `` `esc`/`#` ``); clear them with your standard broker method if desired.
+- Verify the repo by running (from repo root) and expecting zero matches:
+
+```
+rg -n '"?esc\/' .
+rg -n '\besc\/' .
+```
+
+---
+
+## 2.4 Heartbeats, metrics, logs
 
 Heartbeat JSON:
 
@@ -221,12 +278,12 @@ Cadence:
 
 ---
 
-## 2.4 Command protocol
+## 2.5 Command protocol
 
 Commands arrive on:
 
 ```
-esc/<room>/<dev>/cmd
+er1/<room>/<dev>/cmd
 ```
 
 Supported:
@@ -241,7 +298,7 @@ Supported:
 
 ---
 
-## 2.5 OTA
+## 2.6 OTA
 
 OTA served by ER1 Pi.
 
@@ -267,6 +324,49 @@ OTA lookup via deviceMap inside `ota.ps1`.
 
 Always bump `FW_VERSION`.
 
+### OTA status topic (per node)
+
+Each ESP32 node publishes OTA state to:
+
+```
+er1/<room>/<dev>/ota
+```
+
+Payload format (compact JSON, same logging schema as hb/log):
+
+```
+{"fw":"<current_fw>","up":<uptime_s>,"st":"<state>","d":{...}}
+```
+
+- `st="start"` (retained) right before HTTP GET, `d={"to":"<target_fw_or_?>"}`
+- `st="prog"` (not retained, max 1 msg/s) while pulling image, `d={"pct":42}`
+- `st="ok"` (retained) after `Update.end(true)` succeeds, `d={"bytes":123456}`
+- `st="fail"` (retained) on any OTA failure, `d={"at":"dns|conn|http|hdr|write|end|md5","code":<num>,"msg":"<short>","bytes":<optional_bytes>}`
+
+Retained semantics: `start` stays until `ok`/`fail` overwrites it so operators can see stuck OTAs.
+
+### Pi OTA verification
+
+`pi-runtime/scripts/ota-verify.py` subscribes to `er1/+/+/cmd` + `er1/+/+/hb`. When an `UPDATE` command is seen it opens a 90 s window and waits for:
+
+1. Device to go offline at least once (LWT `offline`) **or** its heartbeat uptime to reset.
+2. Device to publish a new heartbeat after reconnecting.
+3. Heartbeat `fw` to differ from the version recorded before the update.
+
+If those checks pass it logs:
+
+```
+OTA_RESULT dev=<dev> room=<room> result=OK old_fw=<old> new_fw=<new>
+```
+
+Failures log a single line with one of: `no_offline`, `no_return`, `no_fw_change`, `timeout` plus the last firmware seen:
+
+```
+OTA_RESULT dev=<dev> room=<room> result=FAIL reason=<reason> old_fw=<old> last_fw=<last>
+```
+
+Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and systemd journal via `er1-ota-verify.service`).
+
 ---
 
 # 3. Device map (Env / Dev / Room / IP / OTA)
@@ -284,18 +384,32 @@ Always bump `FW_VERSION`.
 
 Examples:
 
-- `esc/room2/chess/hb`
-- `esc/room3/star_sky/event`
-- `esc/room3/stop_timer/hb`
+- `er1/room2/chess/hb`
+- `er1/room3/star_sky/event`
+- `er1/room3/stop_timer/hb`
 
 Maglock controller node topics:
 
 ```
-esc/room0/maglock_ctrl/hb
-esc/room0/maglock_ctrl/cmd
-esc/room0/maglock_ctrl/log
-esc/room0/maglock_ctrl/metric
+er1/room0/maglock_ctrl/hb
+er1/room0/maglock_ctrl/cmd
+er1/room0/maglock_ctrl/log
+er1/room0/maglock_ctrl/metric
 ```
+
+## 3.1 Firmware module layout
+
+| Env name           | Core shell file             | Module(s)                                  |
+|--------------------|-----------------------------|--------------------------------------------|
+| room1_images_piano | `room1_images_piano.cpp`    | `images_riddle.cpp`, `piano_riddle.cpp`    |
+| room0_maglock_ctrl | `room0_maglock_ctrl.cpp`    | `maglock_controller.cpp`                   |
+| room3_knocking     | `room3_knocking.cpp`        | `knocking_riddle.cpp`                      |
+| room3_candles      | `room3_candles.cpp`         | `candles_riddle.cpp`                       |
+| room3_star_sky     | `room3_star_sky.cpp`        | `star_sky_riddle.cpp`                      |
+| room2_chess        | `room2_chess.cpp`           | `chess_riddle.cpp`                         |
+| room3_star_slider  | `room3_star_slider.cpp`     | `star_slider_riddle.cpp`                   |
+
+Each listed env uses the reusable core node scaffolding (Ethernet/MQTT/OTA/log/heartbeat) plus the modules shown above for puzzle logic. Update this table as additional nodes adopt the pattern.
 
 ---
 
@@ -317,8 +431,8 @@ Canonical lock IDs:
 MQTT topics:
 
 ```
-esc/ctrl/lock/<id>/cmd
-esc/ctrl/lock/<id>/state
+er1/ctrl/lock/<id>/cmd
+er1/ctrl/lock/<id>/state
 ```
 
 Allowed commands:
@@ -484,8 +598,15 @@ loaded from `shared/pc-scripts/er1_profile.ps1`.
 
 ### Deploy Pi runtime
 
-- `er1 deploy`
-  Sync `er1/pi-runtime` → `/home/rudyy/er1` and restart systemd units.
+- `er1 deploy [runtime|full]`
+  Mirrors `er1/pi-runtime` into `/home/rudyy/er1` using `rsync -avz --delete`
+  (or `scp -r` fallback). Default `runtime` mode copies scripts/, systemd/,
+  docs/ and config/ (excluding `config/local.env`) and re-applies execute bits.
+  `full` mirrors the entire `pi-runtime/` tree. Logs stay untouched; restart
+  services via SSH if required.
+
+  **After every deploy**: immediately run `er1 push "<msg>"` so Pi runtime and
+  git history never drift.
 
 ### Maglocks
 
@@ -497,8 +618,12 @@ loaded from `shared/pc-scripts/er1_profile.ps1`.
 
 ### Git helpers
 
+- `er1 push "<msg>"`
+  Add, commit, and push from repo root. Prints branch/upstream info, auto-sets
+  upstream to `origin/<branch>` when available, and fails loudly outside git.
+
 - `er1 commit "<msg>"`
-  Add, commit, and push from repo root.
+  Alias for `er1 push` kept for muscle memory.
 
 ---
 

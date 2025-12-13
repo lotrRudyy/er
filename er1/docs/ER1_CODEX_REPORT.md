@@ -16,7 +16,7 @@
 - Snippet:
 
   ```bash
-  mosquitto_sub -h "$LOCAL_BROKER" -t 'esc/#' -v \
+  mosquitto_sub -h "$LOCAL_BROKER" -t 'er1/#' -v \
     | ts "$TS_FORMAT" \
     | while IFS= read -r line; do
         today=$(date +%Y-%m-%d)

@@ -12,31 +12,31 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "c:/Users/rudol/Documents/Escape Room/er/er1/.pio/build/room0_maglock_ctrl/firmware.elf",
-            "projectEnvName": "room0_maglock_ctrl",
-            "toolchainBinDir": "C:/Users/rudol/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "C:/Users/Rudy/Documents/er/er1/firmware/.pio/build/room1_images_piano/firmware.elf",
+            "projectEnvName": "room1_images_piano",
+            "toolchainBinDir": "C:/Users/Rudy/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
-                "task": "Pre-Debug"
+                "task": "Pre-Debug (room1_images_piano)"
             }
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "c:/Users/rudol/Documents/Escape Room/er/er1/.pio/build/room0_maglock_ctrl/firmware.elf",
-            "projectEnvName": "room0_maglock_ctrl",
-            "toolchainBinDir": "C:/Users/rudol/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "C:/Users/Rudy/Documents/er/er1/firmware/.pio/build/room1_images_piano/firmware.elf",
+            "projectEnvName": "room1_images_piano",
+            "toolchainBinDir": "C:/Users/Rudy/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "c:/Users/rudol/Documents/Escape Room/er/er1/.pio/build/room0_maglock_ctrl/firmware.elf",
-            "projectEnvName": "room0_maglock_ctrl",
-            "toolchainBinDir": "C:/Users/rudol/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "C:/Users/Rudy/Documents/er/er1/firmware/.pio/build/room1_images_piano/firmware.elf",
+            "projectEnvName": "room1_images_piano",
+            "toolchainBinDir": "C:/Users/Rudy/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }

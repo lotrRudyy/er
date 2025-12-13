@@ -1,565 +1,127 @@
 #include <Arduino.h>
-#include <SPI.h>
-#include <Ethernet.h>
-#include <PubSubClient.h>
-#include <Update.h>
-#include <DFRobotDFPlayerMini.h>
+#include <IPAddress.h>
+#include <cstring>
+
+#include "core_node.h"
+#include "stop_timer_riddle.h"
+
+using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-// Simple numeric version used in all MQTT payloads
-static const char *FW_VERSION = "1.2";
-// Human-readable description for docs / changelog only
-static const char *FW_DESC    = "knocking 1.2 – v5.12 logic, calib metrics 10x100ms buckets, DF + seq unchanged";
-
-// DEV logging flag: 0 = only ERR logs, 1 = verbose logs (INF/DBG/WRN/ERR)
-#define KNOCK_DEV_LOG 0
-
-// ======================= ETHERNET PINS =======================
-#define ETH_CS   15
-#define ETH_RST  27
-#define ETH_SCK  18
-#define ETH_MISO 19
-#define ETH_MOSI 23
+static const char* FW_VERSION = "1.3";
+static const char* FW_DESC = "stop_timer 1.3 - core shell + DFPlayer knock module";
 
 // ======================= NETWORK CONFIG ======================
-byte mac[]       = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56 };  // unique-ish MAC
-IPAddress ip     (192, 168, 0, 14);
-IPAddress dns    (0, 0, 0, 0);
-IPAddress gw     (0, 0, 0, 0);
-IPAddress subnet (255, 255, 255, 0);
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
+static const IPAddress NET_IP(192, 168, 0, 14);
+static const IPAddress NET_DNS(0, 0, 0, 0);
+static const IPAddress NET_GW(0, 0, 0, 0);
+static const IPAddress NET_SUBNET(255, 255, 255, 0);
+static const IPAddress MQTT_SERVER(192, 168, 0, 10);
+static constexpr uint16_t MQTT_PORT = 1883;
 
-// MQTT broker
-IPAddress mqttServer(192, 168, 0, 10);
-const uint16_t mqttPort = 1883;
-
-// ======================= NODE TOPICS =========================
-static const char *CLIENT_ID    = "knocking";
-static const char *TOPIC_HB     = "esc/room3/knocking/hb";
-static const char *TOPIC_CMD    = "esc/room3/knocking/cmd";
-static const char *TOPIC_LOG    = "esc/room3/knocking/log";
-static const char *TOPIC_METRIC = "esc/room3/knocking/metric";
-static const char *TOPIC_EVENT  = "esc/room3/knocking/event";
+// ======================= TOPICS ==============================
+static const char* TOPIC_HB = "er1/room3/knocking/hb";
+static const char* TOPIC_CMD = "er1/room3/knocking/cmd";
+static const char* TOPIC_LOG = "er1/room3/knocking/log";
+static const char* TOPIC_OTA = "er1/room3/knocking/ota";
 
 // ======================= OTA CONFIG ==========================
-static const char *OTA_HOST  = "192.168.0.10";
-static const uint16_t OTA_PORT = 80;
-static const char *OTA_PATH  = "/firmware/knocking.bin";
+static const char* OTA_HOST = "192.168.0.10";
+static constexpr uint16_t OTA_PORT = 80;
+static const char* OTA_PATH = "/firmware/knocking.bin";
 
-// ======================= DFPLAYER CONFIG =====================
-HardwareSerial &dfSerial = Serial2;
-DFRobotDFPlayerMini dfPlayer;
-bool dfOk = false;
+// ======================= CORE + MODULE =======================
+static NodeCore nodeCore;
+static StopTimerRiddle stopTimer;
 
-// ======================= PIEZO CONFIG ========================
-static const int N_SENSORS = 3;
-static const int PIEZO_PINS[N_SENSORS] = { 32, 33, 34 };
-
-// Raw threshold for considering a knock
-static const uint16_t KNOCK_RAW_THR = 1200;
-// Release threshold (must fall below this to re-arm)
-static const uint16_t KNOCK_REL_THR = 800;
-// Debounce per sensor (ms)
-static const unsigned long KNOCK_DEBOUNCE_MS = 120;
-
-// Metric/EMA config
-struct PiezoState {
-  int      pin;
-  uint32_t sum;
-  uint16_t samples;
-  uint16_t avg;
-  uint16_t base;
-  uint16_t maxVal;
-  uint16_t lastRaw;
-
-  // 10 buckets per second: each ~100ms
-  static const int N_BUCKETS = 10;
-  uint32_t bucketSum[N_BUCKETS];
-  uint16_t bucketSamples[N_BUCKETS];
-};
-PiezoState piezo[N_SENSORS];
-
-struct HitState {
-  bool latched;
-};
-HitState hitState[N_SENSORS];
-
-unsigned long lastMetricMs = 0;
-static const unsigned long METRIC_INTERVAL_MS        = 1000;
-// Old tuning values kept for reference; not used in bucketed calib mode.
-// static const uint32_t METRIC_IDLE_INTERVAL_MS     = 10000;
-// static const uint16_t METRIC_ACTIVITY_THRESHOLD   = 150;
-static uint32_t lastIdleMetricMs = 0; // unused in calib mode, harmless
-
-// ======================= SEQUENCE CONFIG =====================
-// Target pattern: 0,0,0,0,1,1,2,2,2
-static const int SEQ_EXPECT_LEN = 9;
-static const int SEQ_EXPECT[SEQ_EXPECT_LEN] = {0,0,0,0,1,1,2,2,2};
-
-static const int SEQ_MAX_LEN = 16;
-int seqBuf[SEQ_MAX_LEN];
-int seqLen = 0;
-
-unsigned long lastSeqActivityMs = 0;
-static const unsigned long SEQ_TIMEOUT_MS = 3000; // 3 s after last knock -> evaluate
-
-// Per-sensor debounce
-unsigned long lastKnockMs[N_SENSORS];
-
-// ======================= GLOBALS =============================
-EthernetClient ethClient;
-PubSubClient mqtt(ethClient);
-
-unsigned long lastHbMs = 0;
-static const unsigned long HB_INTERVAL_MS = 5000;
-
-bool enabled = true;
-
-// error counter (for HB err field)
-uint32_t g_errorCount = 0;
-
-// ======================= LOG UTILS ===========================
-// lvl: "DBG","INF","WRN","ERR"
-void publishLog(const char *lvl, const String &msg, const String &dataJson = String()) {
-  bool isErr = (strcmp(lvl, "ERR") == 0);
-  bool allow = false;
-
-  if (isErr) {
-    allow = true;
-  } else if (KNOCK_DEV_LOG) {
-    // DEV: allow all levels
-    allow = true;
-  } else {
-    // PROD: only errors
-    allow = false;
-  }
-
-  if (!allow) {
-    if (isErr) g_errorCount++;  // still count errors for HB
-    return;
-  }
-
-  String payload = String("{\"fw\":\"") + FW_VERSION +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"lv\":\"" + lvl + "\",\"msg\":\"" + msg + "\"";
-  if (dataJson.length() > 0) {
-    payload += ",\"d\":" + dataJson;
-  }
-  payload += "}";
-
-  mqtt.publish(TOPIC_LOG, payload.c_str());
-
-  if (isErr) {
-    g_errorCount++;
-  }
+static bool logFilter(const char* level, void* user) {
+  auto* module = static_cast<StopTimerRiddle*>(user);
+  return module ? module->shouldAllowLog(level) : true;
 }
 
-void logErr(const String &msg, const String &dataJson = String()) {
-  publishLog("ERR", msg, dataJson);
+static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
+  auto* module = static_cast<StopTimerRiddle*>(user);
+  bool dfOk = module ? module->dfReady() : false;
+  uint32_t err = module ? module->errorCount() : 0;
+  const char* st = (!ctx.enabled() || !dfOk || err > 0) ? "warn" : "ok";
+  out = String("{\"fw\":\"") + ctx.fwVersion() +
+        "\",\"up\":" + String(ctx.uptimeSeconds()) +
+        ",\"st\":\"" + st + "\",\"err\":" + String(err) +
+        "}";
 }
 
-// ======================= OTA (HTTP pull) =====================
-bool doHttpOta() {
-  EthernetClient client;
-  String url = String("http://") + OTA_HOST + OTA_PATH;
-  publishLog("INF", String("CMD UPDATE -> HTTP OTA ") + url);
-
-  if (!client.connect(OTA_HOST, OTA_PORT)) {
-    logErr("OTA connect failed");
-    return false;
-  }
-
-  client.print("GET ");
-  client.print(OTA_PATH);
-  client.print(" HTTP/1.1\r\nHost: ");
-  client.print(OTA_HOST);
-  client.print("\r\nConnection: close\r\n\r\n");
-
-  long contentLength = -1;
-
-  // Read headers
-  while (client.connected()) {
-    String line = client.readStringUntil('\n');
-    if (line == "\r" || line.length() == 0) break;
-
-    String low = line;
-    low.toLowerCase();
-    if (low.startsWith("content-length:")) {
-      low.replace("content-length:", "");
-      low.trim();
-      contentLength = low.toInt();
-    }
-  }
-
-  if (contentLength <= 0) {
-    logErr("OTA invalid content-length");
-    return false;
-  }
-
-  if (!Update.begin(contentLength)) {
-    logErr("OTA Update.begin failed");
-    return false;
-  }
-
-  uint8_t buf[512];
-
-  while (client.connected() || client.available()) {
-    int len = client.read(buf, sizeof(buf));
-    if (len <= 0) continue;
-    Update.write(buf, len);
-  }
-
-  if (!Update.end(true)) {
-    logErr("OTA Update.end failed");
-    return false;
-  }
-
-  publishLog("INF", "OTA OK, rebooting");
-  delay(500);
-  ESP.restart();
-  return true;
+static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
+  auto* module = static_cast<StopTimerRiddle*>(user);
+  return module ? module->onCmd(cmd, payload) : false;
 }
 
-// ======================= EVENT PUBLISH =======================
-void publishSolvedEvent() {
-  String payload = String("{\"event\":\"SOLVED\",\"rid\":\"knocking\"}");
-  mqtt.publish(TOPIC_EVENT, payload.c_str());
+static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
+  if (!TOPIC_OTA || !st) return;
+  NodeContext& ctx = nodeCore.context();
+  const char* fw = ctx.fwVersion() ? ctx.fwVersion() : FW_VERSION;
+  String payload;
+  payload.reserve(96 + dataJson.length());
+  payload = String("{\"fw\":\"") + fw +
+            "\",\"up\":" + String(ctx.uptimeSeconds()) +
+            ",\"st\":\"" + st + "\",\"d\":" + dataJson + "}";
+  ctx.publish(TOPIC_OTA, payload, retained);
 }
 
-// ======================= SEQUENCE HELPERS ====================
-void resetSequence() {
-  seqLen = 0;
-  lastSeqActivityMs = 0;
-}
-
-void playFailSoundX5() {
-  if (!dfOk) return;
-  for (int i = 0; i < 5; i++) {
-    dfPlayer.play(1);  // fail sound on track 1
-    delay(300);
-  }
-}
-
-void evaluateSequence() {
-  if (seqLen == 0) return;
-
-  // Buffer string for debug
-  String seqStr;
-  for (int i = 0; i < seqLen; i++) {
-    if (i > 0) seqStr += ",";
-    seqStr += seqBuf[i];
-  }
-
-  if (KNOCK_DEV_LOG) {
-    String evalMsg = String("SEQ_EVAL len=") + seqLen + " buf=[" + seqStr + "]";
-    publishLog("INF", evalMsg);
-  }
-
-  bool ok = true;
-  if (seqLen != SEQ_EXPECT_LEN) {
-    ok = false;
-  } else {
-    for (int i = 0; i < SEQ_EXPECT_LEN; i++) {
-      if (seqBuf[i] != SEQ_EXPECT[i]) {
-        ok = false;
-        break;
-      }
-    }
-  }
-
-  if (ok) {
-    publishLog("INF", "SEQUENCE OK -> SOLVED & open maglock");
-    if (dfOk) {
-      dfPlayer.play(2);  // success sound (track 2)
-    }
-    publishSolvedEvent();
-    resetSequence();
-  } else {
-    publishLog("INF", "SEQUENCE FAIL -> FAIL SOUND x5 & reset");
-    playFailSoundX5();
-    resetSequence();
-  }
-}
-
-void evaluateSequenceIfDue() {
-  if (seqLen == 0) return;
-  unsigned long now = millis();
-  if (now - lastSeqActivityMs < SEQ_TIMEOUT_MS) return;
-  // 3 seconds of silence -> evaluate whatever we have
-  evaluateSequence();
-}
-
-// ======================= SOUND HANDLING ======================
-void playKnockSound(int idx) {
-  if (!dfOk) return;
-  int count = idx + 1;  // 0 -> 1, 1 -> 2, 2 -> 3
-  for (int i = 0; i < count; i++) {
-    dfPlayer.play(1);
-    delay(200);  // small gap between beeps
-  }
-}
-
-// ======================= KNOCK HANDLING ======================
-void registerKnock(int idx, uint16_t raw) {
-  if (!enabled) return;
-  unsigned long now = millis();
-  if (now - lastKnockMs[idx] < KNOCK_DEBOUNCE_MS) return;
-  lastKnockMs[idx] = now;
-
-  if (KNOCK_DEV_LOG) {
-    publishLog("INF", String("KNOCK on sensor ") + idx + " raw=" + raw);
-  }
-
-  // Append to sequence buffer
-  if (seqLen < SEQ_MAX_LEN) {
-    seqBuf[seqLen++] = idx;
-  }
-
-  // Update activity timestamp for timer-based evaluation
-  lastSeqActivityMs = now;
-
-  // Per-sensor beep count (all on track 1):
-  // sensor 0 -> 1 beep; 1 -> 2 beeps; 2 -> 3 beeps
-  playKnockSound(idx);
-}
-
-// ======================= HEARTBEAT ===========================
-void publishHeartbeatIfDue() {
-  unsigned long now = millis();
-  if (now - lastHbMs < HB_INTERVAL_MS) return;
-  lastHbMs = now;
-
-  const char *st;
-  if (!enabled) {
-    st = "warn";
-  } else if (!dfOk || g_errorCount > 0) {
-    st = "warn";
-  } else {
-    st = "ok";
-  }
-
-  String hb = String("{\"fw\":\"") + FW_VERSION +
-              "\",\"up\":" + String(now / 1000) +
-              ",\"st\":\"" + st + "\",\"err\":" + String(g_errorCount) +
-              "}";
-  mqtt.publish(TOPIC_HB, hb.c_str(), true);
-}
-
-// ======================= METRICS =============================
-// 1 metric per second per sensor,
-// each with 10x100ms buckets in "w":[...]
-void publishMetricsIfDue() {
-  unsigned long now = millis();
-  if (now - lastMetricMs < METRIC_INTERVAL_MS) return;
-  lastMetricMs = now;
-
-  uint32_t uptime = now / 1000;
-
-  for (int i = 0; i < N_SENSORS; i++) {
-    PiezoState &ps = piezo[i];
-
-    // Overall 1s average
-    if (ps.samples > 0) {
-      ps.avg = ps.sum / ps.samples;
-    } else {
-      ps.avg = 0;
-    }
-
-    // Rolling baseline (EMA)
-    if (ps.base == 0) {
-      ps.base = ps.avg;
-    } else {
-      ps.base = (ps.base * 15 + ps.avg) / 16;
-    }
-
-    int d = (int)ps.avg - (int)ps.base;
-
-    // Build 10-bucket window array (avg per 100ms)
-    String window = "[";
-    for (int b = 0; b < PiezoState::N_BUCKETS; b++) {
-      uint16_t wAvg = 0;
-      if (ps.bucketSamples[b] > 0) {
-        wAvg = ps.bucketSum[b] / ps.bucketSamples[b];
-      }
-      window += String(wAvg);
-      if (b < PiezoState::N_BUCKETS - 1) window += ",";
-    }
-    window += "]";
-
-    // Metric payload: 1 log per second per sensor
-    String payload = String("{\"fw\":\"") + FW_VERSION +
-                     "\",\"up\":" + uptime +
-                     ",\"k\":\"knocking\"" +
-                     ",\"df\":" + (dfOk ? "1" : "0") +
-                     ",\"en\":" + (enabled ? "1" : "0") +
-                     ",\"i\":" + i +
-                     ",\"avg\":" + ps.avg +
-                     ",\"max\":" + ps.maxVal +
-                     ",\"base\":" + ps.base +
-                     ",\"d\":" + d +
-                     ",\"thr\":" + KNOCK_RAW_THR +
-                     ",\"w\":" + window +
-                     "}";
-
-    mqtt.publish(TOPIC_METRIC, payload.c_str());
-
-    // Reset accumulators for next second
-    ps.sum     = 0;
-    ps.samples = 0;
-    ps.maxVal  = 0;
-    for (int b = 0; b < PiezoState::N_BUCKETS; b++) {
-      ps.bucketSum[b]     = 0;
-      ps.bucketSamples[b] = 0;
-    }
-  }
-}
-
-// ======================= MQTT HANDLING =======================
-void handleCmd(const String &msg) {
-  if (msg == "DISABLE") {
-    enabled = false;
-    publishLog("INF", "CMD DISABLE");
-    return;
-  }
-  if (msg == "ENABLE") {
-    enabled = true;
-    publishLog("INF", "CMD ENABLE");
-    return;
-  }
-  if (msg == "PING") {
-    publishLog("DBG", "CMD PING");
-    publishHeartbeatIfDue();
-    return;
-  }
-  if (msg == "UPDATE") {
-    doHttpOta();
-    return;
-  }
-  if (msg == "REBOOT") {
-    publishLog("INF", "CMD REBOOT");
-    delay(200);
-    ESP.restart();
-    return;
-  }
-  publishLog("WRN", String("Unknown CMD: ") + msg);
-}
-
-void mqttCallback(char *topicC, byte *payload, unsigned int length) {
-  String topic(topicC);
-  String msg;
-  msg.reserve(length);
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  msg.trim();
-
-  if (topic == TOPIC_CMD) {
-    publishLog("DBG", String("CMD topic=") + topic + " msg=" + msg);
-    handleCmd(msg);
-  }
-}
-
-void mqttReconnect() {
-  int tries = 0;
-  while (!mqtt.connected() && tries < 3) {
-    if (mqtt.connect(CLIENT_ID, TOPIC_HB, 0, true, "offline")) {
-      publishLog("INF", "MQTT connected");
-      mqtt.subscribe(TOPIC_CMD);
-      publishHeartbeatIfDue();  // initial HB
-      return;
-    } else {
-      tries++;
-      delay(1000);
-    }
-  }
-  if (!mqtt.connected()) {
-    logErr("MQTT reconnect failed", "{\"tries\":3}");
-  }
-}
-
-// ======================= SETUP ===============================
+// ======================= ARDUINO LIFECYCLE ===================
 void setup() {
-  // DFPlayer
-  dfSerial.begin(9600, SERIAL_8N1, 16, 17); // RX=16, TX=17
-  if (dfPlayer.begin(dfSerial)) {
-    dfOk = true;
-    dfPlayer.volume(25);
-  } else {
-    dfOk = false;
-    logErr("DFPlayer init failed");
-  }
+  NodeCoreConfig cfg;
+  cfg.fwVersion = FW_VERSION;
+  cfg.fwDescription = FW_DESC;
+  cfg.startEnabled = true;
+  cfg.prefsNamespace = "stop_timer";
 
-  // Init piezo + hit states
-  for (int i = 0; i < N_SENSORS; i++) {
-    piezo[i].pin     = PIEZO_PINS[i];
-    piezo[i].sum     = 0;
-    piezo[i].samples = 0;
-    piezo[i].avg     = 0;
-    piezo[i].base    = 0;
-    piezo[i].maxVal  = 0;
-    piezo[i].lastRaw = 0;
-    lastKnockMs[i]   = 0;
-    hitState[i].latched = false;
+  std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
+  cfg.net.ip = NET_IP;
+  cfg.net.dns = NET_DNS;
+  cfg.net.gateway = NET_GW;
+  cfg.net.subnet = NET_SUBNET;
+  cfg.net.mqttServer = MQTT_SERVER;
+  cfg.net.mqttPort = MQTT_PORT;
+  cfg.net.clientId = "knocking";
+  cfg.net.topicLwt = TOPIC_HB;
 
-    for (int b = 0; b < PiezoState::N_BUCKETS; b++) {
-      piezo[i].bucketSum[b]     = 0;
-      piezo[i].bucketSamples[b] = 0;
-    }
-  }
+  cfg.topics = {TOPIC_HB, TOPIC_CMD, TOPIC_LOG};
+  cfg.log.format = LogFormat::FwUptimeLevelMsg;
+  cfg.log.includeDataField = true;
+  cfg.log.filter = logFilter;
+  cfg.log.filterUser = &stopTimer;
 
-  // Ethernet reset
-  pinMode(ETH_RST, OUTPUT);
-  digitalWrite(ETH_RST, LOW);
-  delay(50);
-  digitalWrite(ETH_RST, HIGH);
-  delay(50);
+  cfg.heartbeat.intervalMs = 5000;
+  cfg.heartbeat.builder = heartbeatBuilder;
+  cfg.heartbeat.user = &stopTimer;
 
-  SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI, ETH_CS);
-  Ethernet.init(ETH_CS);
-  Ethernet.begin(mac, ip, dns, gw, subnet);
+  cfg.commands.cmdLogLevel = "DBG";
+  cfg.commands.levelEnable = "INF";
+  cfg.commands.levelDisable = "INF";
+  cfg.commands.levelPing = "DBG";
+  cfg.commands.allowReboot = true;
+  cfg.commands.levelReboot = "INF";
+  cfg.commands.logUnknown = true;
+  cfg.commands.levelUnknown = "WRN";
+  cfg.commands.logUpdate = false;
 
-  mqtt.setServer(mqttServer, mqttPort);
-  mqtt.setCallback(mqttCallback);
+  cfg.ota.host = OTA_HOST;
+  cfg.ota.port = OTA_PORT;
+  cfg.ota.path = OTA_PATH;
+  cfg.ota.infoLevel = "INF";
+  cfg.ota.errLevel = "ERR";
+  cfg.ota.statusPublisher = publishOtaStatus;
 
-  lastHbMs     = millis();
-  lastMetricMs = millis();
+  nodeCore.begin(cfg);
+  nodeCore.registerCommandHandler(moduleCommandHandler, &stopTimer);
+
+  NodeContext& ctx = nodeCore.context();
+  stopTimer.begin(ctx);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC);
 }
 
-// ======================= LOOP ================================
 void loop() {
-  if (!mqtt.connected()) {
-    mqttReconnect();
-  }
-  mqtt.loop();
-
-  unsigned long now = millis();
-
-  // Sample all piezos + edge detect
-  for (int i = 0; i < N_SENSORS; i++) {
-    PiezoState &ps = piezo[i];
-    uint16_t raw = analogRead(ps.pin);
-    ps.lastRaw = raw;
-
-    // Global 1s accumulation
-    ps.sum += raw;
-    ps.samples++;
-    if (raw > ps.maxVal) ps.maxVal = raw;
-
-    // 10 buckets per second: each ~100ms
-    uint8_t bucketIdx = (now / 100) % PiezoState::N_BUCKETS;
-    ps.bucketSum[bucketIdx]     += raw;
-    ps.bucketSamples[bucketIdx] += 1;
-
-    // Edge-detect style knock detection using latch
-    if (!hitState[i].latched && raw >= KNOCK_RAW_THR) {
-      hitState[i].latched = true;
-      registerKnock(i, raw);
-    } else if (hitState[i].latched && raw < KNOCK_REL_THR) {
-      hitState[i].latched = false;
-    }
-  }
-
-  // Timeout-based sequence evaluation only
-  evaluateSequenceIfDue();
-
-  // Metrics + heartbeat
-  publishMetricsIfDue();
-  publishHeartbeatIfDue();
+  nodeCore.loop();
+  stopTimer.tick(millis());
 }

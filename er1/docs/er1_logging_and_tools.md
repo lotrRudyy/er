@@ -11,7 +11,7 @@
 - Broker: `LOCAL_BROKER` env (defaults to `127.0.0.1`).
 - Timestamp: `date +"[%d.%m.%Y %H:%M:%S.%3N]"`.
 - Subcommands:
-  - `daemon` — write esc/# to the daily log (no stdout).
+  - `daemon` — write er1/# to the daily log (no stdout).
   - `live` — same as daemon but also echoes to the terminal.
   - `tail` — `tail -f` today's file.
   - `grep <pattern>` — grep today's file.

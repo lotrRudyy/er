@@ -39,7 +39,7 @@ send_cmd() {
   local action="$1"
   local id="$2"
   local broker="$3"
-  mosquitto_pub -h "$broker" -t "esc/ctrl/lock/${id}/cmd" -m "$action"
+  mosquitto_pub -h "$broker" -t "er1/ctrl/lock/${id}/cmd" -m "$action"
 }
 
 main() {

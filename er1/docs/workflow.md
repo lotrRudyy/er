@@ -29,8 +29,6 @@ er/
   shared/
     pc-scripts/        # PowerShell and deployment tooling
       er1_profile.ps1
-      deploy_pi.ps1
-      push.ps1
       open_er1_pi_terminals.ps1
       reset_repo.ps1
       push.sh
@@ -66,44 +64,37 @@ It loads `er1_profile.ps1` from one of two repo roots:
 - **PC:** `C:\Users\rudol\Documents\Escape Room\er`
 - **Laptop:** `C:\Users\Rudy\Documents\er`
 
-The profile provides all ER commands (`er-commit`, `er1-deploy`, `er1-ota`, etc.).
+The profile provides all ER commands (`er1 push`, `er1 deploy`, `er1 ota`, etc.).
 
 ---
 
 # 3. Commands Defined in `er1_profile.ps1`
 
-## 3.1 `er-commit`
-Stages → commits → pushes from the repo root.
+## 3.1 `er1 push`
+Stages → commits → pushes from the repo root. Prints the current branch and
+upstream, sets the upstream to `origin/<branch>` if missing, and refuses to run
+outside the repo.
 
 ```
-er-commit "updated chess fsm"
+er1 push "updated chess fsm"
 ```
 
-## 3.2 `er1-deploy`
-Deploys the Pi runtime (`er1/pi-runtime`) to `/home/rudyy/er1` and restarts the systemd runtime.
+## 3.2 `er1 deploy`
+Deploys the Pi runtime (`er1/pi-runtime`) to `/home/rudyy/er1`.
 
 ```
-er1-deploy er1
-er1-deploy er1 -Mode full
+er1 deploy           # runtime mode (scripts/systemd/docs/config template)
+er1 deploy full      # mirror the whole pi-runtime tree
 ```
 
 ### Deployment behavior
 
-- Uses `rsync -avz --delete` if available.
-- Falls back to `scp -r` automatically on machines without rsync (e.g., laptop).
-- Syncs:
-  - scripts/
-  - systemd/
-  - docs/
-  - config/local.env.example
-- Does **not** overwrite:
-  - config/local.env
-  - logs/
-- Restarts:
-
-```
-sudo systemctl restart er1-runtime.service
-```
+- Uses `rsync -avz --delete` if available, `scp -r` fallback otherwise.
+- Syncs scripts/, systemd/, docs/, and config/ (skipping `config/local.env`).
+- Leaves `/home/rudyy/er1/logs/` untouched.
+- Re-applies execute bits on the remote runtime tree.
+- Prints each rsync/scp command before running it so you know what will happen.
+- Follow deployment with `er1 push "<msg>"` so Pi + Git stay aligned.
 
 ---
 
@@ -157,7 +148,7 @@ All logs originate from `/home/rudyy/er1/scripts/mqtt-logs.sh`.
 High-level helpers that publish to:
 
 ```
-esc/ctrl/lock/<id>/cmd
+er1/ctrl/lock/<id>/cmd
 ```
 
 Available lock IDs:
@@ -197,33 +188,34 @@ Pi runtime directory after deploy:
   logs/                 # preserved
 ```
 
-`deploy_pi.ps1` replaces only files under:
+`er1 deploy` (runtime mode) replaces only files under:
 
 - `/scripts/`
 - `/systemd/`
 - `/docs/`
 - `config/local.env.example`
 
-It does **not** delete logs or overwrite local.env.
+It does **not** delete logs or overwrite `config/local.env`.
 
 ---
 
-## 4.2 Deploy Script (`deploy_pi.ps1`)
+## 4.2 Deploy Command (`er1 deploy`)
 
 Deploy steps:
 
-1. Detect correct repo root (PC or laptop)
-2. Validate reachable Pi
-3. Sync runtime using rsync or scp fallback
-4. Restart runtime:
+1. Detect correct repo root (PC or laptop) and Pi target via `$er1Pi`.
+2. Validate the Pi is reachable (`ssh $er1Pi`).
+3. Sync runtime using `rsync -avz --delete` (or `scp -r` fallback when rsync is missing).
+4. Re-apply execute bits on `~/er1/er1` and scripts/.
+5. Print a reminder to commit+push so Git matches what was deployed.
+
+`er1 deploy full` mirrors the entire `pi-runtime/` tree with the same safeguards.
+
+If services need a bounce after copying, restart them manually, e.g.:
 
 ```
-sudo systemctl restart er1-runtime.service
+ssh rudyy@100.108.1.80 "sudo systemctl restart er1-runtime.service"
 ```
-
-5. Print status
-
-Deployment is atomic and idempotent.
 
 ---
 
@@ -340,10 +332,10 @@ er1-ota <Dev>
 - Wrong repo path
 - Wrong profile path
 
-### `er-commit` not found
-`er1_profile.ps1` didn’t load — fix VS Code profile.
+### `er1 push` not found
+`er1_profile.ps1` didn't load - fix VS Code profile.
 
-### `er1-deploy` fails
+### `er1 deploy` fails
 - Pi unreachable
 - Wrong SSH key or password
 - Use scp fallback on laptop (rsync missing)

@@ -1,0 +1,198 @@
+#include "star_slider_riddle.h"
+
+#include <cstring>
+
+namespace {
+constexpr const char* kTopicMetric = "er1/room3/star_slider/metric";
+constexpr const char* kTopicEvent = "er1/room3/star_slider/event";
+}  // namespace
+
+void StarSliderRiddle::begin(Core::NodeContext& ctx) {
+  ctx_ = &ctx;
+  prefs_ = &ctx.prefs();
+
+  pinMode(kButtonPin, INPUT_PULLUP);
+  btnPrevState_ = digitalRead(kButtonPin);
+  btnWasPressed_ = false;
+  btnLastChangeMs_ = millis();
+  lastPollMs_ = millis();
+  lastMetricMs_ = millis();
+
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    readers_[i].PCD_Init();
+    tagValid_[i] = false;
+    tagSize_[i] = 0;
+  }
+
+  solvedFlag_ = prefs_ ? prefs_->getBool("solved", false) : false;
+  if (solvedFlag_) {
+    log("INF", "BOOT solved=1 (repeatable SOLVED events enabled)");
+  } else {
+    log("INF", "BOOT solved=0");
+  }
+}
+
+void StarSliderRiddle::tick(uint32_t nowMs) {
+  pollReaders(nowMs);
+  handleButton(nowMs);
+  publishMetricsIfDue(nowMs);
+}
+
+bool StarSliderRiddle::onCmd(const char* cmd, const char* payload) {
+  (void)cmd;
+  (void)payload;
+  return false;
+}
+
+void StarSliderRiddle::log(const char* level, const String& msg) {
+  if (!ctx_) return;
+  if (strcmp(level, "ERR") == 0) {
+    errorCount_++;
+  }
+  ctx_->log(level, msg);
+}
+
+void StarSliderRiddle::log(const char* level, const String& msg, const String& dataJson) {
+  if (!ctx_) return;
+  if (strcmp(level, "ERR") == 0) {
+    errorCount_++;
+  }
+  ctx_->log(level, msg, dataJson);
+}
+
+void StarSliderRiddle::logErr(const String& msg, const String& dataJson) {
+  if (dataJson.length() > 0) {
+    log("ERR", msg, dataJson);
+  } else {
+    log("ERR", msg);
+  }
+}
+
+void StarSliderRiddle::pollReaders(uint32_t nowMs) {
+  if (nowMs - lastPollMs_ < kPollIntervalMs) return;
+  lastPollMs_ = nowMs;
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    pollReader(i);
+  }
+}
+
+void StarSliderRiddle::pollReader(uint8_t idx) {
+  if (idx >= kReaderCount) return;
+  MFRC522& reader = readers_[idx];
+
+  if (!reader.PICC_IsNewCardPresent()) {
+    tagValid_[idx] = false;
+    return;
+  }
+  if (!reader.PICC_ReadCardSerial()) {
+    tagValid_[idx] = false;
+    return;
+  }
+
+  uint8_t len = reader.uid.size > 4 ? 4 : reader.uid.size;
+  std::memcpy(tagUid_[idx], reader.uid.uidByte, len);
+  tagSize_[idx] = len;
+  tagValid_[idx] = true;
+
+  reader.PICC_HaltA();
+  reader.PCD_StopCrypto1();
+}
+
+bool StarSliderRiddle::uidEquals(const byte* a, const byte* b, uint8_t len) const {
+  for (uint8_t i = 0; i < len; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+bool StarSliderRiddle::isCurrentPatternCorrect() const {
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    if (!tagValid_[i]) return false;
+    if (tagSize_[i] < 4) return false;
+    if (!uidEquals(tagUid_[i], kUidExpected[i], 4)) return false;
+  }
+  return true;
+}
+
+void StarSliderRiddle::evaluateSolveAttempt() {
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    pollReader(i);
+  }
+
+  solveAttempts_++;
+
+  if (isCurrentPatternCorrect()) {
+    solvedFlag_ = true;
+    solveSuccess_++;
+    if (prefs_) {
+      prefs_->putBool("solved", true);
+    }
+    log("INF", "pattern SOLVED");
+    publishSolvedEvent(solveAttempts_);
+  } else {
+    String data = "{";
+    for (uint8_t i = 0; i < kReaderCount; i++) {
+      if (i > 0) data += ",";
+      data += "\"r";
+      data += String(i);
+      data += "\":\"";
+      if (tagValid_[i] && tagSize_[i] >= 4) {
+        for (uint8_t b = 0; b < 4; b++) {
+          if (b > 0) data += "-";
+          if (tagUid_[i][b] < 0x10) data += "0";
+          data += String(tagUid_[i][b], HEX);
+        }
+      } else {
+        data += "none";
+      }
+      data += "\"";
+    }
+    data += "}";
+    log("INF", "pattern WRONG", data);
+  }
+}
+
+void StarSliderRiddle::handleButton(uint32_t nowMs) {
+  bool raw = digitalRead(kButtonPin);
+  if (raw != btnPrevState_) {
+    btnPrevState_ = raw;
+    btnLastChangeMs_ = nowMs;
+    return;
+  }
+  if (nowMs - btnLastChangeMs_ < kBtnDebounceMs) return;
+
+  if (raw == LOW && !btnWasPressed_) {
+    btnWasPressed_ = true;
+    if (ctx_ && ctx_->enabled()) {
+      evaluateSolveAttempt();
+    } else {
+      log("WRN", "button press while DISABLED");
+    }
+  } else if (raw == HIGH && btnWasPressed_) {
+    btnWasPressed_ = false;
+  }
+}
+
+void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
+  if (!ctx_) return;
+  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
+                   "\",\"up\":" + String(millis() / 1000) +
+                   ",\"event\":\"SOLVED\",\"attempt\":" + String(attemptIdx) +
+                   "}";
+  ctx_->publish(kTopicEvent, payload);
+}
+
+void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
+  if (!ctx_) return;
+  if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
+  lastMetricMs_ = nowMs;
+
+  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
+                   "\",\"up\":" + String(nowMs / 1000) +
+                   ",\"k\":\"star_slider\"" +
+                   ",\"solved\":" + (solvedFlag_ ? "1" : "0") +
+                   ",\"attempts\":" + String(solveAttempts_) +
+                   ",\"success\":" + String(solveSuccess_) +
+                   "}";
+  ctx_->publish(kTopicMetric, payload);
+}
