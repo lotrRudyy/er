@@ -9,14 +9,23 @@ using Core::TimestampFields;
 
 namespace {
 
+String failureReason;
+
+void recordFailure(const char* name, const char* detail) {
+  if (failureReason.length() == 0) {
+    failureReason.reserve(strlen(name) + strlen(detail) + 3);
+    failureReason += name;
+    failureReason += ": ";
+    failureReason += detail;
+  }
+}
+
 bool expect(bool condition, const char* name, const char* detail) {
   if (!condition) {
-    Serial.print("FAIL ");
-    Serial.print(name);
-    Serial.print(": ");
-    Serial.println(detail);
+    recordFailure(name, detail);
+    return false;
   }
-  return condition;
+  return true;
 }
 
 bool validatePayload(const char* name, const String& data, bool expectObject, const char* expectedStringValue = nullptr) {
@@ -28,7 +37,7 @@ bool validatePayload(const char* name, const String& data, bool expectObject, co
   LogMessage lm{"DBG", &msg, &data};
   String payload = logger.buildPayloadForTest(lm, ts);
 
-  StaticJsonDocument<512> doc;
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (!expect(!err, name, err.c_str())) return false;
 
@@ -71,7 +80,15 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   bool ok = runSelfTests();
-  Serial.println(ok ? "CORE_LOG_SELFTEST: PASS" : "CORE_LOG_SELFTEST: FAIL");
+  if (ok) {
+    Serial.println("CORE_LOG_SELFTEST: PASS");
+  } else {
+    Serial.print("CORE_LOG_SELFTEST: FAIL ");
+    Serial.println(failureReason.length() ? failureReason : "unknown");
+  }
+  while (true) {
+    delay(1000);
+  }
 }
 
 void loop() {}
