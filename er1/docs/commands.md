@@ -6,11 +6,8 @@ er1 log                # tail today (all devices)
 er1 log knocking -n 400
 er1 log knocking -live
 er1 log knocking -errors
-
-# Advanced logs via Pi CLI
-er1 logs help
-er1 logs today
-er1 logs date 06.12.2025
+er1 log images_piano --save
+er1 log -live --save
 
 # OTA
 er1 ota knocking

@@ -119,23 +119,32 @@ er1/firmware/.pio/build/<env>/<Dev>.bin
 
 ## Logging
 
-Live:
+Tail today's Pi log:
 
 ```
-er1-log-live
+er1 log
 ```
 
-By device:
+Filter by device:
 
 ```
-er1-log-node star_sky
+er1 log star_sky
 ```
 
-MQTT → file logger runs on the Pi and outputs:
+Live stream:
 
 ```
-/home/rudyy/er1/logs/er1-DD.MM.YYYY.log
+er1 log -live
 ```
+
+Save a copy while streaming:
+
+```
+er1 log star_sky --save
+er1 log -live --save
+```
+
+`--save` writes the live stream (with timestamps) under `<repo>\logs\yyyy-MM-dd_HH-mm-ss__pi_*.log` while still echoing to the console. Pi logfile source remains `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
 
 ---
 

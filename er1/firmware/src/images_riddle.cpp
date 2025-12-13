@@ -1,5 +1,7 @@
 #include "images_riddle.h"
 
+#include <cstring>
+
 namespace {
 
 String prefixedMessage(const char* prefix, const String& msg) {
@@ -22,19 +24,13 @@ void ImagesRiddle::begin(Core::NodeContext& ctx) {
     buttons_[i].cur = lvl;
     buttons_[i].prev = lvl;
   }
-
-  allPressedPrev_ = true;
-  for (int i = 0; i < kButtonCount; i++) {
-    if (buttons_[i].cur != LOW) {
-      allPressedPrev_ = false;
-      break;
-    }
-  }
-
+  solved_ = false;
+  allDownHoldActive_ = false;
+  allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
 }
 
-void ImagesRiddle::tick(uint32_t /*nowMs*/) {
+void ImagesRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
 
   for (int i = 0; i < kButtonCount; i++) {
@@ -47,10 +43,22 @@ void ImagesRiddle::tick(uint32_t /*nowMs*/) {
     }
   }
 
-  checkSolved();
+  if (!ctx_->enabled()) {
+    cancelAllDownHold("disabled");
+    return;
+  }
+
+  if (solved_) return;
+
+  handleAllDownHold(nowMs);
 }
 
-bool ImagesRiddle::onCmd(const char* /*cmd*/, const char* /*payload*/) {
+bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
+  if (!cmd) return false;
+  if (strcasecmp(cmd, "RESET_IMAGES") == 0) {
+    resetState("reset_images");
+    return true;
+  }
   return false;
 }
 
@@ -80,26 +88,62 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
   publishButtonMetricsOnChange(idx);
 }
 
-void ImagesRiddle::checkSolved() {
-  bool allPressedNow = true;
+void ImagesRiddle::resetState(const char* reason) {
+  cancelAllDownHold(reason ? reason : "reset");
+  bool wasSolved = solved_;
+  solved_ = false;
+  if (reason) {
+    String data = String("{\"src\":\"") + reason +
+                  "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
+    log("INFO", "IMAGES_STATE_RESET", data);
+  }
+}
+
+void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
+  bool allPressed = true;
   for (int i = 0; i < kButtonCount; i++) {
     if (buttons_[i].cur != LOW) {
-      allPressedNow = false;
+      allPressed = false;
       break;
     }
   }
 
-  if (!allPressedPrev_ && allPressedNow) {
-    log("INFO", "ALL 4 BUTTONS PRESSED EDGE -> SOLVED (images riddle)");
-    if (ctx_->enabled()) {
-      publishSolvedEvent("images");
-      openImagesMaglock();
-    } else {
-      log("INFO", "SOLVED condition reached but node is DISABLED -> no event / no open");
-    }
+  if (!allPressed) {
+    cancelAllDownHold("release");
+    return;
   }
 
-  allPressedPrev_ = allPressedNow;
+  if (!allDownHoldActive_) {
+    startAllDownHold(nowMs);
+    return;
+  }
+
+  if (nowMs - allDownHoldStartMs_ < kAllDownHoldMs) {
+    return;
+  }
+
+  allDownHoldActive_ = false;
+  allDownHoldStartMs_ = 0;
+  solved_ = true;
+  log("INFO", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+  publishSolvedEvent("images");
+  openImagesMaglock();
+}
+
+void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
+  allDownHoldActive_ = true;
+  allDownHoldStartMs_ = nowMs;
+  String data = String("{\"hold_ms\":") + kAllDownHoldMs + "}";
+  log("INFO", "ALL_DOWN_TIMER_START", data);
+}
+
+void ImagesRiddle::cancelAllDownHold(const char* reason) {
+  allDownHoldStartMs_ = 0;
+  if (!allDownHoldActive_) return;
+  allDownHoldActive_ = false;
+  const char* why = reason ? reason : "release";
+  String data = String("{\"reason\":\"") + why + "\"}";
+  log("INFO", "ALL_DOWN_TIMER_CANCEL", data);
 }
 
 void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
@@ -180,3 +224,7 @@ void ImagesRiddle::log(const char* level, const String& msg) {
   ctx_->log(level, prefixedMessage("[images] ", msg));
 }
 
+void ImagesRiddle::log(const char* level, const String& msg, const String& dataJson) {
+  if (!ctx_) return;
+  ctx_->log(level, prefixedMessage("[images] ", msg), dataJson);
+}

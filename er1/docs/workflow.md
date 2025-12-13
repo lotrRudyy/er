@@ -131,12 +131,12 @@ The OTA binary must exist at:
 
 ### Live log stream
 ```
-er1-log-live
+er1 log -live
 ```
 
 ### Filter for device
 ```
-er1-log-node chess
+er1 log chess
 ```
 
 ### All logs through Pi’s logging system
@@ -357,7 +357,7 @@ er1-ota <Dev>
 
 - Commit before deploying.
 - Increase FW_VERSION on each firmware change.
-- Use `er1-log-live` right after OTA.
+- Use `er1 log -live` right after OTA.
 - Avoid manual edits on the Pi runtime folder — always deploy.
 - Keep repo paths consistent on PC and laptop.
 

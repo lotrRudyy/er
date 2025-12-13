@@ -4,13 +4,14 @@
 
 #include "core_node.h"
 #include "images_riddle.h"
-#include "piano_riddle.h"
+#include "room1/piano_mapper.h"
+#include "room1/piano_riddle_fsm.h"
 
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.12";
-static const char* FW_DESC = "images_piano_v1.12_core_split_images_module_placeholder_piano";
+static const char* FW_VERSION = "1.14";
+static const char* FW_DESC = "images_piano_v1.14_split_fsm_mapper_goertzel";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -35,14 +36,16 @@ static const char* OTA_PATH = "/firmware/images_piano.bin";
 // ======================= MODULES =============================
 static NodeCore nodeCore;
 static ImagesRiddle imagesModule;
-static PianoRiddle pianoModule;
+static PianoRiddleFSM pianoFsm;
+static PianoMapper pianoMapper;
 
 struct ModuleBundle {
   ImagesRiddle* images;
-  PianoRiddle* piano;
+  PianoRiddleFSM* piano;
+  PianoMapper* mapper;
 };
 
-static ModuleBundle moduleBundle{&imagesModule, &pianoModule};
+static ModuleBundle moduleBundle{&imagesModule, &pianoFsm, &pianoMapper};
 
 // ======================= HELPERS =============================
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userData*/) {
@@ -61,6 +64,9 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
   }
   if (bundle && bundle->piano) {
     handled |= bundle->piano->onCmd(cmd, payload);
+  }
+  if (bundle && bundle->mapper) {
+    handled |= bundle->mapper->onCmd(cmd, payload);
   }
   return handled;
 }
@@ -95,7 +101,8 @@ void setup() {
   cfg.net.topicLwt = TOPIC_HB;
 
   cfg.topics = {TOPIC_HB, TOPIC_CMD, TOPIC_LOG, TOPIC_OTA};
-  cfg.log.format = LogFormat::FwLevelMsg;
+  cfg.log.format = LogFormat::FwUptimeLevelMsg;
+  cfg.log.includeDataField = true;
   cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.commands.cmdLogLevel = "CMD";
@@ -121,12 +128,14 @@ void setup() {
   NodeContext& ctx = nodeCore.context();
   ctx.log("INFO", String("BOOT FW=") + FW_DESC);
   imagesModule.begin(ctx);
-  pianoModule.begin(ctx);
+  pianoFsm.begin(ctx);
+  pianoMapper.begin(ctx);
 }
 
 void loop() {
   nodeCore.loop();
   uint32_t now = millis();
   imagesModule.tick(now);
-  pianoModule.tick(now);
+  pianoFsm.tick(now);
+  pianoMapper.tick(now);
 }

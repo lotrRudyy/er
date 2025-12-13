@@ -411,6 +411,10 @@ er1/room0/maglock_ctrl/metric
 
 Each listed env uses the reusable core node scaffolding (Ethernet/MQTT/OTA/log/heartbeat) plus the modules shown above for puzzle logic. Update this table as additional nodes adopt the pattern.
 
+## 3.2 Images riddle rule
+
+- Images + piano node: the images riddle now solves only when all four image buttons are pressed simultaneously and held stable for ALL_DOWN_HOLD_MS (200 ms). No sequence/buffer logic is considered; releasing any button before the hold completes cancels the attempt and requires a fresh all-down hold.
+
 ---
 
 # 4. Maglocks (IDs, topics, behavior)
@@ -572,13 +576,13 @@ loaded from `shared/pc-scripts/er1_profile.ps1`.
 ### Logging
 
 - `er1 log`
-  Tail today’s log (default: 200 lines).
+  Tail today's log (default: 200 lines).
 
 - `er1 log <device>`
-  Filter today’s log by device name.
+  Filter today's log by device name.
 
 - `er1 log -live`
-  Live stream of all MQTT logs from the Pi.
+  Live stream of all logs from the Pi.
 
 - `er1 log <device> -live`
   Live filtered stream.
@@ -586,9 +590,12 @@ loaded from `shared/pc-scripts/er1_profile.ps1`.
 - `er1 log -errors`
   Only ERR-level lines.
 
-- `er1 logs …`
-  Raw passthrough to the Pi’s `er1 logs` CLI
-  (for advanced/archived log access).
+- `er1 log <args> --save`
+  Duplicates the console output to `<repo>\logs\yyyy-MM-dd_HH-mm-ss__pi_*.log`
+  with timestamps (directory is auto-created). Use with live, filter, or errors.
+
+`er1 logs` passthrough was removed; `er1 log` now covers tail, filters, live stream,
+error-only view, and optional saving in a single command.
 
 ### OTA
 

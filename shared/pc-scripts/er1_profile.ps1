@@ -36,8 +36,7 @@ $er1Devices = @(
 
 $er1Commands = @{
     "help"         = "Show this help"
-    "log"          = "Show today's logfile (tail, filter by device, live/errors) OR MQTT stream with -mqtt"
-    "logs"         = "Raw passthrough to 'er1 logs' on the Pi"
+    "log"          = "Tail today's logfile (filters/live/errors, optional --save)"
     "ota"          = "Upload firmware to a device via ota.ps1"
     "deploy"       = "Deploy ER1 Pi runtime from this repo"
     "lock"         = "Open a single maglock by ID"
@@ -293,13 +292,12 @@ function Expand-Er1LogPattern {
     }
 }
 
-# MQTT stream helper (LOCAL mosquitto_sub -> timestamp -> logs/ file)
-function Invoke-Er1MqttStream {
+function Get-Er1LogSavePath {
     param(
-        [Parameter(Mandatory=$true)][string]$dev,
-        [ValidateSet("log","hb","metric","cmd","event","#")]
-        [string]$stream = "log",
-        [string]$filter = ""
+        [ValidateSet("today","errors","live")]
+        [string]$Mode,
+        [string[]]$Patterns,
+        [bool]$UseAll
     )
 
     $root = $script:ER1_REPO
@@ -308,38 +306,59 @@ function Invoke-Er1MqttStream {
     $logs = Join-Path $root "logs"
     New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
-    $topicRoot = switch ($dev) {
-        "maglock_ctrl" { "esc/room0/maglock_ctrl" }
-        "#"            { "esc" }
-        "*"            { "esc" }
-        default        { "esc/*/$dev" }
+    $stamp    = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+    $modeSlug = switch ($Mode) {
+        "live"   { "pi_live" }
+        "errors" { "pi_errors" }
+        default  { "pi_today" }
     }
 
-    $topic = if ($stream -eq "#") { "esc/#" } else { "$topicRoot/$stream" }
+    $filterSlug = $null
+    if (-not $UseAll -and $Patterns -and $Patterns.Count -gt 0) {
+        $filterSlug = ($Patterns -join "_")
+        $filterSlug = ($filterSlug -replace '[\\\/:*?"<>|\s]+', "_").Trim("_")
+    }
 
-    $stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-    $safe  = ($topic -replace '[\\/:*?"<>|#\+]', '_')
-    $out   = Join-Path $logs "${stamp}__${safe}.txt"
+    $name = "${stamp}__${modeSlug}"
+    if ($filterSlug) {
+        $name = "${name}__${filterSlug}"
+    }
 
-    Write-Host "→ $topic"
-    Write-Host "→ $out"
-    Write-Host "Ctrl+C to stop"
+    return Join-Path $logs "${name}.log"
+}
+
+function Invoke-Er1LogCommand {
+    param(
+        [string]$RemoteCommand,
+        [switch]$UseTty,
+        [switch]$Save,
+        [ValidateSet("today","errors","live")]
+        [string]$SaveMode = "today",
+        [string[]]$Patterns,
+        [bool]$UseAll
+    )
+
+    $sshArgs = @()
+    if ($UseTty) { $sshArgs += "-t" }
+    $sshArgs += $er1Pi
+    $sshArgs += $RemoteCommand
+
+    if (-not $Save) {
+        & ssh @sshArgs
+        return
+    }
+
+    $target = Get-Er1LogSavePath -Mode $SaveMode -Patterns $Patterns -UseAll:$UseAll
+    Write-Host "[er1 log] Saving to $target" -ForegroundColor Cyan
 
     $hasTs = (Get-Command ts -ErrorAction SilentlyContinue)
-
     if ($hasTs) {
-        if ($filter) {
-            mosquitto_sub -h 192.168.0.10 -t $topic -v | ts |
-                Select-String -SimpleMatch $filter |
-                Tee-Object -FilePath $out
-        } else {
-            mosquitto_sub -h 192.168.0.10 -t $topic -v | ts |
-                Tee-Object -FilePath $out
-        }
-    } else {
-        mosquitto_sub -h 192.168.0.10 -t $topic -v |
+        & ssh @sshArgs | ts | Tee-Object -FilePath $target
+    }
+    else {
+        & ssh @sshArgs |
             ForEach-Object { "[{0:dd.MM.yyyy HH:mm:ss.fff}] $_" -f (Get-Date) } |
-            Tee-Object -FilePath $out
+            Tee-Object -FilePath $target
     }
 }
 
@@ -355,17 +374,7 @@ function er1 {
 
         [switch]$live,
         [switch]$errors,
-        [int]$n = 200,
-
-        # NEW: local MQTT stream mode for er1 log
-        [switch]$mqtt,
-
-        # NEW: topic stream selector for -mqtt mode
-        [ValidateSet("log","hb","metric","cmd","event","#")]
-        [string]$stream = "log",
-
-        # NEW: optional substring filter for -mqtt mode
-        [string]$filter = ""
+        [int]$n = 200
     )
 
     switch ($cmd) {
@@ -377,28 +386,18 @@ function er1 {
                 "{0,-14} {1}" -f $k, $er1Commands[$k]
             }
 
-            Write-Host "`nLog command examples (Pi logfile):" -ForegroundColor Cyan
-            Write-Host "  er1 log                          # tail today’s log (all devices, $n lines)"
-            Write-Host "  er1 log -n 500                   # tail 500 lines of today’s log"
-            Write-Host "  er1 log images_piano             # filter today’s log for one device"
+            Write-Host "`nLog command examples:" -ForegroundColor Cyan
+            Write-Host "  er1 log                          # tail today's log (all devices, $n lines)"
+            Write-Host "  er1 log -n 500                   # tail 500 lines of today's log"
+            Write-Host "  er1 log images_piano             # filter today's log for one device"
             Write-Host "  er1 log images_piano -n 50       # same, but only last 50 lines"
             Write-Host "  er1 log knocking maglock 400     # knocking + maglock_ctrl+knocking-lock, 400 lines"
             Write-Host "  er1 log -live                    # live stream from Pi (all devices)"
             Write-Host "  er1 log images_piano -live       # live filtered stream for one device"
             Write-Host "  er1 log -errors                  # only error lines from today (all devices)"
             Write-Host "  er1 log images_piano -errors     # only error lines for one device"
-            Write-Host ""
-            Write-Host "MQTT stream examples (LOCAL mosquitto_sub -> logs/ file):" -ForegroundColor Cyan
-            Write-Host "  er1 log images_piano -mqtt                 # subscribe esc/*/images_piano/log"
-            Write-Host "  er1 log maglock_ctrl -mqtt -stream log     # subscribe esc/room0/maglock_ctrl/log"
-            Write-Host "  er1 log images_piano -mqtt -stream hb      # subscribe esc/*/images_piano/hb"
-            Write-Host "  er1 log images_piano -mqtt -stream #       # subscribe esc/#"
-            Write-Host "  er1 log images_piano -mqtt -filter SOLVED  # substring filter + file logging"
-            Write-Host ""
-            Write-Host "Advanced logs (Pi CLI passthrough):" -ForegroundColor Cyan
-            Write-Host "  er1 logs help                    # show full 'er1 logs' help on the Pi"
-            Write-Host "  er1 logs today                   # whatever 'er1 logs today' does on Pi"
-            Write-Host "  er1 logs date 06.12.2025         # example date-based usage (if supported)"
+            Write-Host "  er1 log images_piano --save      # tail + save output to logs/"
+            Write-Host "  er1 log -live --save             # live stream while saving a copy"
             Write-Host ""
             Write-Host "Other examples:" -ForegroundColor Cyan
             Write-Host "  er1 ota images_piano             # upload firmware for images_piano"
@@ -421,29 +420,33 @@ function er1 {
         }
 
         "log" {
-            # If -mqtt is set: do local mosquitto_sub stream + file logging
-            if ($mqtt) {
-                $dev = if ($args -and $args.Count -ge 1) { $args[0] } else { $null }
-                if (-not $dev) { Write-Error "Usage: er1 log <device> -mqtt [-stream log|hb|metric|cmd|event|#] [-filter <text>]"; return }
-                Invoke-Er1MqttStream -dev $dev -stream $stream -filter $filter
-                return
+            $argsNoSave = @()
+            $saveRequested = $false
+            if ($args) {
+                foreach ($arg in $args) {
+                    if ($arg -and $arg.ToLowerInvariant() -eq "--save") {
+                        $saveRequested = $true
+                    }
+                    else {
+                        $argsNoSave += $arg
+                    }
+                }
             }
 
-            # Otherwise: existing Pi logfile logic
             $patterns = @()
             $localN   = $n
 
-            if ($args -and $args.Count -gt 0) {
-                $last = $args[-1]
+            if ($argsNoSave.Count -gt 0) {
+                $last = $argsNoSave[-1]
                 $intRef = 0
                 if ([int]::TryParse($last, [ref]$intRef)) {
                     $localN = $intRef
-                    if ($args.Count -gt 1) {
-                        $patterns = $args[0..($args.Count - 2)]
+                    if ($argsNoSave.Count -gt 1) {
+                        $patterns = $argsNoSave[0..($argsNoSave.Count - 2)]
                     }
                 }
                 else {
-                    $patterns = $args
+                    $patterns = $argsNoSave
                 }
             }
 
@@ -466,12 +469,15 @@ function er1 {
                 $regex = $expandedPatterns -join "|"
             }
 
+            $saveMode = if ($errors) { "errors" } else { "today" }
+
             if ($live) {
+                $saveMode = "live"
                 if ($useAll) {
-                    ssh -t $er1Pi "$er1Cmd logs live"
+                    Invoke-Er1LogCommand -RemoteCommand "$er1Cmd logs live" -UseTty -Save:$saveRequested -SaveMode $saveMode -Patterns $patterns -UseAll:$useAll
                 }
                 else {
-                    ssh -t $er1Pi "$er1Cmd logs live | grep -E '$regex'"
+                    Invoke-Er1LogCommand -RemoteCommand "$er1Cmd logs live | grep -E '$regex'" -UseTty -Save:$saveRequested -SaveMode $saveMode -Patterns $patterns -UseAll:$useAll
                 }
                 return
             }
@@ -495,18 +501,7 @@ function er1 {
                 }
             }
 
-            ssh $er1Pi $remoteCmd
-            return
-        }
-
-        "logs" {
-            $joined = $args -join " "
-            if ([string]::IsNullOrWhiteSpace($joined)) {
-                ssh -t $er1Pi "$er1Cmd logs help"
-            }
-            else {
-                ssh -t $er1Pi "$er1Cmd logs $joined"
-            }
+            Invoke-Er1LogCommand -RemoteCommand $remoteCmd -Save:$saveRequested -SaveMode $saveMode -Patterns $patterns -UseAll:$useAll
             return
         }
 
@@ -610,4 +605,3 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
             }
     }
 }
-

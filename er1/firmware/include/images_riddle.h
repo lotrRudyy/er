@@ -21,12 +21,16 @@ private:
   };
 
   void handleButtonEdge(int idx, bool newState);
-  void checkSolved();
+  void resetState(const char* reason);
+  void handleAllDownHold(uint32_t nowMs);
+  void startAllDownHold(uint32_t nowMs);
+  void cancelAllDownHold(const char* reason);
   void publishButtonMetricsOnChange(int idx);
   void publishMetricsIfDue();
   void publishSolvedEvent(const char* rid);
   void openImagesMaglock();
   void log(const char* level, const String& msg);
+  void log(const char* level, const String& msg, const String& dataJson);
 
   Core::NodeContext* ctx_ = nullptr;
 
@@ -35,13 +39,15 @@ private:
   static constexpr uint32_t kDebounceMs = 30;
   static constexpr uint32_t kEdgeMinLogMs = 100;
   static constexpr uint32_t kMetricIntervalMs = 1000;
+  static constexpr uint32_t kAllDownHoldMs = 200;
 
   static constexpr const char* kTopicMetric = "er1/room1/images_piano/metric";
   static constexpr const char* kTopicEvent = "er1/room1/images_piano/event";
   static constexpr const char* kTopicLockImagesCmd = "er1/ctrl/lock/images/cmd";
 
   ButtonState buttons_[kButtonCount];
-  bool allPressedPrev_ = false;
+  bool solved_ = false;
+  bool allDownHoldActive_ = false;
+  uint32_t allDownHoldStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
 };
-
