@@ -8,12 +8,12 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.3";
-static const char* FW_DESC = "stop_timer 1.3 - core shell + DFPlayer knock module";
+static const char* FW_VERSION = "1.4";
+static const char* FW_DESC = "stop_timer 1.4 - core shell + stop timer module";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
-static const IPAddress NET_IP(192, 168, 0, 14);
+static const IPAddress NET_IP(192, 168, 0, 18);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);
@@ -21,15 +21,15 @@ static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
-static const char* TOPIC_HB = "er1/room3/knocking/hb";
-static const char* TOPIC_CMD = "er1/room3/knocking/cmd";
-static const char* TOPIC_LOG = "er1/room3/knocking/log";
-static const char* TOPIC_OTA = "er1/room3/knocking/ota";
+static const char* TOPIC_HB = "er1/room3/stop_timer/hb";
+static const char* TOPIC_CMD = "er1/room3/stop_timer/cmd";
+static const char* TOPIC_LOG = "er1/room3/stop_timer/log";
+static const char* TOPIC_OTA = "er1/room3/stop_timer/ota";
 
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/knocking.bin";
+static const char* OTA_PATH = "/firmware/stop_timer.bin";
 
 // ======================= CORE + MODULE =======================
 static NodeCore nodeCore;
@@ -83,10 +83,10 @@ void setup() {
   cfg.net.subnet = NET_SUBNET;
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
-  cfg.net.clientId = "knocking";
+  cfg.net.clientId = "stop_timer";
   cfg.net.topicLwt = TOPIC_HB;
 
-  cfg.topics = {TOPIC_HB, TOPIC_CMD, TOPIC_LOG};
+  cfg.topics = {TOPIC_HB, TOPIC_CMD, TOPIC_LOG, TOPIC_OTA};
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
   cfg.log.filter = logFilter;
@@ -109,6 +109,7 @@ void setup() {
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
   cfg.ota.path = OTA_PATH;
+  cfg.ota.targetFw = FW_VERSION;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;

@@ -109,7 +109,7 @@ void ChessRiddle::evaluatePattern() {
         lastSolvedMs_ = millis();
         solvedCount_++;
         publishSolvedEvent();
-        log("INFO", "CHESS_SOLVED");
+        log("INF", "CHESS_SOLVED");
       } else if (anyPresent) {
         riddleState_ = RiddleState::Partial;
       }
@@ -120,7 +120,7 @@ void ChessRiddle::evaluatePattern() {
         lastSolvedMs_ = millis();
         solvedCount_++;
         publishSolvedEvent();
-        log("INFO", "CHESS_SOLVED");
+        log("INF", "CHESS_SOLVED");
       } else if (!anyPresent) {
         riddleState_ = RiddleState::Idle;
       }
@@ -171,4 +171,3 @@ void ChessRiddle::logErr(const String& msg) {
   errorCount_++;
   log("ERR", msg);
 }
-

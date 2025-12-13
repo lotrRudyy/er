@@ -66,6 +66,9 @@ NodeCore::NodeCore() : ctx_(*this) {}
 
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
+  if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
+    cfg_.ota.targetFw = cfg_.fwVersion;
+  }
   hbCfg_ = cfg.heartbeat;
   heartbeatIntervalMs_ = hbCfg_.intervalMs;
   enabled_ = cfg.startEnabled;
@@ -85,7 +88,12 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
 
   const char* prefsNs = cfg.prefsNamespace ? cfg.prefsNamespace : cfg.net.clientId;
   if (prefsNs && prefsNs[0] != '\0') {
-    prefs_.begin(prefsNs, false);
+    prefsReady_ = prefs_.begin(prefsNs, false);
+    if (!prefsReady_) {
+      logger_.publish("ERR", String("Prefs begin failed ns=") + prefsNs);
+    } else {
+      restoreEnabledState();
+    }
   }
 }
 
@@ -129,7 +137,11 @@ void NodeCore::setHeartbeatInterval(uint32_t intervalMs) {
 }
 
 void NodeCore::setEnabled(bool en) {
+  bool changed = (enabled_ != en);
   enabled_ = en;
+  if (changed) {
+    persistEnabledState(enabled_ ? "enabled" : "disabled");
+  }
 }
 
 void NodeCore::onMqttConnected() {
@@ -321,6 +333,29 @@ void NodeCore::dispatchSubscription(const char* topic, const String& payload) {
 
 void NodeCore::forceRestart() {
   ESP.restart();
+}
+
+void NodeCore::restoreEnabledState() {
+  if (!prefsReady_) return;
+  const bool hasKey = prefs_.isKey("enabled");
+  if (hasKey) {
+    enabled_ = prefs_.getBool("enabled", enabled_);
+    logger_.publish("INF", String("STATE restore enabled=") + (enabled_ ? "1" : "0"));
+  } else {
+    logger_.publish("INF", String("STATE default enabled=") + (enabled_ ? "1" : "0"));
+    prefs_.putBool("enabled", enabled_);
+  }
+}
+
+void NodeCore::persistEnabledState(const char* reason) {
+  if (!prefsReady_) return;
+  String msg = String("STATE save enabled=") + (enabled_ ? "1" : "0");
+  if (reason && reason[0]) {
+    msg += " ";
+    msg += reason;
+  }
+  logger_.publish("INF", msg);
+  prefs_.putBool("enabled", enabled_);
 }
 
 }  // namespace Core

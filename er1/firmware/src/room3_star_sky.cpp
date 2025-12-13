@@ -8,9 +8,9 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.1";
+static const char* FW_VERSION = "1.2";
 static const char* FW_DESC =
-    "star_sky 1.1 - core shell + module, candles gate + pattern preserved";
+    "star_sky 1.2 - core shell + module, candles gate + pattern preserved";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};

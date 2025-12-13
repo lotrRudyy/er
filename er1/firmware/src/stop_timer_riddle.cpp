@@ -174,7 +174,7 @@ void StopTimerRiddle::playFailSoundX5() {
 
 void StopTimerRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-  ctx_->publish(StopTimerRiddle::kTopicEvent, "{\"event\":\"SOLVED\",\"rid\":\"knocking\"}");
+  ctx_->publish(StopTimerRiddle::kTopicEvent, "{\"event\":\"SOLVED\",\"rid\":\"stop_timer\"}");
 }
 
 void StopTimerRiddle::publishMetricsIfDue(uint32_t nowMs) {
@@ -206,7 +206,7 @@ void StopTimerRiddle::publishMetricsIfDue(uint32_t nowMs) {
 
     String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                      "\",\"up\":" + uptime +
-                     ",\"k\":\"knocking\"" +
+                     ",\"k\":\"stop_timer\"" +
                      ",\"df\":" + (dfOk_ ? "1" : "0") +
                      ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
                      ",\"i\":" + i +

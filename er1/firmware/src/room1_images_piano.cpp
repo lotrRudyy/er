@@ -10,8 +10,8 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.14";
-static const char* FW_DESC = "images_piano_v1.14_split_fsm_mapper_goertzel";
+static const char* FW_VERSION = "1.15";
+static const char* FW_DESC = "images_piano_v1.15_split_fsm_mapper_goertzel";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -105,20 +105,20 @@ void setup() {
   cfg.log.includeDataField = true;
   cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
-  cfg.commands.cmdLogLevel = "CMD";
-  cfg.commands.levelEnable = "INFO";
-  cfg.commands.levelDisable = "INFO";
+  cfg.commands.cmdLogLevel = "DBG";
+  cfg.commands.levelEnable = "INF";
+  cfg.commands.levelDisable = "INF";
   cfg.commands.logPing = false;  // legacy: no log on ping
   cfg.commands.allowReboot = false;
   cfg.commands.logUnknown = false;
-  cfg.commands.levelPing = "INFO";
-  cfg.commands.levelUpdate = "INFO";
+  cfg.commands.levelPing = "INF";
+  cfg.commands.levelUpdate = "INF";
   cfg.commands.logUpdate = false;  // OTA logs handled inside updater
 
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
   cfg.ota.path = OTA_PATH;
-  cfg.ota.infoLevel = "INFO";
+  cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;
 
@@ -126,7 +126,7 @@ void setup() {
   nodeCore.registerCommandHandler(moduleCommandHandler, &moduleBundle);
 
   NodeContext& ctx = nodeCore.context();
-  ctx.log("INFO", String("BOOT FW=") + FW_DESC);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC);
   imagesModule.begin(ctx);
   pianoFsm.begin(ctx);
   pianoMapper.begin(ctx);

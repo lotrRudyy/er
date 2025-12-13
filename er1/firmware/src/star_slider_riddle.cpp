@@ -24,11 +24,15 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
     tagSize_[i] = 0;
   }
 
+  bool hasStoredSolve = prefs_ && prefs_->isKey("solved");
   solvedFlag_ = prefs_ ? prefs_->getBool("solved", false) : false;
-  if (solvedFlag_) {
-    log("INF", "BOOT solved=1 (repeatable SOLVED events enabled)");
+  if (hasStoredSolve) {
+    log("INF", String("STATE restore solved=") + (solvedFlag_ ? "1" : "0"));
+  } else if (prefs_) {
+    log("INF", "STATE default solved=0");
+    prefs_->putBool("solved", solvedFlag_);
   } else {
-    log("INF", "BOOT solved=0");
+    log("INF", "STATE default solved=0 (no prefs)");
   }
 }
 
@@ -126,6 +130,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
     solveSuccess_++;
     if (prefs_) {
       prefs_->putBool("solved", true);
+      log("INF", "STATE save solved=1");
     }
     log("INF", "pattern SOLVED");
     publishSolvedEvent(solveAttempts_);

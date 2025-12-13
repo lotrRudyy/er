@@ -8,8 +8,8 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.16";
-static const char* FW_DESC = "knocking 1.16 - core shell + DFPlayer module, same sequence and logs";
+static const char* FW_VERSION = "1.17";
+static const char* FW_DESC = "knocking 1.17 - core shell + DFPlayer module, same sequence and logs";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};

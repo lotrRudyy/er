@@ -84,7 +84,7 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
                " state=" + stateStr +
                " dt=" + dtChange + "ms" +
                " presses=" + b.presses;
-  log("INFO", msg);
+  log("INF", msg);
   publishButtonMetricsOnChange(idx);
 }
 
@@ -95,7 +95,7 @@ void ImagesRiddle::resetState(const char* reason) {
   if (reason) {
     String data = String("{\"src\":\"") + reason +
                   "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
-    log("INFO", "IMAGES_STATE_RESET", data);
+    log("INF", "IMAGES_STATE_RESET", data);
   }
 }
 
@@ -125,7 +125,7 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
   solved_ = true;
-  log("INFO", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+  log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
   publishSolvedEvent("images");
   openImagesMaglock();
 }
@@ -134,7 +134,7 @@ void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
   allDownHoldActive_ = true;
   allDownHoldStartMs_ = nowMs;
   String data = String("{\"hold_ms\":") + kAllDownHoldMs + "}";
-  log("INFO", "ALL_DOWN_TIMER_START", data);
+  log("INF", "ALL_DOWN_TIMER_START", data);
 }
 
 void ImagesRiddle::cancelAllDownHold(const char* reason) {
@@ -143,7 +143,7 @@ void ImagesRiddle::cancelAllDownHold(const char* reason) {
   allDownHoldActive_ = false;
   const char* why = reason ? reason : "release";
   String data = String("{\"reason\":\"") + why + "\"}";
-  log("INFO", "ALL_DOWN_TIMER_CANCEL", data);
+  log("INF", "ALL_DOWN_TIMER_CANCEL", data);
 }
 
 void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
@@ -211,12 +211,12 @@ void ImagesRiddle::publishMetricsIfDue() {
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   String payload = String("{\"type\":\"SOLVED\",\"rid\":\"") + rid + "\"}";
   ctx_->publish(kTopicEvent, payload);
-  log("INFO", String("SOLVED event sent for rid=") + rid);
+  log("INF", String("SOLVED event sent for rid=") + rid);
 }
 
 void ImagesRiddle::openImagesMaglock() {
   ctx_->publish(kTopicLockImagesCmd, "OPEN");
-  log("INFO", "Sent OPEN to images maglock");
+  log("INF", "Sent OPEN to images maglock");
 }
 
 void ImagesRiddle::log(const char* level, const String& msg) {

@@ -28,8 +28,8 @@ private:
   static constexpr int kSeqExpectLen = 9;
   static constexpr int kSeqExpect[kSeqExpectLen] = {0, 0, 0, 0, 1, 1, 2, 2, 2};
   static constexpr int kSeqMaxLen = 16;
-  static constexpr const char* kTopicMetric = "er1/room3/knocking/metric";
-  static constexpr const char* kTopicEvent = "er1/room3/knocking/event";
+  static constexpr const char* kTopicMetric = "er1/room3/stop_timer/metric";
+  static constexpr const char* kTopicEvent = "er1/room3/stop_timer/event";
 
   struct PiezoState {
     uint8_t pin = 0;

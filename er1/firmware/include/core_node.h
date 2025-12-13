@@ -45,7 +45,7 @@ struct CommandConfig {
   const char* levelUnknown = "WRN";
   const char* unknownPrefix = "Unknown CMD: ";
 
-  const char* cmdLogLevel = nullptr;  // e.g., "CMD" or "DBG"
+  const char* cmdLogLevel = nullptr;  // e.g., "DBG"
 };
 
 struct NodeCoreConfig {
@@ -135,6 +135,8 @@ private:
   bool topicMatches(const char* filter, const char* topic) const;
   void dispatchSubscription(const char* topic, const String& payload);
   void forceRestart();
+  void restoreEnabledState();
+  void persistEnabledState(const char* reason);
 
   NodeCoreConfig cfg_{};
   HeartbeatConfig hbCfg_{};
@@ -142,6 +144,7 @@ private:
   Logger logger_;
   OtaUpdater ota_;
   Preferences prefs_;
+  bool prefsReady_ = false;
   bool enabled_ = true;
   uint32_t lastHeartbeatMs_ = 0;
   uint32_t heartbeatIntervalMs_ = 0;

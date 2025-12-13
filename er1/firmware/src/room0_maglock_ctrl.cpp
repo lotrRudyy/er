@@ -8,9 +8,9 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.3";
+static const char* FW_VERSION = "1.4";
 static const char* FW_DESC =
-    "maglock_ctrl 1.3 - core shell + module, 1s pulse/10s cooldown, gameMode HB/log behaviour preserved";
+    "maglock_ctrl 1.4 - core shell + module, 1s pulse/10s cooldown, gameMode HB/log behaviour preserved";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x50};

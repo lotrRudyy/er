@@ -210,8 +210,17 @@ void PianoRiddleFSM::begin(Core::NodeContext& ctx) {
   analogReadResolution(12);
 
   if (prefs_) {
+    bool hasKey = prefs_->isKey(kPrefsSolvedKey);
     solved_ = prefs_->getBool(kPrefsSolvedKey, false);
     solvedPublished_ = solved_;
+    if (hasKey) {
+      ctx_->log("INF", String("STATE restore piano_solved=") + (solved_ ? "1" : "0"));
+    } else {
+      ctx_->log("INF", "STATE default piano_solved=0");
+      prefs_->putBool(kPrefsSolvedKey, solved_);
+    }
+  } else {
+    ctx_->log("INF", "STATE default piano_solved=0 (no prefs)");
   }
 
   if (solved_) {
@@ -268,6 +277,7 @@ void PianoRiddleFSM::tick(uint32_t nowMs) {
     solved_ = true;
     if (prefs_) {
       prefs_->putBool(kPrefsSolvedKey, true);
+      ctx_->log("INF", "STATE save piano_solved=1");
     }
     handleSolved();
   }
@@ -401,5 +411,6 @@ void PianoRiddleFSM::clearSolvedState() {
   lastAcceptedMs_ = 0;
   if (prefs_) {
     prefs_->putBool(kPrefsSolvedKey, false);
+    ctx_->log("INF", "STATE save piano_solved=0");
   }
 }

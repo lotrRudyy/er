@@ -62,6 +62,8 @@ class Attempt:
 devices: dict[str, DeviceState] = {}
 attempts: dict[str, Attempt] = {}
 running = True
+_last_malformed_log: dict[str, float] = {}
+_suppress_malformed = False
 
 
 def log_line(msg: str) -> None:
@@ -117,9 +119,16 @@ def start_attempt(room: str, dev: str) -> None:
 
 def parse_topic(topic: str) -> tuple[str, str, str] | None:
     parts = topic.split("/")
-    if len(parts) < 4 or parts[0] != "esc":
+    if len(parts) != 4:
+        log_malformed("topic_parts", topic)
         return None
-    room, dev, suffix = parts[1], parts[2], parts[3]
+    root, room, dev, suffix = parts
+    if root != "er1":
+        log_malformed("topic_root", topic)
+        return None
+    if suffix not in ("cmd", "hb"):
+        log_malformed("topic_suffix", topic)
+        return None
     return room, dev, suffix
 
 
@@ -171,6 +180,7 @@ def handle_hb(room: str, dev: str, payload: str) -> None:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        log_malformed("hb_json", f"er1/{room}/{dev}/hb", text)
         return
 
     key = key_for(room, dev)
@@ -244,6 +254,44 @@ def stop_loop(_signum, _frame) -> None:
     running = False
 
 
+def log_malformed(reason: str, topic: str, payload: str | None = None) -> None:
+    if _suppress_malformed:
+        return
+    now = time.time()
+    key = f"{reason}:{topic}"
+    last = _last_malformed_log.get(key, 0.0)
+    if now - last < 5.0:
+        return
+    _last_malformed_log[key] = now
+    suffix = ""
+    if payload:
+        sample = payload.replace("\n", " ").replace("\r", " ")
+        if len(sample) > 80:
+            sample = sample[:80] + "..."
+        suffix = f" payload={sample}"
+    log_line(f"[warn] malformed {reason} topic={topic}{suffix}")
+
+
+def self_test() -> int:
+    global _suppress_malformed
+    _suppress_malformed = True
+    cases = [
+        ("er1/room3/dev/cmd", ("room3", "dev", "cmd")),
+        ("er1/room1/images_piano/hb", ("room1", "images_piano", "hb")),
+        ("esc/room2/chess/cmd", None),
+        ("er1/room3/stop_timer/ota", None),
+        ("er1/room3", None),
+    ]
+    failures = 0
+    for topic, expected in cases:
+        result = parse_topic(topic)
+        ok = result == expected
+        print(f"{topic} -> {result} (expected {expected})")
+        if not ok:
+            failures += 1
+    return failures
+
+
 def main() -> None:
     signal.signal(signal.SIGINT, stop_loop)
     signal.signal(signal.SIGTERM, stop_loop)
@@ -261,6 +309,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        sys.exit(self_test())
     try:
         main()
     except KeyboardInterrupt:

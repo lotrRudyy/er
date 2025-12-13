@@ -1,6 +1,37 @@
 #include "core_log.h"
 
+#include <cstdio>
+
 namespace Core {
+
+namespace {
+String escapeJsonString(const String& in) {
+  String out;
+  out.reserve(in.length() + 8);
+  for (size_t i = 0; i < in.length(); i++) {
+    const char c = in.charAt(i);
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<uint8_t>(c) < 0x20) {
+          char buf[7];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<uint8_t>(c));
+          out += buf;
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
+}  // namespace
 
 Logger::Logger() = default;
 
@@ -48,33 +79,36 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 
 String Logger::buildPayload(const LogMessage& msg) const {
   String payload = "{";
+  const String fw = escapeJsonString(fwVersion_ ? fwVersion_ : "");
+  const String level = escapeJsonString(msg.level ? msg.level : "");
+  const String message = msg.msg ? escapeJsonString(*(msg.msg)) : "";
   switch (format_) {
     case LogFormat::LevelMsg:
       payload += "\"lvl\":\"";
-      payload += msg.level;
+      payload += level;
       payload += "\",\"msg\":\"";
-      payload += *(msg.msg);
+      payload += message;
       payload += "\"";
       break;
     case LogFormat::FwLevelMsg:
       payload += "\"fw\":\"";
-      payload += (fwVersion_ ? fwVersion_ : "");
+      payload += fw;
       payload += "\",\"lvl\":\"";
-      payload += msg.level;
+      payload += level;
       payload += "\",\"msg\":\"";
-      payload += *(msg.msg);
+      payload += message;
       payload += "\"";
       break;
     case LogFormat::FwUptimeLevelMsg:
     default:
       payload += "\"fw\":\"";
-      payload += (fwVersion_ ? fwVersion_ : "");
+      payload += fw;
       payload += "\",\"up\":";
       payload += msg.uptime;
       payload += ",\"lv\":\"";
-      payload += msg.level;
+      payload += level;
       payload += "\",\"msg\":\"";
-      payload += *(msg.msg);
+      payload += message;
       payload += "\"";
       break;
   }

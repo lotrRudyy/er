@@ -8,8 +8,8 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.2";
-static const char* FW_DESC = "chess 1.2 - core shell + RFID snapshot module";
+static const char* FW_VERSION = "1.3";
+static const char* FW_DESC = "chess 1.3 - core shell + RFID snapshot module";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -86,10 +86,10 @@ void setup() {
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &chess;
 
-  cfg.commands.cmdLogLevel = "CMD";
-  cfg.commands.levelEnable = "INFO";
-  cfg.commands.levelDisable = "INFO";
-  cfg.commands.levelPing = "INFO";
+  cfg.commands.cmdLogLevel = "DBG";
+  cfg.commands.levelEnable = "INF";
+  cfg.commands.levelDisable = "INF";
+  cfg.commands.levelPing = "INF";
   cfg.commands.allowReboot = false;
   cfg.commands.logUnknown = true;
   cfg.commands.levelUnknown = "WRN";
@@ -98,7 +98,7 @@ void setup() {
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
   cfg.ota.path = OTA_PATH;
-  cfg.ota.infoLevel = "INFO";
+  cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;
 
@@ -107,7 +107,7 @@ void setup() {
 
   NodeContext& ctx = nodeCore.context();
   chess.begin(ctx);
-  ctx.log("INFO", String("BOOT FW=") + FW_DESC);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC);
 }
 
 void loop() {

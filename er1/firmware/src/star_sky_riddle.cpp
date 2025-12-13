@@ -120,16 +120,18 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
 
 void StarSkyRiddle::persistState() {
   prefs_.putBool(kPrefsKey, candlesSolved_);
+  log("INF", String("STATE save candles=") + (candlesSolved_ ? "1" : "0"));
 }
 
 void StarSkyRiddle::loadState() {
   prefs_.begin("star_sky", false);
+  bool hasKey = prefs_.isKey(kPrefsKey);
   candlesSolved_ = prefs_.getBool(kPrefsKey, false);
-  if (candlesSolved_) {
-    log("INF", "BOOT candles=1, starting pattern");
+  if (hasKey) {
+    log("INF", String("STATE restore candles=") + (candlesSolved_ ? "1" : "0"));
   } else {
-    log("INF", "BOOT candles=0, pattern disabled");
+    log("INF", "STATE default candles=0");
+    prefs_.putBool(kPrefsKey, candlesSolved_);
   }
   cycleStartMs_ = millis();
 }
-

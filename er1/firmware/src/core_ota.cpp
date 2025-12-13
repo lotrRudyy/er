@@ -1,6 +1,14 @@
 #include "core_ota.h"
 
+#include <cstring>
+
 namespace Core {
+
+namespace {
+constexpr uint32_t kConnectTimeoutMs = 5000;
+constexpr uint32_t kHeaderTimeoutMs = 5000;
+constexpr uint32_t kBodyStallTimeoutMs = 4000;
+}  // namespace
 
 void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
   cfg_ = cfg;
@@ -13,12 +21,20 @@ bool OtaUpdater::perform() {
   publishStart();
 
   EthernetClient client;
+  client.setTimeout(kHeaderTimeoutMs);
   String url = String("http://") + cfg_.host + cfg_.path;
   logger_->publish(cfg_.infoLevel, String("CMD UPDATE -> HTTP OTA ") + url);
 
-  if (!client.connect(cfg_.host, cfg_.port)) {
+  uint32_t connStart = millis();
+  bool connected = client.connect(cfg_.host, cfg_.port);
+  while (!connected && (millis() - connStart) < kConnectTimeoutMs) {
+    delay(10);
+    connected = client.connect(cfg_.host, cfg_.port);
+  }
+  if (!connected) {
     logger_->publish(cfg_.errLevel, "OTA connect failed");
-    publishFail("conn", -1, "connect", 0);
+    publishFail("conn", -1, "connect_timeout", 0);
+    client.stop();
     return false;
   }
 
@@ -27,6 +43,11 @@ bool OtaUpdater::perform() {
   client.print(" HTTP/1.1\r\nHost: ");
   client.print(cfg_.host);
   client.print("\r\nConnection: close\r\n\r\n");
+
+  uint32_t headerStart = millis();
+  while (!client.available() && (millis() - headerStart) < kHeaderTimeoutMs) {
+    delay(10);
+  }
 
   String statusLine = client.readStringUntil('\n');
   statusLine.trim();
@@ -46,16 +67,33 @@ bool OtaUpdater::perform() {
   }
 
   long contentLength = -1;
+  String remoteVersion;
   while (client.connected()) {
-    String line = client.readStringUntil('\n');
-    if (line == "\r" || line.length() == 0) break;
-    String low = line;
-    low.toLowerCase();
-    if (low.startsWith("content-length:")) {
-      low.replace("content-length:", "");
-      low.trim();
-      contentLength = low.toInt();
+    if (millis() - headerStart > kHeaderTimeoutMs) {
+      logger_->publish(cfg_.errLevel, "OTA header timeout");
+      publishFail("hdr", -1, "timeout", 0);
+      client.stop();
+      return false;
     }
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break;
+    int colonIdx = line.indexOf(':');
+    if (colonIdx <= 0) {
+      delay(0);
+      continue;
+    }
+    String key = line.substring(0, colonIdx);
+    String value = line.substring(colonIdx + 1);
+    key.trim();
+    value.trim();
+    key.toLowerCase();
+    if (key == "content-length") {
+      contentLength = value.toInt();
+    } else if (key == "x-fw-version" || key == "x-ota-version") {
+      remoteVersion = value;
+    }
+    delay(0);
   }
 
   if (contentLength <= 0) {
@@ -63,6 +101,15 @@ bool OtaUpdater::perform() {
     publishFail("hdr", -1, "len", 0);
     client.stop();
     return false;
+  }
+
+  if (remoteVersion.length() > 0 && cfg_.targetFw && strlen(cfg_.targetFw) > 0) {
+    if (remoteVersion.equals(String(cfg_.targetFw))) {
+      logger_->publish(cfg_.infoLevel, String("OTA skip: version match (") + remoteVersion + ")");
+      publishFail("ver", 0, "version_match", 0);
+      client.stop();
+      return false;
+    }
   }
 
   if (!Update.begin(contentLength)) {
@@ -76,15 +123,29 @@ bool OtaUpdater::perform() {
   size_t totalWritten = 0;
   uint32_t lastProgressMs = 0;
   int lastPct = -1;
+  uint32_t lastDataMs = millis();
+  bool startedUpdate = true;
 
   while (client.connected() || client.available()) {
     int len = client.read(buf, sizeof(buf));
-    if (len <= 0) continue;
+    if (len <= 0) {
+      if (millis() - lastDataMs > kBodyStallTimeoutMs) {
+        logger_->publish(cfg_.errLevel, "OTA data stall");
+        publishFail("conn", -1, "stall", totalWritten);
+        Update.abort();
+        client.stop();
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+    lastDataMs = millis();
     size_t written = Update.write(buf, len);
     if (written != static_cast<size_t>(len)) {
       logger_->publish(cfg_.errLevel, "OTA Update.write failed");
       totalWritten += written;
       publishFail("write", Update.getError(), "write", totalWritten);
+      Update.abort();
       client.stop();
       return false;
     }
@@ -100,11 +161,21 @@ bool OtaUpdater::perform() {
         publishProgress(pct);
       }
     }
+    delay(0);
+  }
+
+  if (startedUpdate && contentLength > 0 && totalWritten != static_cast<size_t>(contentLength)) {
+    logger_->publish(cfg_.errLevel, "OTA size mismatch");
+    publishFail("hdr", -1, "size_mismatch", totalWritten);
+    Update.abort();
+    client.stop();
+    return false;
   }
 
   if (!Update.end(true)) {
     logger_->publish(cfg_.errLevel, "OTA Update.end failed");
     publishFail("end", Update.getError(), "end", totalWritten);
+    Update.abort();
     client.stop();
     return false;
   }
