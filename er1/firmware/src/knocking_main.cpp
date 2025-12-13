@@ -26,6 +26,12 @@ static constexpr uint16_t MQTT_PORT = 1883;
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
 static const char* OTA_PATH = "/firmware/knocking.bin";
+static const char* OTA_PATH_PREFIX = "/firmware/";
+#ifndef OTA_PSK
+#error "OTA_PSK must be defined (pre-shared OTA key)"
+#endif
+static const char* const OTA_PSK_VALUE = OTA_PSK;
+static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= CORE + MODULE =======================
 static NodeCore nodeCore;
@@ -111,6 +117,9 @@ void setup() {
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
   cfg.ota.path = OTA_PATH;
+  cfg.ota.allowedHost = OTA_ALLOWED_HOST;
+  cfg.ota.allowedPathPrefix = OTA_PATH_PREFIX;
+  cfg.ota.psk = OTA_PSK_VALUE;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;

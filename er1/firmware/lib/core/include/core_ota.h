@@ -14,6 +14,9 @@ struct OtaConfig {
   const char* host = nullptr;
   uint16_t port = 80;
   const char* path = nullptr;
+  const char* allowedHost = nullptr;
+  const char* allowedPathPrefix = "/firmware/";
+  const char* psk = nullptr;
   const char* infoLevel = "INF";
   const char* errLevel = "ERR";
   const char* targetFw = "?";
@@ -24,15 +27,15 @@ struct OtaConfig {
 class OtaUpdater {
 public:
   void begin(const OtaConfig& cfg, Logger* logger);
-  bool perform();
+  bool perform(const char* cmdPayload = nullptr);
 
 private:
   OtaConfig cfg_{};
   Logger* logger_ = nullptr;
 
   void publishStatus(const char* st, const String& dataJson, bool retained);
-  void publishFail(const char* at, int code, const char* msg, size_t bytes);
-  void publishOk(size_t bytes);
+  void publishFail(const char* at, int code, const char* msg, size_t bytes, const char* extraJson = nullptr);
+  void publishOk(size_t bytes, const char* sha256Hex = nullptr);
   void publishStart();
   void publishProgress(int pct);
 };

@@ -7,6 +7,12 @@ Fast references for ER1 MQTT work. Constants:
 
 Logging format: `[DD.MM.YYYY HH:MM:SS.mmm] topic payload` with `date +"[%d.%m.%Y %H:%M:%S.%3N]"`. Logfile pattern on Pi: `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
 
+## OTA (secured)
+
+- Payload: `UPDATE sha256=<64-hex> hmac=<64-hex> url=/firmware/<Dev>.bin`
+- Host is pinned to `192.168.0.10`; paths must stay under `/firmware/`.
+- `sha256` is the firmware hash; `hmac` is HMAC-SHA256 of that hash using `OTA_PSK` (computed automatically by `ota.ps1`).
+
 ## Lock Control
 
 Lock IDs: `images`, `r2`, `r3`, `slider`, `knocking`.

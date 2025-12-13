@@ -71,8 +71,17 @@ function Test-RemoteFirmwareAvailability([string]$url, [string]$sshTarget) {
         }
     }
 
-    $outputText = ($output -join "`n")
-    $statusMatch = [regex]::Match($outputText, "(?im)^HTTP/\\d\\.\\d\\s+(\\d{3})")
+    $outText = ($output | ForEach-Object { "$_" }) -join "`n"
+
+    $okStatus = $outText -match 'HTTP/\d\.\d\s+200'
+    $lenMatch = [regex]::Match($outText, 'Content-Length:\s*(\d+)', 'IgnoreCase')
+    $okLen = $lenMatch.Success -and ([int]$lenMatch.Groups[1].Value -gt 0)
+
+    if (-not ($okStatus -and $okLen)) {
+      throw "Postflight failed... Output: $outText"
+    }
+    return $true
+
 
     if ($exitCode -ne 0 -or -not $statusMatch.Success) {
         Write-Error "Postflight failed for $url via $via (curl exit $exitCode). Output:`n$outputText"
@@ -160,6 +169,20 @@ if (-not (Test-Path $firmwarePath)) {
 
 $remoteFirmwareName = Get-RemoteFirmwareName $Dev
 
+if (-not $env:OTA_PSK) {
+    Write-Error "OTA_PSK environment variable is required for HMAC validation."
+    exit 1
+}
+
+$psk = $env:OTA_PSK
+Write-Host "== Computing SHA-256 + HMAC for $firmwarePath =="
+$sha256 = (Get-FileHash -Algorithm SHA256 -Path $firmwarePath).Hash.ToLower()
+$hmacProvider = New-Object System.Security.Cryptography.HMACSHA256 ([Text.Encoding]::UTF8.GetBytes($psk))
+$hmacBytes = $hmacProvider.ComputeHash([Text.Encoding]::UTF8.GetBytes($sha256))
+$hmac = ([BitConverter]::ToString($hmacBytes) -replace "-", "").ToLower()
+Write-Host "SHA256: $sha256"
+Write-Host "HMAC  : $hmac"
+
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
 $piHost        = "100.108.1.80"    # Tailscale IP of Pi
@@ -196,7 +219,8 @@ if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
 Write-Host "== Triggering OTA on $topicUpdate =="
 
 # MQTT remains LAN IP because the Pi itself runs mosquitto on 192.168.0.10
-ssh "$piUser@$piHost" "mosquitto_pub -h 192.168.0.10 -t '$topicUpdate' -m 'UPDATE'"
+$otaCmd = "UPDATE sha256=$sha256 hmac=$hmac url=/firmware/$remoteFirmwareName"
+ssh "$piUser@$piHost" "mosquitto_pub -h 192.168.0.10 -t '$topicUpdate' -m '$otaCmd'"
 
 Write-Host "== DONE. Device will update. =="
 

@@ -299,7 +299,7 @@ bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
       const char* lvl = cfg_.commands.levelUpdate ? cfg_.commands.levelUpdate : "INF";
       logger_.publish(lvl, "CMD UPDATE");
     }
-    ota_.perform();
+    ota_.perform(arg);
     return true;
   }
 
@@ -527,6 +527,9 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   const char* health = (hb.health && hb.health[0]) ? hb.health : "ok";
   const char* mem = (hb.mem && hb.mem[0]) ? hb.mem : "ok";
   const char* lastErr = (hb.lastErr && hb.lastErr[0]) ? hb.lastErr : "0";
+  char ts[32];
+  bool timeValid = core_format_ts(ts, sizeof(ts));
+  if (!timeValid) ts[0] = '\0';
 
   String nodeEsc = escapeJson(node);
   String fwEsc = escapeJson(fw);
@@ -535,7 +538,7 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   String memEsc = escapeJson(mem);
   String lastErrEsc = escapeJson(lastErr);
 
-  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + 64);
+  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(ts) + 96);
   out = "{\"node\":\"";
   out += nodeEsc;
   out += "\",\"fw\":\"";
@@ -544,6 +547,10 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   out += buildEsc;
   out += "\",\"up\":";
   out += hb.uptime;
+  out += ",\"ts\":\"";
+  out += ts;
+  out += "\",\"time_valid\":";
+  out += timeValid ? "true" : "false";
   out += ",\"health\":\"";
   out += healthEsc;
   out += "\",\"mem\":\"";

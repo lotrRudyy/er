@@ -261,7 +261,7 @@ Supported:
 - PING
 - SET key=val
 - DIAG level=<n> ttl_s=<s>
-- UPDATE url=/firmware/<Dev>.bin
+- UPDATE sha256=<64-hex> hmac=<64-hex> url=/firmware/<Dev>.bin
 
 ---
 
@@ -291,6 +291,18 @@ OTA lookup via deviceMap inside `ota.ps1`.
 
 Always bump `FW_VERSION`.
 
+Validation (fails closed):
+
+- Command payload must include `sha256` (lowercase hex) and `hmac` (HMAC-SHA256 over the `sha256` string, keyed by `OTA_PSK`).
+- OTA downloads are allowlisted to `http://192.168.0.10/firmware/<Dev>.bin`. Host/IP overrides are rejected; paths must stay under `/firmware/`.
+- Firmware bytes are streamed through SHA-256; mismatches abort the OTA and skip reboot.
+- HMAC is verified before any download; missing/invalid fields or PSK abort with a `fail` status.
+
+Build + tooling requirements:
+
+- Set `OTA_PSK` in the environment before building (`platformio.ini` pulls `${sysenv.OTA_PSK}`) and before running `ota.ps1` so it can compute the required HMAC.
+- Optional: define `OTA_VALIDATION_SELF_TEST` at build time to run a small self-test of the hash/HMAC helpers at startup.
+
 ### OTA status topic (per node)
 
 Each ESP32 node publishes OTA state to:
@@ -311,6 +323,13 @@ Payload format (compact JSON, same logging schema as hb/log):
 - `st="fail"` (retained) on any OTA failure, `d={"at":"dns|conn|http|hdr|write|end|md5","code":<num>,"msg":"<short>","bytes":<optional_bytes>}`
 
 Retained semantics: `start` stays until `ok`/`fail` overwrites it so operators can see stuck OTAs.
+
+New failure reasons are reported via `msg` + extra fields in `d`:
+
+- `missing_sha256`, `missing_hmac`, `invalid_sha256`, `invalid_hmac`
+- `hmac_mismatch`, `sha256_mismatch` (includes expected + actual hashes)
+- `host_not_allowed`, `path_not_allowed`
+- Legacy failure points (http/connect/write/etc.) remain unchanged.
 
 ### Pi OTA verification
 
