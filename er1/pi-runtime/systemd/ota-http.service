@@ -1,0 +1,16 @@
+[Unit]
+Description=OTA Firmware HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/rudyy/er1
+ExecStartPre=/usr/bin/mkdir -p /home/rudyy/firmware
+ExecStart=/usr/bin/python3 /home/rudyy/er1/scripts/ota_http.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

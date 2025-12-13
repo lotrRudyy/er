@@ -21,7 +21,9 @@ int64_t core_epoch_seconds() {
 }
 
 bool core_format_ts(char* out, size_t outLen) {
-  if (!out || outLen < 24) return false; // needs 23 chars + null
+  // "YYYY.MM.DD HH:MM:SS.mmm" = 23 chars + '\0' => 24 min
+  if (!out || outLen < 24) return false;
+
   time_t now = ::time(nullptr);
   if (!wallClockValid(now)) return false;
 
@@ -29,7 +31,6 @@ bool core_format_ts(char* out, size_t outLen) {
 #if defined(ESP32)
   if (!localtime_r(&now, &tmLocal)) return false;
 #else
-  // Fallback; on non-ESP32 Arduino this may be weak, but compiles.
   struct tm* tmp = localtime(&now);
   if (!tmp) return false;
   tmLocal = *tmp;
@@ -43,12 +44,11 @@ bool core_format_ts(char* out, size_t outLen) {
   }
 #endif
 
-  // YYYY-MM-DD HH:MM:SS
+  // YYYY.MM.DD HH:MM:SS  (19 chars)
   char base[20];
-  if (strftime(base, sizeof(base), "%Y-%m-%d %H:%M:%S", &tmLocal) == 0) return false;
+  if (strftime(base, sizeof(base), "%Y.%m.%d %H:%M:%S", &tmLocal) == 0) return false;
 
-  // Append .mmm
-  // Total: 19 + 1 + 3 = 23 chars
+  // Append .mmm => total 23 chars
   snprintf(out, outLen, "%s.%03d", base, ms);
   return true;
 }

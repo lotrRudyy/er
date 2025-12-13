@@ -24,6 +24,82 @@ $deviceMap = @{
     "stop_timer"  = @{ Env = "stop_timer";    Dev = "stop_timer"   }
 }
 
+$remoteNameMap = @{
+    "images_piano" = "images_piano.bin"
+}
+
+function Get-RemoteFirmwareName([string]$dev) {
+    if ($remoteNameMap.ContainsKey($dev)) { return $remoteNameMap[$dev] }
+    return "$dev.bin"
+}
+
+function Test-RemoteFirmwareAvailability([string]$url, [string]$sshTarget) {
+    $via = "local"
+    $output = $null
+    $exitCode = 0
+
+    if ($sshTarget) {
+        $output = ssh $sshTarget "curl -I -sS --connect-timeout 5 --max-time 10 $url" 2>&1
+        $exitCode = $LASTEXITCODE
+        $via = "ssh:$sshTarget"
+    } else {
+        $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curlExe) {
+            $output = & $curlExe.Path "-I" "-sS" "--connect-timeout" "5" "--max-time" "10" $url 2>&1
+            $exitCode = $LASTEXITCODE
+        } else {
+            try {
+                $resp = Invoke-WebRequest -Method Head -Uri $url -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+            } catch {
+                Write-Error ("Postflight failed for {0} (local): {1}" -f $url, $_.Exception.Message)
+                return $false
+            }
+
+            if ($resp.StatusCode -ne 200) {
+                Write-Error "Postflight failed for $url (local status $($resp.StatusCode))"
+                return $false
+            }
+
+            $cl = $resp.Headers["Content-Length"]
+            try { $len = [int64]$cl } catch { $len = -1 }
+            if ($len -le 0) {
+                Write-Error "Postflight failed for $url (local Content-Length $cl)"
+                return $false
+            }
+
+            return $true
+        }
+    }
+
+    $outputText = ($output -join "`n")
+    $statusMatch = [regex]::Match($outputText, "(?im)^HTTP/\\d\\.\\d\\s+(\\d{3})")
+
+    if ($exitCode -ne 0 -or -not $statusMatch.Success) {
+        Write-Error "Postflight failed for $url via $via (curl exit $exitCode). Output:`n$outputText"
+        return $false
+    }
+
+    $statusCode = [int]$statusMatch.Groups[1].Value
+    if ($statusCode -ne 200) {
+        Write-Error "Postflight failed for $url via $via (status $statusCode). Output:`n$outputText"
+        return $false
+    }
+
+    $contentLengthMatch = [regex]::Match($outputText, "(?im)^Content-Length:\\s*(\\d+)")
+    if (-not $contentLengthMatch.Success) {
+        Write-Error "Postflight failed for $url via $via (missing Content-Length). Output:`n$outputText"
+        return $false
+    }
+
+    $len = [int64]$contentLengthMatch.Groups[1].Value
+    if ($len -le 0) {
+        Write-Error "Postflight failed for $url via $via (Content-Length $len). Output:`n$outputText"
+        return $false
+    }
+
+    return $true
+}
+
 # ============ Resolve Env/Dev ============
 if ($Target) {
     if (-not $deviceMap.ContainsKey($Target)) {
@@ -76,10 +152,13 @@ if ($NoBuild) {
 }
 
 $firmwarePath = ".pio/build/$Env/firmware.bin"
+Write-Host "== Preflight: verifying firmware exists at $firmwarePath =="
 if (-not (Test-Path $firmwarePath)) {
     Write-Error "Firmware not found: $firmwarePath"
     exit 1
 }
+
+$remoteFirmwareName = Get-RemoteFirmwareName $Dev
 
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
@@ -90,12 +169,26 @@ $piFirmwareDir = "/home/rudyy/firmware"
 $topicUpdate = "$Dev/cmd"
 
 # ============ SCP UPLOAD ============
-Write-Host "== Uploading firmware to Pi as $Dev.bin =="
+Write-Host "== Uploading firmware to Pi as $remoteFirmwareName =="
 
-$remotePath = "$piUser@${piHost}:$piFirmwareDir/$Dev.bin"
+$ensureDirCmd = "mkdir -p $piFirmwareDir"
+ssh "$piUser@$piHost" $ensureDirCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to create firmware directory on Pi at $piFirmwareDir"
+    exit 1
+}
+
+$remotePath = "$piUser@${piHost}:$piFirmwareDir/$remoteFirmwareName"
 scp $firmwarePath $remotePath
 if ($LASTEXITCODE -ne 0) {
     Write-Error "SCP failed"
+    exit 1
+}
+
+# ============ POSTFLIGHT CHECK ============
+$postflightUrl = "http://192.168.0.10/firmware/$remoteFirmwareName"
+Write-Host "== Verifying OTA URL from Pi: $postflightUrl =="
+if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
     exit 1
 }
 

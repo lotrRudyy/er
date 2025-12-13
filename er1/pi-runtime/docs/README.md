@@ -9,5 +9,9 @@ Source of truth for `/home/rudyy/er1` on the Pi.
 
 Workflow:
 1) Deploy these files to the Pi under `/home/rudyy/er1`.
-2) Copy `systemd/er1-mqtt-log.service` to `/etc/systemd/system/` and enable (`sudo systemctl daemon-reload && sudo systemctl enable --now er1-mqtt-log.service`).
+2) Copy systemd units to `/etc/systemd/system/` and enable:
+   - `er1-mqtt-log.service`
+   - `er1-ota-verify.service`
+   - `ota-http.service`
+   (`sudo systemctl daemon-reload && sudo systemctl enable --now <service>`)
 3) Populate `/home/rudyy/er1/config/local.env` with broker/user overrides as needed.
