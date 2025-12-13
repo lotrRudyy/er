@@ -186,7 +186,7 @@ Keep:
 ### 1.1 Fixed IP map (ER1 devices)
 
 - `192.168.0.11` → maglock controller
-- `192.168.0.12` → images_piano
+- `192.168.0.12` → images_piano (logical nodes: images + piano on the same ESP32)
 - `192.168.0.13` → chess
 - `192.168.0.14` → knocking
 - `192.168.0.15` → candles
@@ -337,6 +337,8 @@ Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and systemd journal
 ---
 
 # 3. Device map (Env / Dev / IP / OTA)
+
+images and piano are separate logical MQTT nodes running on the same ESP32 and deployed together as the `images_piano` env/OTA.
 
 | Role               | Env name   | Dev name  | IP            | OTA path                    |
 |--------------------|------------|-----------|----------------|-----------------------------|

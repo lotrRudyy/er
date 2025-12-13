@@ -10,10 +10,11 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* NODE_IMAGES = "images_piano";
+static const char* NODE_IDENTITY = "images_piano";
+static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.17";
-static const char* FW_DESC = "images_piano+piano split nodes (roomless)";
+static const char* FW_VERSION = "1.18";
+static const char* FW_DESC = "Single firmware with two logical MQTT nodes: images and piano";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -65,6 +66,7 @@ static void publishPianoHeartbeat(NodeContext& ctx) {
 }
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userData*/) {
+  NodeContext& mutableCtx = const_cast<NodeContext&>(ctx);
   HeartbeatFields hb{
       NODE_IMAGES,
       ctx.fwVersion(),
@@ -75,7 +77,7 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userDa
       "0",
   };
   buildHeartbeatPayload(out, hb);
-  publishPianoHeartbeat(ctx);
+  publishPianoHeartbeat(mutableCtx);
 }
 
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* userData) {
@@ -84,21 +86,32 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
   if (bundle && bundle->images) {
     handled |= bundle->images->onCmd(cmd, payload);
   }
-  if (bundle && bundle->piano) {
-    handled |= bundle->piano->onCmd(cmd, payload);
-  }
-  if (bundle && bundle->mapper) {
-    handled |= bundle->mapper->onCmd(cmd, payload);
-  }
   return handled;
 }
 
 static void pianoCmdSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
   ModuleBundle* bundle = static_cast<ModuleBundle*>(userData);
-  if (!bundle || !bundle->piano) return;
+  if (!bundle || (!bundle->piano && !bundle->mapper)) return;
   String trimmed = payload;
   trimmed.trim();
-  bundle->piano->onCmd(trimmed.c_str(), "");
+  if (trimmed.length() == 0) return;
+
+  String cmd = trimmed;
+  String arg;
+  int spaceIdx = trimmed.indexOf(' ');
+  if (spaceIdx > 0) {
+    cmd = trimmed.substring(0, spaceIdx);
+    arg = trimmed.substring(spaceIdx + 1);
+    arg.trim();
+  }
+  const char* cmdStr = cmd.c_str();
+  const char* argStr = arg.c_str();
+  if (bundle->piano) {
+    bundle->piano->onCmd(cmdStr, argStr);
+  }
+  if (bundle->mapper) {
+    bundle->mapper->onCmd(cmdStr, argStr);
+  }
 }
 
 static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
@@ -117,11 +130,11 @@ static void publishOtaStatus(const char* st, const String& dataJson, bool retain
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
   NodeCoreConfig cfg;
-  cfg.nodeId = NODE_IMAGES;
+  cfg.nodeId = NODE_IDENTITY;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
   cfg.startEnabled = true;
-  cfg.prefsNamespace = "images_piano";
+  cfg.prefsNamespace = NODE_IDENTITY;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
   cfg.net.ip = NET_IP;
@@ -130,9 +143,9 @@ void setup() {
   cfg.net.subnet = NET_SUBNET;
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
-  cfg.net.clientId = NODE_IMAGES;
+  cfg.net.clientId = NODE_IDENTITY;
 
-  cfg.topics = makeTopicConfig(cfg.nodeId);
+  cfg.topics = makeTopicConfig(NODE_IMAGES);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
   cfg.heartbeat.intervalMs = 5000;

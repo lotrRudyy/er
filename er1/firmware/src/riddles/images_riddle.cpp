@@ -14,7 +14,7 @@ String prefixedMessage(const char* prefix, const String& msg) {
 
 void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   ctx_ = &ctx;
-  nodeId_ = (nodeId && nodeId[0]) ? nodeId : (ctx.nodeId() ? ctx.nodeId() : "images_piano");
+  nodeId_ = (nodeId && nodeId[0]) ? nodeId : "images";
   topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");
   topicLockImagesCmd_ = Core::topic("maglock", "lock/images/cmd");
 

@@ -204,7 +204,7 @@ void PianoRiddleFSM::begin(Core::NodeContext& ctx, const char* nodeId, Core::Log
   ctx_ = &ctx;
   logger_ = logger;
   prefs_ = &ctx_->prefs();
-  nodeId_ = (nodeId && nodeId[0]) ? nodeId : (ctx.nodeId() ? ctx.nodeId() : "piano");
+  nodeId_ = (nodeId && nodeId[0]) ? nodeId : "piano";
   topicEvt_ = Core::topic(nodeId_.c_str(), "evt");
   topicState_ = Core::topic(nodeId_.c_str(), "state");
   topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");

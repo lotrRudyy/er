@@ -21,6 +21,9 @@ PORT = int(os.getenv("LOCAL_BROKER_PORT", "1883"))
 VERIFY_WINDOW = int(os.getenv("OTA_VERIFY_WINDOW", "90"))
 LOG_DIR = Path(os.getenv("ER1_LOG_DIR", Path(__file__).resolve().parent.parent / "logs"))
 LOG_FILE = Path(os.getenv("OTA_VERIFY_LOG", str(LOG_DIR / "ota-verify.log")))
+DEPLOYMENT_GROUPS: dict[str, tuple[str, ...]] = {
+    "images_piano": ("images", "piano"),
+}
 
 
 class DeviceState:
@@ -30,7 +33,7 @@ class DeviceState:
     uptime: int | None
     online: bool
     last_seen: float
-    
+
     def __init__(self) -> None:
         self.fw = "?"
         self.uptime = None
@@ -39,16 +42,17 @@ class DeviceState:
 
 
 class Attempt:
-    __slots__ = ("node", "old_fw", "last_fw", "start", "deadline", "saw_offline", "saw_return")
+    __slots__ = ("deployment", "nodes", "old_fw", "start", "deadline", "seen_offline", "seen_return", "fw_by_node")
 
-    def __init__(self, node: str, old_fw: str) -> None:
-        self.node = node
+    def __init__(self, deployment: str, nodes: tuple[str, ...], old_fw: str) -> None:
+        self.deployment = deployment
+        self.nodes = nodes
         self.old_fw = old_fw or "?"
-        self.last_fw = self.old_fw
         self.start = time.time()
         self.deadline = self.start + VERIFY_WINDOW
-        self.saw_offline = False
-        self.saw_return = False
+        self.seen_offline: set[str] = set()
+        self.seen_return: set[str] = set()
+        self.fw_by_node: dict[str, str] = {}
 
 
 devices: dict[str, DeviceState] = {}
@@ -67,46 +71,56 @@ def log_line(msg: str) -> None:
     print(line, flush=True)
 
 
-def key_for(node: str) -> str:
-    return node
-
-
 def ensure_state(node: str) -> DeviceState:
-    key = key_for(node)
-    state = devices.get(key)
+    state = devices.get(node)
     if state is None:
         state = DeviceState()
-        devices[key] = state
+        devices[node] = state
     return state
 
 
-def complete_attempt(key: str, success: bool, *, reason: str | None = None, new_fw: str | None = None) -> None:
-    attempt = attempts.pop(key, None)
-    if attempt is None:
-        return
+def deployment_for(node: str) -> str:
+    for deployment, nodes in DEPLOYMENT_GROUPS.items():
+        if node in nodes or node == deployment:
+            return deployment
+    return node
+
+
+def nodes_for(deployment: str) -> tuple[str, ...]:
+    return DEPLOYMENT_GROUPS.get(deployment, (deployment,))
+
+
+def complete_attempt(attempt: Attempt, success: bool, *, reason: str | None = None) -> None:
+    attempts.pop(attempt.deployment, None)
     if success:
-        final_fw = new_fw or attempt.last_fw or attempt.old_fw
+        fw_values = [fw for fw in attempt.fw_by_node.values() if fw]
+        final_fw = ",".join(sorted(set(fw_values))) if fw_values else attempt.old_fw
         log_line(
-            f"OTA_RESULT dev={attempt.node} result=OK "
+            f"OTA_RESULT dev={attempt.deployment} nodes={','.join(attempt.nodes)} result=OK "
             f"old_fw={attempt.old_fw} new_fw={final_fw}"
         )
     else:
         why = reason or "timeout"
-        last_fw = attempt.last_fw or attempt.old_fw
+        last_fw = ",".join(sorted(set(attempt.fw_by_node.values()))) if attempt.fw_by_node else attempt.old_fw
         log_line(
-            f"OTA_RESULT dev={attempt.node} result=FAIL "
+            f"OTA_RESULT dev={attempt.deployment} nodes={','.join(attempt.nodes)} result=FAIL "
             f"reason={why} old_fw={attempt.old_fw} last_fw={last_fw}"
         )
 
 
 def start_attempt(node: str) -> None:
-    key = key_for(node)
-    prior = attempts.get(key)
+    deployment = deployment_for(node)
+    nodes = nodes_for(deployment)
+    prior = attempts.get(deployment)
     if prior is not None:
-        complete_attempt(key, False, reason="timeout")
+        complete_attempt(prior, False, reason="timeout")
 
-    state = ensure_state(node)
-    attempts[key] = Attempt(node, state.fw)
+    baseline_fw = "?"
+    for n in nodes:
+        if n in devices and devices[n].fw and devices[n].fw != "?":
+            baseline_fw = devices[n].fw
+            break
+    attempts[deployment] = Attempt(deployment, nodes, baseline_fw)
 
 
 def parse_topic(topic: str) -> tuple[str, str] | None:
@@ -137,15 +151,14 @@ def detect_offline_via_uptime(prev: int | None, current: int | None) -> bool:
 
 
 def handle_offline(node: str) -> None:
-    key = key_for(node)
     state = ensure_state(node)
     state.online = False
     state.uptime = None
     state.last_seen = time.time()
 
-    attempt = attempts.get(key)
+    attempt = attempts.get(deployment_for(node))
     if attempt:
-        attempt.saw_offline = True
+        attempt.seen_offline.add(node)
 
 
 def parse_uptime(data: dict) -> int | None:
@@ -172,7 +185,6 @@ def handle_hb(node: str, payload: str) -> None:
         log_malformed("hb_json", f"{node}/hb", text)
         return
 
-    key = key_for(node)
     state = ensure_state(node)
     prev_uptime = state.uptime
 
@@ -185,19 +197,35 @@ def handle_hb(node: str, payload: str) -> None:
     state.online = True
     state.last_seen = time.time()
 
-    attempt = attempts.get(key)
+    deployment = deployment_for(node)
+    attempt = attempts.get(deployment)
     if attempt:
-        if not attempt.saw_offline and detect_offline_via_uptime(prev_uptime, uptime_val):
-            attempt.saw_offline = True
-            attempt.saw_return = True
-        elif attempt.saw_offline:
-            attempt.saw_return = True
+        if detect_offline_via_uptime(prev_uptime, uptime_val):
+            attempt.seen_offline.add(node)
+            attempt.seen_return.add(node)
+        elif node in attempt.seen_offline:
+            attempt.seen_return.add(node)
 
         if state.fw:
-            attempt.last_fw = state.fw
+            attempt.fw_by_node[node] = state.fw
 
-        if attempt.saw_offline and state.fw and state.fw != attempt.old_fw:
-            complete_attempt(key, True, new_fw=state.fw)
+        if attempt_ready(attempt):
+            complete_attempt(attempt, True)
+
+
+def attempt_ready(attempt: Attempt) -> bool:
+    nodes = attempt.nodes
+    if not nodes:
+        return False
+    for node in nodes:
+        if node not in attempt.seen_offline or node not in attempt.seen_return:
+            return False
+        state = devices.get(node)
+        if state is None or not state.fw:
+            return False
+        if attempt.old_fw and attempt.old_fw != "?" and state.fw == attempt.old_fw:
+            return False
+    return True
 
 
 def on_connect(client, _userdata, _flags, rc: int) -> None:
@@ -222,20 +250,22 @@ def on_message(_client, _userdata, msg) -> None:
 
 def check_timeouts() -> None:
     now = time.time()
-    expired = []
-    for key, attempt in attempts.items():
+    expired: list[tuple[Attempt, str]] = []
+    for attempt in attempts.values():
         if now >= attempt.deadline:
-            if not attempt.saw_offline:
+            if len(attempt.seen_offline) < len(attempt.nodes):
                 reason = "no_offline"
-            elif not attempt.saw_return:
+            elif len(attempt.seen_return) < len(attempt.nodes):
                 reason = "no_return"
-            elif attempt.last_fw == attempt.old_fw:
+            elif not attempt.fw_by_node:
+                reason = "no_fw_change"
+            elif all(fw == attempt.old_fw for fw in attempt.fw_by_node.values()):
                 reason = "no_fw_change"
             else:
                 reason = "timeout"
-            expired.append((key, reason))
-    for key, reason in expired:
-        complete_attempt(key, False, reason=reason)
+            expired.append((attempt, reason))
+    for attempt, reason in expired:
+        complete_attempt(attempt, False, reason=reason)
 
 
 def stop_loop(_signum, _frame) -> None:
