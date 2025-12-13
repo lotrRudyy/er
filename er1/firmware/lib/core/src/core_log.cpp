@@ -18,7 +18,7 @@ bool isValidJsonObject(const String& in) {
   if (end <= start) return false;
   if (in.charAt(start) != '{' || in.charAt(end - 1) != '}') return false;
 
-  StaticJsonDocument<512> doc;
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, in);
   if (err) return false;
   return doc.is<JsonObject>();
