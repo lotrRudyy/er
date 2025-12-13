@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Codex (auto-squash)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/shared/pc-scripts/codex-vscode.ps1"
+      ],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    }
+  ]
+}
