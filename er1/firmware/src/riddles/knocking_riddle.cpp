@@ -1,9 +1,9 @@
 #include "knocking_riddle.h"
 
-static const char* TOPIC_EVENT = "er1/room3/knocking/event";
-
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+  const char* node = ctx.nodeId() ? ctx.nodeId() : "knocking";
+  topicEvent_ = Core::topic(node, "evt");
   dfSerial_ = &Serial2;
   dfSerial_->begin(9600, SERIAL_8N1, 16, 17);
 
@@ -281,6 +281,5 @@ void KnockingRiddle::resetSequence() {
 void KnockingRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   String payload = "{\"event\":\"SOLVED\",\"rid\":\"knocking\"}";
-  ctx_->publish(TOPIC_EVENT, payload);
+  ctx_->publish(topicEvent_.c_str(), payload);
 }
-

@@ -78,40 +78,15 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 }
 
 String Logger::buildPayload(const LogMessage& msg) const {
+  (void)msg.uptime;
   String payload = "{";
-  const String fw = escapeJsonString(fwVersion_ ? fwVersion_ : "");
   const String level = escapeJsonString(msg.level ? msg.level : "");
   const String message = msg.msg ? escapeJsonString(*(msg.msg)) : "";
-  switch (format_) {
-    case LogFormat::LevelMsg:
-      payload += "\"lvl\":\"";
-      payload += level;
-      payload += "\",\"msg\":\"";
-      payload += message;
-      payload += "\"";
-      break;
-    case LogFormat::FwLevelMsg:
-      payload += "\"fw\":\"";
-      payload += fw;
-      payload += "\",\"lvl\":\"";
-      payload += level;
-      payload += "\",\"msg\":\"";
-      payload += message;
-      payload += "\"";
-      break;
-    case LogFormat::FwUptimeLevelMsg:
-    default:
-      payload += "\"fw\":\"";
-      payload += fw;
-      payload += "\",\"up\":";
-      payload += msg.uptime;
-      payload += ",\"lv\":\"";
-      payload += level;
-      payload += "\",\"msg\":\"";
-      payload += message;
-      payload += "\"";
-      break;
-  }
+  payload += "\"lv\":\"";
+  payload += level;
+  payload += "\",\"msg\":\"";
+  payload += message;
+  payload += "\"";
 
   if (includeData_ && msg.dataJson && msg.dataJson->length() > 0) {
     payload += ",\"d\":";

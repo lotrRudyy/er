@@ -10,10 +10,14 @@
 namespace Core {
 
 struct TopicConfig {
-  const char* hb = nullptr;
-  const char* cmd = nullptr;
-  const char* log = nullptr;
-  const char* ota = nullptr;
+  String hb;
+  String cmd;
+  String evt;
+  String state;
+  String dbg;
+  String log;
+  String cfg;
+  String ota;
 };
 
 struct HeartbeatConfig {
@@ -49,6 +53,8 @@ struct CommandConfig {
 };
 
 struct NodeCoreConfig {
+  const char* nodeId = nullptr;
+  const char* buildId = nullptr;
   const char* fwVersion = nullptr;
   const char* fwDescription = nullptr;
   bool startEnabled = true;
@@ -81,6 +87,8 @@ public:
   uint32_t nowMs() const { return millis(); }
 
   const char* fwVersion() const;
+  const char* buildId() const;
+  const char* nodeId() const;
   const NodeCoreConfig& config() const;
 
   Preferences& prefs();
@@ -106,6 +114,8 @@ public:
   void loop();
 
   NodeContext& context() { return ctx_; }
+  const char* nodeId() const { return cfg_.nodeId; }
+  const char* buildId() const { return cfg_.buildId; }
 
   bool registerCommandHandler(CommandHandler handler, void* userData);
   bool registerSubscription(const char* topic, SubscriptionHandler handler, void* userData);
@@ -170,5 +180,17 @@ private:
 
   NodeContext ctx_;
 };
+
+TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg = {});
+struct HeartbeatFields {
+  const char* nodeId;
+  const char* fw;
+  const char* buildId;
+  uint32_t uptime;
+  const char* health;
+  const char* mem;
+  const char* lastErr;
+};
+void buildHeartbeatPayload(String& out, const HeartbeatFields& hb);
 
 }  // namespace Core

@@ -63,6 +63,7 @@ private:
   void publishSolvedEvent();
 
   Core::NodeContext* ctx_ = nullptr;
+  String topicEvent_;
   HardwareSerial* dfSerial_ = nullptr;
   DFRobotDFPlayerMini dfPlayer_;
   bool dfOk_ = false;

@@ -6,9 +6,9 @@
 namespace Core {
 
 enum class LogFormat : uint8_t {
-  LevelMsg = 0,        // {"lvl":"..","msg":".."}
-  FwLevelMsg,          // {"fw":"..","lvl":"..","msg":".."}
-  FwUptimeLevelMsg     // {"fw":"..","up":123,"lv":"..","msg":"..",["d":{}]}
+  LevelMsg = 0,        // Compatibility only; all formats emit {"lv":"..","msg":"..","d":{}}
+  FwLevelMsg,
+  FwUptimeLevelMsg
 };
 
 struct LogMessage {
@@ -61,4 +61,3 @@ private:
 };
 
 }  // namespace Core
-

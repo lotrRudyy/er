@@ -1,14 +1,12 @@
 #include "candles_riddle.h"
 
-namespace {
-constexpr const char* kTopicMetric = "er1/room3/candles/metric";
-constexpr const char* kTopicEvent = "er1/room3/candles/event";
-constexpr const char* kTopicCmdStarSky = "er1/room3/star-sky/cmd";
-constexpr const char* kTopicCmdLighting = "er1/room0/lighting/cmd";
-}  // namespace
-
 void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+  const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
+  topicEvent_ = Core::topic(node, "evt");
+  topicMetric_ = Core::topic(node, "dbg");
+  topicCmdStarSky_ = Core::topic("star_sky", "cmd");
+  topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
     pinMode(kLedPins[i], OUTPUT);
     setLed(i, true);
@@ -198,9 +196,9 @@ void CandlesRiddle::publishSolvedEvent() {
   if (solvedEventSent_) return;
   if (!ctx_) return;
   String payload = "{\"event\":\"SOLVED\",\"rid\":\"candles\"}";
-  ctx_->publish(kTopicEvent, payload);
-  ctx_->publish(kTopicCmdStarSky, "CANDLES_SOLVED");
-  ctx_->publish(kTopicCmdLighting, "CANDLES_SOLVED");
+  ctx_->publish(topicEvent_.c_str(), payload);
+  ctx_->publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
+  ctx_->publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
   solvedEventSent_ = true;
 }
 
@@ -234,10 +232,9 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
                      ",\"d\":" + (int(mm.avg) - int(mm.base)) +
                      ",\"thr\":" + delta_[i] +
                      "}";
-    ctx_->publish(kTopicMetric, payload);
+    ctx_->publish(topicMetric_.c_str(), payload);
     mm.sum = 0;
     mm.samples = 0;
     mm.maxVal = 0;
   }
 }
-

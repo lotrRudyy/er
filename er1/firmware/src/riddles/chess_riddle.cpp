@@ -1,12 +1,10 @@
 #include "chess_riddle.h"
 
-namespace {
-constexpr const char* kTopicMetric = "er1/room2/chess/metric";
-constexpr const char* kTopicEvent = "er1/room2/chess/event";
-}
-
 void ChessRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+  const char* node = ctx.nodeId() ? ctx.nodeId() : "chess";
+  topicEvent_ = Core::topic(node, "evt");
+  topicMetric_ = Core::topic(node, "dbg");
   rfidSerial_->begin(115200, SERIAL_8N1, kUartRxPin, kUartTxPin);
   for (int i = 0; i < kReaderCount; i++) {
     readerUid_[i] = "NONE";
@@ -136,7 +134,7 @@ void ChessRiddle::evaluatePattern() {
 void ChessRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   String payload = "{\"type\":\"SOLVED\",\"rid\":\"chess\"}";
-  ctx_->publish(kTopicEvent, payload);
+  ctx_->publish(topicEvent_.c_str(), payload);
 }
 
 void ChessRiddle::publishMetricsIfDue(uint32_t nowMs) {
@@ -154,7 +152,7 @@ void ChessRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
                    ",\"solves\":" + solvedCount_ +
                    ",\"pattern\":\"" + patternStr + "\"}";
-  ctx_->publish(kTopicMetric, payload);
+  ctx_->publish(topicMetric_.c_str(), payload);
 }
 
 void ChessRiddle::log(const char* level, const String& msg) {

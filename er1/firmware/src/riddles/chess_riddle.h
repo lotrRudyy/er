@@ -41,6 +41,8 @@ private:
   void publishMetricsIfDue(uint32_t nowMs);
 
   Core::NodeContext* ctx_ = nullptr;
+  String topicEvent_;
+  String topicMetric_;
   HardwareSerial* rfidSerial_ = &Serial2;
   String readerUid_[kReaderCount];
   uint32_t lastMetricMs_ = 0;

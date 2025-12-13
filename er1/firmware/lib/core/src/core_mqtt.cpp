@@ -108,5 +108,34 @@ void MqttClient::mqttCallback(char* topic, uint8_t* payload, unsigned int len) {
   }
 }
 
-}  // namespace Core
+String topic(const char* nodeId, const char* channel) {
+  if (!nodeId || !channel) return "";
 
+  String node = nodeId;
+  if (node.startsWith("/")) {
+    node.remove(0, 1);
+  }
+  while (node.endsWith("/")) {
+    node.remove(node.length() - 1);
+  }
+
+  String ch = channel;
+  if (ch.startsWith("/")) {
+    ch.remove(0, 1);
+  }
+  while (ch.startsWith("/")) {
+    ch.remove(0, 1);
+  }
+
+  if (node.length() == 0) return ch;
+  if (ch.length() == 0) return node;
+
+  String out;
+  out.reserve(node.length() + ch.length() + 1);
+  out = node;
+  out += "/";
+  out += ch;
+  return out;
+}
+
+}  // namespace Core

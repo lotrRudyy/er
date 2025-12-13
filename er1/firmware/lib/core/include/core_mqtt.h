@@ -56,4 +56,6 @@ private:
   static MqttClient* self_;
 };
 
+String topic(const char* nodeId, const char* channel);
+
 }  // namespace Core

@@ -1,5 +1,7 @@
 #include "core_node.h"
 
+#include <cstdio>
+
 namespace Core {
 
 // -------- NodeContext --------
@@ -41,6 +43,14 @@ const char* NodeContext::fwVersion() const {
   return core_ ? core_->cfg_.fwVersion : nullptr;
 }
 
+const char* NodeContext::buildId() const {
+  return core_ ? core_->cfg_.buildId : nullptr;
+}
+
+const char* NodeContext::nodeId() const {
+  return core_ ? core_->cfg_.nodeId : nullptr;
+}
+
 const NodeCoreConfig& NodeContext::config() const {
   return core_->cfg_;
 }
@@ -66,6 +76,13 @@ NodeCore::NodeCore() : ctx_(*this) {}
 
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
+  if (!cfg_.nodeId || cfg_.nodeId[0] == '\0') {
+    cfg_.nodeId = cfg_.net.clientId;
+  }
+  if (!cfg_.buildId || cfg_.buildId[0] == '\0') {
+    cfg_.buildId = __DATE__ " " __TIME__;
+  }
+  cfg_.topics = makeTopicConfig(cfg_.nodeId, cfg.topics);
   if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
     cfg_.ota.targetFw = cfg_.fwVersion;
   }
@@ -77,10 +94,11 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   heartbeatImmediate_ = true;
 
   NetConfig netCfg = cfg.net;
+  netCfg.topicLwt = cfg_.topics.hb.c_str();
   mqtt_.begin(netCfg, this);
 
   LogOptions logOpts = cfg.log;
-  logOpts.topic = cfg.topics.log;
+  logOpts.topic = cfg_.topics.log.c_str();
   logOpts.fwVersion = cfg.fwVersion;
   logger_.begin(&mqtt_.client(), logOpts);
 
@@ -148,8 +166,8 @@ void NodeCore::onMqttConnected() {
   const char* lvl = cfg_.mqttConnectedLogLevel ? cfg_.mqttConnectedLogLevel : "INF";
   logger_.publish(lvl, "MQTT connected");
 
-  if (cfg_.topics.cmd) {
-    mqtt_.subscribe(cfg_.topics.cmd);
+  if (cfg_.topics.cmd.length() > 0) {
+    mqtt_.subscribe(cfg_.topics.cmd.c_str());
   }
 
   for (size_t i = 0; i < subCount_; i++) {
@@ -167,7 +185,7 @@ void NodeCore::onMqttMessage(const char* topic, const uint8_t* payload, size_t l
   }
   msg.trim();
 
-  if (cfg_.topics.cmd && strcmp(topic, cfg_.topics.cmd) == 0) {
+  if (cfg_.topics.cmd.length() > 0 && strcmp(topic, cfg_.topics.cmd.c_str()) == 0) {
     logCommandEnvelope(topic, msg);
     handleCommandMessage(msg);
     return;
@@ -264,7 +282,7 @@ bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
 }
 
 void NodeCore::publishHeartbeatIfDue() {
-  if (!cfg_.topics.hb || !hbCfg_.builder) return;
+  if (cfg_.topics.hb.length() == 0 || !hbCfg_.builder) return;
 
   uint32_t now = millis();
   if (!heartbeatImmediate_ && (now - lastHeartbeatMs_) < heartbeatIntervalMs_) {
@@ -280,7 +298,7 @@ void NodeCore::publishHeartbeatIfDue() {
   hbCfg_.builder(payload, ctx_, hbCfg_.user);
   if (payload.length() == 0) return;
 
-  mqtt_.publish(cfg_.topics.hb, payload, true);
+  mqtt_.publish(cfg_.topics.hb.c_str(), payload, true);
 }
 
 void NodeCore::logCommandEnvelope(const char* topic, const String& payload) {
@@ -356,6 +374,93 @@ void NodeCore::persistEnabledState(const char* reason) {
   }
   logger_.publish("INF", msg);
   prefs_.putBool("enabled", enabled_);
+}
+
+TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg) {
+  TopicConfig out = overrideCfg;
+  if (!nodeId || nodeId[0] == '\0') {
+    return out;
+  }
+
+  auto ensure = [&](String& field, const char* channel) {
+    if (field.length() == 0) {
+      field = topic(nodeId, channel);
+    }
+  };
+
+  ensure(out.hb, "hb");
+  ensure(out.cmd, "cmd");
+  ensure(out.evt, "evt");
+  ensure(out.state, "state");
+  ensure(out.dbg, "dbg");
+  ensure(out.log, "log");
+  ensure(out.cfg, "cfg");
+  ensure(out.ota, "ota");
+  return out;
+}
+
+namespace {
+String escapeJson(const char* s) {
+  if (!s) return "";
+  String in(s);
+  String out;
+  out.reserve(in.length() + 8);
+  for (size_t i = 0; i < in.length(); i++) {
+    const char c = in.charAt(i);
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<uint8_t>(c) < 0x20) {
+          char buf[7];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<uint8_t>(c));
+          out += buf;
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
+}  // namespace
+
+void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
+  const char* node = (hb.nodeId && hb.nodeId[0]) ? hb.nodeId : "?";
+  const char* fw = (hb.fw && hb.fw[0]) ? hb.fw : "?";
+  const char* build = (hb.buildId && hb.buildId[0]) ? hb.buildId : "?";
+  const char* health = (hb.health && hb.health[0]) ? hb.health : "ok";
+  const char* mem = (hb.mem && hb.mem[0]) ? hb.mem : "ok";
+  const char* lastErr = (hb.lastErr && hb.lastErr[0]) ? hb.lastErr : "0";
+
+  String nodeEsc = escapeJson(node);
+  String fwEsc = escapeJson(fw);
+  String buildEsc = escapeJson(build);
+  String healthEsc = escapeJson(health);
+  String memEsc = escapeJson(mem);
+  String lastErrEsc = escapeJson(lastErr);
+
+  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + 64);
+  out = "{\"node\":\"";
+  out += nodeEsc;
+  out += "\",\"fw\":\"";
+  out += fwEsc;
+  out += "\",\"build\":\"";
+  out += buildEsc;
+  out += "\",\"up\":";
+  out += hb.uptime;
+  out += ",\"health\":\"";
+  out += healthEsc;
+  out += "\",\"mem\":\"";
+  out += memEsc;
+  out += "\",\"last_err\":\"";
+  out += lastErrEsc;
+  out += "\"}";
 }
 
 }  // namespace Core
