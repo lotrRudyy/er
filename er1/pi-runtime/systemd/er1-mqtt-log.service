@@ -9,7 +9,7 @@ User=rudyy
 Group=rudyy
 WorkingDirectory=/home/rudyy/er1
 Environment=LOCAL_BROKER=127.0.0.1
-ExecStart=/home/rudyy/er1/scripts/mqtt-logs.sh daemon
+ExecStart=/home/rudyy/er1/scripts/mqtt_logs.sh daemon
 Restart=always
 RestartSec=3
 

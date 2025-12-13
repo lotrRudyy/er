@@ -12,9 +12,9 @@ This repository contains the complete control system for the escape room project
 This README provides a quick overview.
 **Deep technical documentation lives in:**
 
-- `docs/workflow.md` — Developer workflow
-- `er1/docs/ER1_PROTOCOL.md` — Canonical ER1 Protocol
-- `shared/docs/` — cross-room documentation (future)
+- `docs/er/workflow.md` — Developer workflow
+- `docs/er/er1_protocol.md` — Canonical ER1 Protocol
+- `docs/er/` — ER-wide docs (future cross-room content)
 
 ---
 
@@ -51,7 +51,7 @@ $laptop = "$HOME\Documents\er"
 $ROOT = if (Test-Path $pc) { $pc } elseif (Test-Path $laptop) { $laptop } else { "" }
 
 if ($ROOT -ne "") {
-    . "$ROOT\shared\pc-scripts\er1_profile.ps1"
+    . "$ROOT\pc-scripts\er1_profile.ps1"
 } else {
     Write-Warning "ER repo not found."
 }
@@ -181,12 +181,12 @@ Legacy names `door_to_r2`, `door_to_r3` are deprecated.
 
 ### Complete developer workflow:
 ```
-docs/workflow.md
+docs/er/workflow.md
 ```
 
 ### Canonical ER1 protocol (wins over everything else):
 ```
-er1/docs/ER1_PROTOCOL.md
+docs/er/er1_protocol.md
 ```
 
 Both files should always be updated together when modifying firmware, runtime, or MQTT conventions.
@@ -197,6 +197,8 @@ Both files should always be updated together when modifying firmware, runtime, o
 
 ```
 er/
+  docs/
+    er/
   er1/
     firmware/
     pi-runtime/
@@ -204,13 +206,12 @@ er/
       systemd/
       logs/
       config/
-      docs/
   er2/
   er3/
-  shared/
-    pc-scripts/
-    libs/
-    docs/
+  pc-scripts/
+    er1_profile.ps1
+    codex_commit.ps1
+  web/
 ```
 
 ---

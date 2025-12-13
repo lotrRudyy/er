@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$HOME/er1"
-./scripts/mqtt-logs.sh live
+./scripts/mqtt_logs.sh live
