@@ -1,5 +1,6 @@
 #include "core_log.h"
 
+#include <cctype>
 #include <cstdio>
 
 #include "core_time.h"
@@ -7,6 +8,16 @@
 namespace Core {
 
 namespace {
+bool isJsonObjectString(const String& in) {
+  if (in.length() == 0) return false;
+  size_t start = 0;
+  size_t end = in.length();
+  while (start < end && std::isspace(static_cast<unsigned char>(in.charAt(start)))) start++;
+  while (end > start && std::isspace(static_cast<unsigned char>(in.charAt(end - 1)))) end--;
+  if (end <= start) return false;
+  return in.charAt(start) == '{' && in.charAt(end - 1) == '}';
+}
+
 String escapeJsonString(const String& in) {
   String out;
   out.reserve(in.length() + 8);
@@ -128,10 +139,16 @@ String Logger::buildPayload(const LogMessage& msg, const TimestampFields& ts) co
   payload += "\"";
 
   if (includeData_ && msg.dataJson && msg.dataJson->length() > 0) {
-    const String dataEscaped = escapeJsonString(*(msg.dataJson));
-    payload += ",\"d\":\"";
-    payload += dataEscaped;
-    payload += "\"";
+    const String& data = *(msg.dataJson);
+    if (isJsonObjectString(data)) {
+      payload += ",\"d\":";
+      payload += data;
+    } else {
+      const String dataEscaped = escapeJsonString(data);
+      payload += ",\"d\":\"";
+      payload += dataEscaped;
+      payload += "\"";
+    }
   }
 
   payload += "}";
