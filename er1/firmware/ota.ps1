@@ -194,6 +194,23 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# ============ LEGACY FILENAME COPIES ============
+# Some older firmwares expect legacy filenames (e.g. maglock_ctrl.bin).
+# Ensure a legacy copy exists on the Pi so both canonical and legacy UPDATE
+# commands succeed during rolling migrations.
+$legacyNameMap = @{ "maglock" = "maglock_ctrl.bin" }
+if ($legacyNameMap.ContainsKey($Dev)) {
+    $legacyName = $legacyNameMap[$Dev]
+    $copyCmd = "cp $piFirmwareDir/$remoteFirmwareName $piFirmwareDir/$legacyName"
+    Write-Host "== Creating legacy copy on Pi: $legacyName =="
+    ssh "$piUser@$piHost" $copyCmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to create legacy firmware copy $legacyName on Pi"
+        exit 1
+    }
+    Write-Host "== Created legacy copy: $piFirmwareDir/$legacyName =="
+}
+
 # ============ POSTFLIGHT CHECK ============
 $postflightUrl = "http://192.168.0.10/firmware/$remoteFirmwareName"
 Write-Host "== Verifying OTA URL from Pi: $postflightUrl =="
