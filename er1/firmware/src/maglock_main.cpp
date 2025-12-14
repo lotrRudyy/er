@@ -29,7 +29,7 @@ static const char* TOPIC_LOCK_CMD = "maglock/lock/+/cmd";
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/maglock_ctrl.bin";
+static const char* OTA_PATH = "/firmware/maglock.bin";
 static const char* OTA_PATH_PREFIX = "/firmware/";
 #ifndef OTA_PSK
 #error "OTA_PSK must be defined (pre-shared OTA key)"
