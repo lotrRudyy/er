@@ -504,7 +504,6 @@
                 "ETH_SPI_CLOCK_MHZ=20",
                 "PIO_FRAMEWORK_ARDUINO_LWIP2_LOW_MEMORY",
                 "ARDUINOJSON_USE_LONG_LONG=1",
-                "OTA_PSK=\"change-me-to-a-real-secret\"",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",
                 "UNITY_INCLUDE_CONFIG_H",
