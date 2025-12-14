@@ -17,7 +17,7 @@ Windows user profile files:
   `C:\Users\<USER>\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`
 
 Repo-side ER1 logic lives in a file named `er1_profile.ps1` inside the ER repo (under `scripts/`).
-This repo-side profile is the single source of truth for ER commands (`er1`, deploy, logs, status, doctor, etc).
+This repo-side profile is the single source of truth for ER commands (`er1`, logs, status, doctor, etc).
 
 ---
 

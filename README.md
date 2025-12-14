@@ -69,25 +69,11 @@ This loads all development commands for both PC and laptop.
 er1 push "message"
 ```
 
-## Deploy Pi runtime
-
-```
-er1 deploy              # runtime subset
-er1 deploy full         # entire pi-runtime mirror
-```
-
-Deploy script syncs:
-
-- `er1/pi-runtime/scripts/`
-- `er1/pi-runtime/systemd/`
-- `er1/pi-runtime/docs/`
-- `config/local.env.example`
-
-Optional restart/verify flags are available; see `scripts/er1_profile.ps1`.
+The OTA workflow is now the canonical path for Pi runtime updates; use `er1 ota <Dev>`.
 
 ---
 
-## OTA updates
+## OTA updates (canonical path)
 
 ```
 er1 ota <Dev>

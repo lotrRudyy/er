@@ -59,7 +59,6 @@ $er1Commands = [ordered]@{
     "pi"     = "SSH into the ER1 Pi"
     "log"    = "Tail logs (today/errors/live), optional --save"
     "ota"    = "Upload firmware to a device via ota.ps1"
-    "deploy" = "Deploy ER1 Pi runtime (supports -Mode/-DryRun/-RestartServices/-Verify)"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
     "status" = "One-shot health summary"
@@ -71,35 +70,6 @@ $er1Commands = [ordered]@{
 # =========================================================
 # CORE HELPERS
 # =========================================================
-
-function Invoke-Er1DeployCommand {
-    param(
-        [ValidateSet("runtime","full")]
-        [string]$Mode = "runtime",
-
-        [switch]$DryRun,
-        [switch]$RestartServices,
-        [switch]$Verify
-    )
-
-    $deployScript = Join-Path $erRepoRoot "scripts\er1_deploy.ps1"
-    if (-not (Test-Path $deployScript)) {
-        throw "Deploy script not found: $deployScript"
-    }
-
-    pwsh -File $deployScript `
-        -RepoRoot $erRepoRoot `
-        -Er1Pi $er1Pi `
-        -Er1Cmd $er1Cmd `
-        -Mode $Mode `
-        -DryRun:$DryRun `
-        -RestartServices:$RestartServices `
-        -Verify:$Verify
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "er1 deploy failed (exit $LASTEXITCODE)."
-    }
-}
 
 function Invoke-Er1Push {
     param(
@@ -279,13 +249,6 @@ function er1 {
         [Parameter(Position=1, ValueFromRemainingArguments=$true)]
         [string[]]$cmdArgs,
 
-        # Deploy-only switches (accepted here so you can call: er1 deploy -Mode full -Verify ...)
-        [ValidateSet("runtime","full")]
-        [string]$Mode = "runtime",
-        [switch]$DryRun,
-        [switch]$RestartServices,
-        [switch]$Verify,
-
         # Log-only switches
         [switch]$live,
         [switch]$errors,
@@ -299,12 +262,6 @@ function er1 {
             foreach ($k in $er1Commands.Keys) {
                 "{0,-10} {1}" -f $k, $er1Commands[$k]
             }
-
-            Write-Host "`nDeploy examples:" -ForegroundColor Cyan
-            Write-Host "  er1 deploy"
-            Write-Host "  er1 deploy -Mode full"
-            Write-Host "  er1 deploy -DryRun"
-            Write-Host "  er1 deploy -RestartServices -Verify"
 
             Write-Host "`nLock examples:" -ForegroundColor Cyan
             Write-Host "  er1 lock images open"
@@ -338,11 +295,6 @@ function er1 {
 
         "pi" {
             ssh $er1Pi
-            return
-        }
-
-        "deploy" {
-            Invoke-Er1DeployCommand -Mode $Mode -DryRun:$DryRun -RestartServices:$RestartServices -Verify:$Verify
             return
         }
 
