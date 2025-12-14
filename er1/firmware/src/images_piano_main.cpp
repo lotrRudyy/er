@@ -13,8 +13,8 @@ using namespace Core;
 static const char* NODE_IDENTITY = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.18";
-static const char* FW_DESC = "Single firmware with two logical MQTT nodes: images and piano";
+static const char* FW_VERSION = "1.19";
+static const char* FW_DESC = "Single firmware with two logical MQTT nodes; OTA JSON, no PSK";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -30,10 +30,6 @@ static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
 static const char* OTA_PATH = "/firmware/images_piano.bin";
 static const char* OTA_PATH_PREFIX = "/firmware/";
-#ifndef OTA_PSK
-#error "OTA_PSK must be defined (pre-shared OTA key)"
-#endif
-static const char* const OTA_PSK_VALUE = OTA_PSK;
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= MODULES =============================
@@ -171,7 +167,6 @@ void setup() {
   cfg.ota.path = OTA_PATH;
   cfg.ota.allowedHost = OTA_ALLOWED_HOST;
   cfg.ota.allowedPathPrefix = OTA_PATH_PREFIX;
-  cfg.ota.psk = OTA_PSK_VALUE;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;

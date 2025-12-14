@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
-Compute OTA sha256 + HMAC on the Pi and publish the UPDATE command.
-
-Reads PSK from /etc/er1/ota_psk (root-owned, group-readable) and publishes
-to <cmd_node>/cmd on the configured broker.
+Compute OTA sha256 on the Pi and publish the UPDATE command with a JSON payload.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import hashlib
-import hmac
 import sys
+import uuid
 from pathlib import Path
 
-DEFAULT_PSK_PATH = Path("/etc/er1/ota_psk")
 DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/firmware")
 
 DEPLOYMENTS: dict[str, dict[str, object]] = {
@@ -88,21 +85,6 @@ class OtaPublishError(Exception):
     pass
 
 
-def read_psk(psk_path: Path) -> str:
-    try:
-        data = psk_path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        raise OtaPublishError(f"PSK file not found at {psk_path}; see docs/ota-security.md")
-    except PermissionError as exc:
-        raise OtaPublishError(f"Permission denied reading PSK at {psk_path}: {exc}") from exc
-    except OSError as exc:
-        raise OtaPublishError(f"Failed to read PSK from {psk_path}: {exc}") from exc
-
-    if not data:
-        raise OtaPublishError(f"PSK file {psk_path} is empty")
-    return data
-
-
 def sha256_file(path: Path) -> str:
     if not path.exists():
         raise OtaPublishError(f"Firmware file not found: {path}")
@@ -118,10 +100,6 @@ def sha256_file(path: Path) -> str:
         raise OtaPublishError(f"Failed to read firmware {path}: {exc}") from exc
 
     return digest.hexdigest()
-
-
-def compute_hmac(psk: str, sha_hex: str) -> str:
-    return hmac.new(psk.encode("utf-8"), sha_hex.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def publish(broker: str, port: int, topic: str, payload: str) -> None:
@@ -147,7 +125,7 @@ def publish(broker: str, port: int, topic: str, payload: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Publish an OTA command from the Pi with HMAC computed locally."
+        description="Publish an OTA command from the Pi with SHA-256 validation (no PSK)."
     )
     parser.add_argument("--dev", required=True, help="Device name (topic prefix)")
     parser.add_argument(
@@ -168,7 +146,9 @@ def parse_args() -> argparse.Namespace:
         dest="firmware_path",
         help="Firmware file path on the Pi (defaults to /home/rudyy/firmware/<firmware_name>)",
     )
-    parser.add_argument("--psk-path", default=str(DEFAULT_PSK_PATH), help="Path to OTA PSK file")
+    parser.add_argument("--version", required=True, help="Firmware version string to announce")
+    parser.add_argument("--target", help="Expected target node id (defaults from deployment map or dev)")
+    parser.add_argument("--id", dest="ota_id", help="OTA update id (nonce); defaults to random UUID")
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
     return parser.parse_args()
 
@@ -181,21 +161,43 @@ def main() -> int:
     firmware_path = (
         Path(args.firmware_path) if args.firmware_path else DEFAULT_FIRMWARE_DIR / firmware_name
     )
-    url = args.url or f"/firmware/{firmware_name}"
-    psk_path = Path(args.psk_path)
+    target = args.target or deployment.get("target") or args.dev
+    if not target:
+        raise OtaPublishError("Target must be provided (via --target or deployment map)")
+    version = args.version.strip()
+    if not version:
+        raise OtaPublishError("Version must be provided")
+    url = args.url or f"http://192.168.0.10/firmware/{firmware_name}"
+    ota_id = args.ota_id or uuid.uuid4().hex
 
     try:
-        psk = read_psk(psk_path)
         sha_hex = sha256_file(firmware_path)
-        hmac_hex = compute_hmac(psk, sha_hex)
+        try:
+            size_bytes = firmware_path.stat().st_size
+        except OSError as exc:
+            raise OtaPublishError(f"Failed to stat firmware {firmware_path}: {exc}") from exc
+        if size_bytes <= 0:
+            raise OtaPublishError(f"Firmware size invalid: {size_bytes}")
         topic = f"{cmd_node}/cmd"
-        payload = f"UPDATE sha256={sha_hex} hmac={hmac_hex} url={url}"
+        payload_obj = {
+            "id": ota_id,
+            "version": version,
+            "target": target,
+            "url": url,
+            "sha256": sha_hex,
+            "size": size_bytes,
+        }
+        payload_json = json.dumps(payload_obj, separators=(",", ":"))
+        payload = f"UPDATE {payload_json}"
 
-        print(f"PSK path : {psk_path}")
         print(f"Firmware : {firmware_path}")
+        print(f"Size     : {size_bytes}")
         print(f"SHA256   : {sha_hex}")
-        print(f"HMAC     : {hmac_hex}")
+        print(f"URL      : {url}")
         print(f"Dev      : {args.dev}")
+        print(f"Version  : {version}")
+        print(f"Target   : {target}")
+        print(f"OtaId    : {ota_id}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
         print(f"Payload  : {payload}")

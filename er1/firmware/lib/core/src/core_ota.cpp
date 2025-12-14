@@ -1,9 +1,10 @@
 #include "core_ota.h"
 
+#include <ArduinoJson.h>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
-#include <mbedtls/md.h>
-#include <mbedtls/platform_util.h>
+#include <esp_system.h>
 #include <mbedtls/sha256.h>
 
 namespace Core {
@@ -16,16 +17,47 @@ constexpr size_t kSha256HexLen = 64;
 constexpr size_t kSha256HexBufLen = kSha256HexLen + 1;
 constexpr size_t kMaxHostLen = 63;
 constexpr size_t kMaxPathLen = 127;
+constexpr size_t kMaxVersionLen = 47;
+constexpr size_t kMaxIdLen = 47;
+constexpr size_t kMaxTargetLen = 47;
 constexpr const char* kDefaultPathPrefix = "/firmware/";
+constexpr uint32_t kPendingMagic = 0xC05A4E2A;
 
 struct CommandFields {
   char sha256[kSha256HexBufLen]{};
-  char hmac[kSha256HexBufLen]{};
+  char version[kMaxVersionLen + 1]{};
+  char id[kMaxIdLen + 1]{};
+  char target[kMaxTargetLen + 1]{};
   char urlHost[kMaxHostLen + 1]{};
   char urlPath[kMaxPathLen + 1]{};
+  uint16_t urlPort = 0;
   bool hasUrlHost = false;
   bool hasUrlPath = false;
+  bool hasUrlPort = false;
+  size_t sizeBytes = 0;
 };
+
+RTC_DATA_ATTR struct {
+  uint32_t magic = 0;
+  char version[kMaxVersionLen + 1]{};
+  char id[kMaxIdLen + 1]{};
+} g_pending;
+
+void clearPending() {
+  g_pending.magic = 0;
+  g_pending.version[0] = '\0';
+  g_pending.id[0] = '\0';
+}
+
+void persistPending(const char* id, const char* version) {
+  clearPending();
+  if (!id || !version) return;
+  std::strncpy(g_pending.id, id, kMaxIdLen);
+  g_pending.id[kMaxIdLen] = '\0';
+  std::strncpy(g_pending.version, version, kMaxVersionLen);
+  g_pending.version[kMaxVersionLen] = '\0';
+  g_pending.magic = kPendingMagic;
+}
 
 bool startsWith(const char* value, const char* prefix) {
   if (!value || !prefix) return false;
@@ -81,7 +113,13 @@ bool parseUrl(const String& raw, CommandFields& out) {
   if (hostPort.length() == 0 || static_cast<size_t>(hostPort.length()) > kMaxHostLen) return false;
   int colonIdx = hostPort.indexOf(':');
   if (colonIdx > 0) {
+    String portStr = hostPort.substring(colonIdx + 1);
     hostPort = hostPort.substring(0, colonIdx);
+    int portVal = portStr.toInt();
+    if (portVal > 0 && portVal <= 65535) {
+      out.urlPort = static_cast<uint16_t>(portVal);
+      out.hasUrlPort = true;
+    }
   }
   if (static_cast<size_t>(path.length()) > kMaxPathLen) return false;
   if (!path.startsWith("/")) {
@@ -105,104 +143,99 @@ bool constantTimeEquals(const char* a, const char* b, size_t len) {
   return diff == 0;
 }
 
-bool computeHmac(const char* key, const char* msg, char* outHex, size_t outLen) {
-  if (!key || !msg || !outHex || outLen < kSha256HexBufLen) return false;
-  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (!info) return false;
-  unsigned char out[32];
-  int rc = mbedtls_md_hmac(info, reinterpret_cast<const unsigned char*>(key), strlen(key),
-                           reinterpret_cast<const unsigned char*>(msg), strlen(msg), out);
-  if (rc != 0) return false;
-  bytesToHex(out, sizeof(out), outHex, outLen);
+void copyBounded(const char* src, char* dst, size_t dstLen) {
+  if (!dst || dstLen == 0) return;
+  if (!src) {
+    dst[0] = '\0';
+    return;
+  }
+  std::strncpy(dst, src, dstLen - 1);
+  dst[dstLen - 1] = '\0';
+}
+
+bool parseSize(const JsonVariantConst& var, size_t& out) {
+  if (var.is<uint32_t>()) {
+    out = var.as<uint32_t>();
+    return out > 0;
+  }
+  if (var.is<uint64_t>()) {
+    out = static_cast<size_t>(var.as<uint64_t>());
+    return out > 0;
+  }
+  if (var.is<const char*>()) {
+    const char* s = var.as<const char*>();
+    if (!s) return false;
+    long val = atol(s);
+    if (val <= 0) return false;
+    out = static_cast<size_t>(val);
+    return true;
+  }
+  return false;
+}
+
+bool parseJsonCommand(const char* payload, CommandFields& out) {
+  if (!payload || payload[0] == '\0') return false;
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) return false;
+  JsonObjectConst obj = doc.as<JsonObjectConst>();
+
+  const char* sha = obj["sha256"] | obj["sha"];
+  if (sha) {
+    copyBounded(sha, out.sha256, sizeof(out.sha256));
+  }
+  const char* url = obj["url"];
+  if (url) {
+    parseUrl(String(url), out);
+  }
+  const char* path = obj["path"];
+  if (path && !out.hasUrlPath) {
+    parseUrl(String(path), out);
+  }
+  const char* host = obj["host"];
+  if (host && !out.hasUrlHost) {
+    copyBounded(host, out.urlHost, sizeof(out.urlHost));
+    out.hasUrlHost = true;
+  }
+  uint16_t port = obj["port"] | 0;
+  if (port > 0) {
+    out.urlPort = port;
+    out.hasUrlPort = true;
+  }
+  const char* version = obj["version"] | obj["ver"];
+  if (version) {
+    copyBounded(version, out.version, sizeof(out.version));
+  }
+  const char* id = obj["id"] | obj["nonce"];
+  if (id) {
+    copyBounded(id, out.id, sizeof(out.id));
+  }
+  const char* target = obj["target"] | obj["node"] | obj["dev"];
+  if (target) {
+    copyBounded(target, out.target, sizeof(out.target));
+  }
+  JsonVariantConst sizeField = obj["size"] | obj["bytes"];
+  if (!sizeField.isNull()) {
+    parseSize(sizeField, out.sizeBytes);
+  }
   return true;
 }
 
-#ifdef OTA_VALIDATION_SELF_TEST
-bool runValidationSelfTest(Logger* logger) {
-  const char* psk = "test-key";
-  const char* sha = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8";  // sha256("password")
-  const char* badSha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+bool parseLegacyTokens(const String& payload, CommandFields& out) {
+  String trimmed = payload;
+  trimmed.trim();
+  if (trimmed.length() == 0) return false;
 
-  char hmac[kSha256HexBufLen]{};
-  if (!computeHmac(psk, sha, hmac, sizeof(hmac))) {
-    if (logger) logger->publish("ERR", "OTA self-test: hmac generation failed");
-    return false;
-  }
-
-  if (!constantTimeEquals(hmac, hmac, kSha256HexLen)) {
-    if (logger) logger->publish("ERR", "OTA self-test: constant time compare failed");
-    return false;
-  }
-
-  char recomputed[kSha256HexBufLen]{};
-  if (!computeHmac(psk, badSha, recomputed, sizeof(recomputed))) {
-    if (logger) logger->publish("ERR", "OTA self-test: hmac recompute failed");
-    return false;
-  }
-
-  if (constantTimeEquals(hmac, recomputed, kSha256HexLen)) {
-    if (logger) logger->publish("ERR", "OTA self-test: hmac mismatch not detected");
-    return false;
-  }
-
-  if (logger) logger->publish("DBG", "OTA self-test: validation helpers OK");
-  return true;
-}
-#endif
-}  // namespace
-
-void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
-  cfg_ = cfg;
-  logger_ = logger;
-}
-
-bool OtaUpdater::perform(const char* cmdPayload) {
-  if (!cfg_.host || !cfg_.path || !logger_) return false;
-
-#ifdef OTA_VALIDATION_SELF_TEST
-  static bool selfTestRan = false;
-  if (!selfTestRan) {
-    selfTestRan = true;
-    if (!runValidationSelfTest(logger_)) {
-      publishFail("auth", -1, "self_test_failed", 0);
-      return false;
-    }
-  }
-#endif
-
-  CommandFields cmd{};
-  if (!cfg_.psk || cfg_.psk[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA missing PSK (define OTA_PSK build flag)");
-    publishFail("auth", -1, "psk_missing", 0, "\"reason\":\"psk_missing\"");
-    return false;
-  }
-
-  if (!cmdPayload || cmdPayload[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA payload missing sha256/hmac");
-    publishFail("auth", -1, "missing_sha256", 0, "\"reason\":\"missing_sha256\"");
-    return false;
-  }
-
-  String payload = String(cmdPayload);
-  payload.trim();
-  if (payload.length() == 0) {
-    logger_->publish(cfg_.errLevel, "OTA payload empty after trim");
-    publishFail("auth", -1, "missing_sha256", 0, "\"reason\":\"missing_sha256\"");
-    return false;
-  }
-
-  bool parseError = false;
   int pos = 0;
-  while (pos < payload.length()) {
-    int spaceIdx = payload.indexOf(' ', pos);
-    String token = (spaceIdx < 0) ? payload.substring(pos) : payload.substring(pos, spaceIdx);
-    pos = (spaceIdx < 0) ? payload.length() : spaceIdx + 1;
+  while (pos < trimmed.length()) {
+    int spaceIdx = trimmed.indexOf(' ', pos);
+    String token = (spaceIdx < 0) ? trimmed.substring(pos) : trimmed.substring(pos, spaceIdx);
+    pos = (spaceIdx < 0) ? trimmed.length() : spaceIdx + 1;
     token.trim();
     if (token.length() == 0) continue;
     int eqIdx = token.indexOf('=');
     if (eqIdx <= 0) {
-      parseError = true;
-      break;
+      continue;
     }
     String key = token.substring(0, eqIdx);
     String value = token.substring(eqIdx + 1);
@@ -210,128 +243,178 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     value.trim();
     key.toLowerCase();
 
-    if (key == "sha256") {
+    if (key == "sha256" || key == "sha") {
       value.toLowerCase();
-      if (value.length() != kSha256HexLen || !isHex(value.c_str(), value.length())) {
-        logger_->publish(cfg_.errLevel, "OTA invalid sha256 field");
-        publishFail("auth", -1, "invalid_sha256", 0, "\"reason\":\"invalid_sha256\"");
-        return false;
-      }
-      value.toCharArray(cmd.sha256, kSha256HexBufLen);
-    } else if (key == "hmac") {
-      value.toLowerCase();
-      if (value.length() != kSha256HexLen || !isHex(value.c_str(), value.length())) {
-        logger_->publish(cfg_.errLevel, "OTA invalid hmac field");
-        publishFail("auth", -1, "invalid_hmac", 0, "\"reason\":\"invalid_hmac\"");
-        return false;
-      }
-      value.toCharArray(cmd.hmac, kSha256HexBufLen);
+      value.toCharArray(out.sha256, kSha256HexBufLen);
     } else if (key == "url") {
-      if (!parseUrl(value, cmd)) {
-        parseError = true;
-        break;
-      }
+      parseUrl(value, out);
     } else if (key == "path") {
-      if (!value.startsWith("/")) {
-        parseError = true;
-        break;
+      parseUrl(value, out);
+    } else if (key == "host") {
+      value.toCharArray(out.urlHost, kMaxHostLen + 1);
+      out.hasUrlHost = true;
+    } else if (key == "port") {
+      out.urlPort = static_cast<uint16_t>(value.toInt());
+      out.hasUrlPort = out.urlPort > 0;
+    } else if (key == "version" || key == "ver") {
+      value.toCharArray(out.version, kMaxVersionLen + 1);
+    } else if (key == "id" || key == "nonce") {
+      value.toCharArray(out.id, kMaxIdLen + 1);
+    } else if (key == "target" || key == "node" || key == "dev") {
+      value.toCharArray(out.target, kMaxTargetLen + 1);
+    } else if (key == "size" || key == "bytes") {
+      long val = value.toInt();
+      if (val > 0) out.sizeBytes = static_cast<size_t>(val);
+    }
+  }
+  return true;
+}
+
+bool parseCommandPayload(const char* payload, CommandFields& out) {
+  if (parseJsonCommand(payload, out)) return true;
+  return parseLegacyTokens(String(payload), out);
+}
+}  // namespace
+
+void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
+  cfg_ = cfg;
+  logger_ = logger;
+  currentId_ = "";
+  currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
+  currentUrl_ = "";
+  expectedSize_ = 0;
+  bootReportPending_ = false;
+  bootReportOk_ = false;
+  pendingVersion_ = "";
+  currentVersion_ = cfg_.targetFw ? cfg_.targetFw : "";
+
+  if (g_pending.magic == kPendingMagic) {
+    pendingVersion_ = String(g_pending.version);
+    currentId_ = String(g_pending.id);
+    bootReportPending_ = true;
+    bootReportOk_ = (pendingVersion_.length() > 0 && cfg_.targetFw && pendingVersion_ == String(cfg_.targetFw));
+  }
+}
+
+bool OtaUpdater::perform(const char* cmdPayload) {
+  if (!logger_) return false;
+
+  currentId_ = "";
+  currentUrl_ = "";
+  expectedSize_ = 0;
+  pendingVersion_ = "";
+  currentVersion_ = cfg_.targetFw ? cfg_.targetFw : "";
+  currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
+
+  CommandFields cmd{};
+  if (!cmdPayload || cmdPayload[0] == '\0') {
+    logger_->publish(cfg_.errLevel, "OTA payload missing");
+    publishFail("parse", -1, "missing_payload", 0, "\"reason\":\"missing_payload\"");
+    return false;
+  }
+
+  if (!parseCommandPayload(cmdPayload, cmd)) {
+    logger_->publish(cfg_.errLevel, "OTA payload parse failed");
+    publishFail("parse", -1, "invalid_payload", 0, "\"reason\":\"invalid_payload\"");
+    return false;
+  }
+
+  size_t shaLen = strlen(cmd.sha256);
+  if (shaLen != kSha256HexLen || !isHex(cmd.sha256, shaLen)) {
+    logger_->publish(cfg_.errLevel, "OTA missing/invalid sha256");
+    publishFail("auth", -1, "invalid_sha256", 0, "\"reason\":\"invalid_sha256\"");
+    return false;
+  }
+
+  if (cmd.version[0] == '\0') {
+    logger_->publish(cfg_.errLevel, "OTA missing version");
+    publishFail("auth", -1, "missing_version", 0, "\"reason\":\"missing_version\"");
+    return false;
+  }
+
+  if (cmd.id[0] == '\0') {
+    logger_->publish(cfg_.errLevel, "OTA missing id");
+    publishFail("auth", -1, "missing_id", 0, "\"reason\":\"missing_id\"");
+    return false;
+  }
+
+  const char* expectedTarget = cfg_.targetId;
+  if (expectedTarget && expectedTarget[0]) {
+    if (cmd.target[0] == '\0') {
+      logger_->publish(cfg_.errLevel, "OTA missing target");
+      publishFail("auth", -1, "missing_target", 0, "\"reason\":\"missing_target\"");
+      return false;
+    }
+    if (strcmp(cmd.target, expectedTarget) != 0) {
+      String extra = String("\"reason\":\"target_mismatch\",\"expected\":\"") + expectedTarget + "\"";
+      if (cmd.target[0] != '\0') {
+        extra += ",\"got\":\"";
+        extra += cmd.target;
+        extra += "\"";
       }
-      if (static_cast<size_t>(value.length()) > kMaxPathLen) {
-        parseError = true;
-        break;
-      }
-      cmd.hasUrlPath = true;
-      value.toCharArray(cmd.urlPath, kMaxPathLen + 1);
-    } else {
-      parseError = true;
-      break;
+      publishFail("auth", -1, "target_mismatch", 0, extra.c_str());
+      logger_->publish(cfg_.errLevel, "OTA target mismatch");
+      return false;
     }
   }
 
-  if (parseError) {
-    logger_->publish(cfg_.errLevel, "OTA payload parse error");
-    publishFail("auth", -1, "invalid_payload", 0, "\"reason\":\"invalid_payload\"");
-    return false;
-  }
-  if (cmd.sha256[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA missing sha256 field");
-    publishFail("auth", -1, "missing_sha256", 0, "\"reason\":\"missing_sha256\"");
-    return false;
-  }
-  if (cmd.hmac[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA missing hmac field");
-    publishFail("auth", -1, "missing_hmac", 0, "\"reason\":\"missing_hmac\"");
+  const char* host = cmd.hasUrlHost ? cmd.urlHost : cfg_.host;
+  const char* path = cmd.hasUrlPath ? cmd.urlPath : cfg_.path;
+  uint16_t port = cmd.hasUrlPort ? cmd.urlPort : cfg_.port;
+
+  if (!host || host[0] == '\0' || !path || path[0] == '\0') {
+    logger_->publish(cfg_.errLevel, "OTA missing host/path");
+    publishFail("auth", -1, "missing_url", 0, "\"reason\":\"missing_url\"");
     return false;
   }
 
-  const char* allowedHost = cfg_.allowedHost ? cfg_.allowedHost : cfg_.host;
+  const char* allowedHost = cfg_.allowedHost ? cfg_.allowedHost : host;
   const char* allowedPathPrefix =
       (cfg_.allowedPathPrefix && cfg_.allowedPathPrefix[0]) ? cfg_.allowedPathPrefix : kDefaultPathPrefix;
 
-  if (!allowedHost || allowedHost[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA allowlist missing host");
-    publishFail("auth", -1, "host_not_allowed", 0, "\"reason\":\"host_not_allowed\"");
-    return false;
-  }
-  if (strcmp(cfg_.host, allowedHost) != 0) {
-    String extra = String("\"reason\":\"host_not_allowed\",\"host\":\"") + cfg_.host + "\"";
+  if (!allowedHost || strcmp(host, allowedHost) != 0) {
+    String extra = String("\"reason\":\"host_not_allowed\",\"host\":\"") + host + "\"";
+    publishFail("auth", -1, "host_not_allowed", 0, extra.c_str());
     logger_->publish(cfg_.errLevel, "OTA host not allowlisted");
-    publishFail("auth", -1, "host_not_allowed", 0, extra.c_str());
     return false;
   }
-  if (!allowedPathPrefix || allowedPathPrefix[0] == '\0' || !startsWith(cfg_.path, allowedPathPrefix)) {
-    String extra = String("\"reason\":\"path_not_allowed\",\"path\":\"") + cfg_.path + "\"";
-    logger_->publish(cfg_.errLevel, "OTA path not under allowlist prefix");
+  if (!allowedPathPrefix || !startsWith(path, allowedPathPrefix)) {
+    String extra = String("\"reason\":\"path_not_allowed\",\"path\":\"") + path + "\"";
     publishFail("auth", -1, "path_not_allowed", 0, extra.c_str());
+    logger_->publish(cfg_.errLevel, "OTA path not allowlisted");
     return false;
-  }
-  if (cmd.hasUrlHost && strcmp(cmd.urlHost, allowedHost) != 0) {
-    String extra = String("\"reason\":\"host_not_allowed\",\"cmd_host\":\"") + cmd.urlHost + "\"";
-    logger_->publish(cfg_.errLevel, "OTA command host rejected by allowlist");
-    publishFail("auth", -1, "host_not_allowed", 0, extra.c_str());
-    return false;
-  }
-  if (cmd.hasUrlPath) {
-    if (!startsWith(cmd.urlPath, allowedPathPrefix)) {
-      String extra = String("\"reason\":\"path_not_allowed\",\"cmd_path\":\"") + cmd.urlPath + "\"";
-      logger_->publish(cfg_.errLevel, "OTA command path rejected by allowlist prefix");
-      publishFail("auth", -1, "path_not_allowed", 0, extra.c_str());
-      return false;
-    }
-    if (strcmp(cmd.urlPath, cfg_.path) != 0) {
-      String extra = String("\"reason\":\"path_not_allowed\",\"cmd_path\":\"") + cmd.urlPath +
-                     "\",\"expected_path\":\"" + cfg_.path + "\"";
-      logger_->publish(cfg_.errLevel, "OTA command path mismatch");
-      publishFail("auth", -1, "path_not_allowed", 0, extra.c_str());
-      return false;
-    }
   }
 
-  char computedHmac[kSha256HexBufLen]{};
-  if (!computeHmac(cfg_.psk, cmd.sha256, computedHmac, sizeof(computedHmac))) {
-    logger_->publish(cfg_.errLevel, "OTA could not compute HMAC");
-    publishFail("auth", -1, "hmac_error", 0, "\"reason\":\"hmac_error\"");
-    return false;
+  currentId_ = cmd.id;
+  currentVersion_ = cmd.version;
+  pendingVersion_ = currentVersion_;
+  currentTarget_ = (cmd.target[0] != '\0') ? String(cmd.target) : currentTarget_;
+  expectedSize_ = cmd.sizeBytes;
+
+  currentUrl_ = String("http://") + host;
+  if (port != 0 && port != 80) {
+    currentUrl_ += ":";
+    currentUrl_ += String(port);
   }
-  if (!constantTimeEquals(computedHmac, cmd.hmac, kSha256HexLen)) {
-    logger_->publish(cfg_.errLevel, "OTA HMAC mismatch");
-    publishFail("auth", -1, "hmac_mismatch", 0, "\"reason\":\"hmac_mismatch\"");
-    return false;
-  }
+  currentUrl_ += path;
+
+  persistPending(currentId_.c_str(), currentVersion_.c_str());
+  bootReportPending_ = true;
+  bootReportOk_ = false;
 
   publishStart();
+  logger_->publish(cfg_.infoLevel, String("OTA_START id=") + currentId_ + " ver=" + currentVersion_);
 
   EthernetClient client;
   client.setTimeout(kHeaderTimeoutMs);
-  String url = String("http://") + cfg_.host + cfg_.path;
-  logger_->publish(cfg_.infoLevel, String("CMD UPDATE -> HTTP OTA ") + url + " sha256=" + cmd.sha256);
+  logger_->publish(cfg_.infoLevel, String("CMD UPDATE -> HTTP OTA ") + currentUrl_ + " sha256=" + cmd.sha256);
 
   uint32_t connStart = millis();
-  bool connected = client.connect(cfg_.host, cfg_.port);
+  bool connected = client.connect(host, port);
   while (!connected && (millis() - connStart) < kConnectTimeoutMs) {
     delay(10);
     delay(0);
-    connected = client.connect(cfg_.host, cfg_.port);
+    connected = client.connect(host, port);
   }
   if (!connected) {
     logger_->publish(cfg_.errLevel, "OTA connect failed");
@@ -341,9 +424,9 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   }
 
   client.print("GET ");
-  client.print(cfg_.path);
+  client.print(path);
   client.print(" HTTP/1.1\r\nHost: ");
-  client.print(cfg_.host);
+  client.print(host);
   client.print("\r\nConnection: close\r\n\r\n");
 
   uint32_t headerStart = millis();
@@ -402,6 +485,24 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   if (contentLength <= 0) {
     logger_->publish(cfg_.errLevel, "OTA invalid content-length");
     publishFail("hdr", -1, "len", 0, "\"reason\":\"invalid_length\"");
+    client.stop();
+    return false;
+  }
+
+  if (remoteVersion.length() > 0 && cmd.version[0] != '\0' && !remoteVersion.equals(String(cmd.version))) {
+    String extra = String("\"reason\":\"version_mismatch\",\"cmd\":\"") + cmd.version + "\",\"hdr\":\"" + remoteVersion +
+                   "\"";
+    logger_->publish(cfg_.errLevel, "OTA header version mismatch");
+    publishFail("hdr", -1, "version_mismatch", 0, extra.c_str());
+    client.stop();
+    return false;
+  }
+
+  if (expectedSize_ > 0 && static_cast<size_t>(contentLength) != expectedSize_) {
+    String extra = String("\"reason\":\"size_mismatch_hdr\",\"expected\":") + String(expectedSize_) +
+                   ",\"content_length\":" + String(contentLength);
+    logger_->publish(cfg_.errLevel, "OTA size mismatch vs expected size");
+    publishFail("hdr", -1, "size_mismatch", 0, extra.c_str());
     client.stop();
     return false;
   }
@@ -489,6 +590,17 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
+  if (expectedSize_ > 0 && totalWritten != expectedSize_) {
+    String extra = String("\"reason\":\"size_mismatch\",\"expected\":") + String(expectedSize_) +
+                   ",\"actual\":" + String(totalWritten);
+    logger_->publish(cfg_.errLevel, "OTA size mismatch vs expected");
+    publishFail("hdr", -1, "size_mismatch", totalWritten, extra.c_str());
+    Update.abort();
+    client.stop();
+    mbedtls_sha256_free(&shaCtx);
+    return false;
+  }
+
   uint8_t shaRaw[32]{};
   bool haveSha = false;
   if (!shaError) {
@@ -524,9 +636,15 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  publishOk(totalWritten, actualSha);
-  logger_->publish(cfg_.infoLevel, "OTA OK, rebooting");
-  delay(500);
+  String flashData = buildBaseJson();
+  flashData += ",\"sha256\":\"";
+  flashData += actualSha;
+  flashData += "\",\"bytes\":";
+  flashData += String(totalWritten);
+  flashData += "}";
+  publishStatus("OTA_FLASHED", flashData, true);
+  logger_->publish(cfg_.infoLevel, "OTA FLASHED, rebooting");
+  delay(200);
   ESP.restart();
   return true;
 }
@@ -539,7 +657,14 @@ void OtaUpdater::publishStatus(const char* st, const String& dataJson, bool reta
 void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t bytes, const char* extraJson) {
   if (!cfg_.statusPublisher) return;
   if (!at || !msg) return;
-  String data = String("{\"at\":\"") + at + "\",\"code\":" + code + ",\"msg\":\"" + msg + "\"";
+  String data = buildBaseJson();
+  data += ",\"at\":\"";
+  data += at;
+  data += "\",\"code\":";
+  data += String(code);
+  data += ",\"msg\":\"";
+  data += msg;
+  data += "\"";
   if (bytes > 0) {
     data += ",\"bytes\":";
     data += String(bytes);
@@ -549,34 +674,89 @@ void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t b
     data += extraJson;
   }
   data += "}";
-  publishStatus("fail", data, true);
+  publishStatus("OTA_FAIL", data, true);
+  clearPending();
+  bootReportPending_ = false;
+  bootReportOk_ = false;
+  pendingVersion_ = "";
 }
 
-void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex) {
+void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
   if (!cfg_.statusPublisher) return;
-  String data = String("{\"bytes\":") + String(bytes);
+  String data = buildBaseJson();
+  if (bytes > 0) {
+    data += ",\"bytes\":";
+    data += String(bytes);
+  }
   if (sha256Hex && sha256Hex[0]) {
     data += ",\"sha256\":\"";
     data += sha256Hex;
     data += "\"";
   }
   data += "}";
-  publishStatus("ok", data, true);
+  publishStatus("OTA_OK", data, retained);
 }
 
 void OtaUpdater::publishStart() {
   if (!cfg_.statusPublisher) return;
-  const char* target = (cfg_.targetFw && cfg_.targetFw[0] != '\0') ? cfg_.targetFw : "?";
-  String data = String("{\"to\":\"") + target + "\"}";
-  publishStatus("start", data, true);
+  String data = buildBaseJson();
+  data += "}";
+  publishStatus("OTA_START", data, true);
 }
 
 void OtaUpdater::publishProgress(int pct) {
   if (!cfg_.statusPublisher) return;
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
-  String data = String("{\"pct\":") + pct + "}";
-  publishStatus("prog", data, false);
+  String data = buildBaseJson();
+  data += ",\"pct\":";
+  data += String(pct);
+  data += "}";
+  publishStatus("OTA_PROGRESS", data, false);
+}
+
+String OtaUpdater::buildBaseJson() const {
+  String data = String("{\"id\":\"") + (currentId_.length() ? currentId_ : "?") + "\"";
+  if (currentVersion_.length()) {
+    data += ",\"version\":\"";
+    data += currentVersion_;
+    data += "\"";
+  }
+  if (currentTarget_.length()) {
+    data += ",\"target\":\"";
+    data += currentTarget_;
+    data += "\"";
+  }
+  if (currentUrl_.length()) {
+    data += ",\"url\":\"";
+    data += currentUrl_;
+    data += "\"";
+  }
+  return data;
+}
+
+void OtaUpdater::onMqttConnected() {
+  if (!bootReportPending_) return;
+  String data = buildBaseJson();
+  data += ",\"running\":\"";
+  data += (cfg_.targetFw ? cfg_.targetFw : "?");
+  data += "\"";
+  if (pendingVersion_.length()) {
+    data += ",\"expected\":\"";
+    data += pendingVersion_;
+    data += "\"";
+  }
+  if (bootReportOk_) {
+    data += "}";
+    publishStatus("OTA_OK", data, true);
+    if (logger_) logger_->publish(cfg_.infoLevel, String("OTA_OK id=") + currentId_);
+  } else {
+    data += ",\"reason\":\"version_mismatch_boot\"}";
+    publishStatus("OTA_FAIL", data, true);
+    if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch id=") + currentId_);
+  }
+  clearPending();
+  bootReportPending_ = false;
 }
 
 }  // namespace Core

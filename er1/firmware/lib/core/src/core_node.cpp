@@ -125,6 +125,9 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
     cfg_.ota.targetFw = cfg_.fwVersion;
   }
+  if (!cfg_.ota.targetId || cfg_.ota.targetId[0] == '\0') {
+    cfg_.ota.targetId = cfg_.nodeId;
+  }
   hbCfg_ = cfg.heartbeat;
   heartbeatIntervalMs_ = hbCfg_.intervalMs;
   enabled_ = cfg.startEnabled;
@@ -218,6 +221,7 @@ void NodeCore::onMqttConnected() {
   }
 
   publishHeartbeatNow();
+  ota_.onMqttConnected();
 }
 
 void NodeCore::onMqttMessage(const char* topic, const uint8_t* payload, size_t length) {

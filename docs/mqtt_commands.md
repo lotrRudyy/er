@@ -9,10 +9,10 @@ Logging format: `YYYY.MM.DD HH:MM:SS.mmm topic payload` with `date +"%Y.%m.%d %H
 
 ## OTA (secured)
 
-- Payload: `UPDATE sha256=<64-hex> hmac=<64-hex> url=/firmware/<FirmwareName>`
+- Payload: `UPDATE {"id":"<nonce>","version":"<fw_version>","target":"<node_id>","url":"http://192.168.0.10/firmware/<FirmwareName>","sha256":"<64-hex>","size":<bytes>}`
 - Topic: `<CmdNode>/cmd` (from the OTA map; e.g., images_piano publishes to `images/cmd`)
-- Host is pinned to `192.168.0.10`; paths must stay under `/firmware/`.
-- `sha256` is the firmware hash; `hmac` is HMAC-SHA256 of that hash using the PSK stored at `/etc/er1/ota_psk` on the Pi. `ota.ps1` uploads the binary and SSHes into `ota_publish.py` to compute + publish; no PSK is kept on PCs.
+- Host is pinned to `192.168.0.10`; paths must stay under `/firmware/`. HTTPS is rejected.
+- `sha256` is the firmware hash; `size` is optional but included by `ota.ps1`. Payloads are JSON; PSK/HMAC has been removed, so keep OTA on the trusted LAN.
 
 ## Lock Control
 

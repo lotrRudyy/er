@@ -263,7 +263,7 @@ Supported:
 - PING
 - SET key=val
 - DIAG level=<n> ttl_s=<s>
-- UPDATE sha256=<64-hex> hmac=<64-hex> url=/firmware/<Dev>.bin
+- UPDATE {"id":"<nonce>","version":"<fw_version>","target":"<node>","url":"http://192.168.0.10/firmware/<Dev>.bin","sha256":"<64-hex>","size":<bytes>}
 
 ---
 
@@ -296,16 +296,15 @@ Always bump `FW_VERSION`.
 
 Validation (fails closed):
 
-- Command payload must include `sha256` (lowercase hex) and `hmac` (HMAC-SHA256 over the `sha256` string, keyed by `OTA_PSK`).
-- OTA downloads are allowlisted to `http://192.168.0.10/firmware/<FirmwareName>`. Host/IP overrides are rejected; paths must stay under `/firmware/`.
-- Firmware bytes are streamed through SHA-256; mismatches abort the OTA and skip reboot.
-- HMAC is verified before any download; missing/invalid fields or PSK abort with a `fail` status.
+- Command payload (after the `UPDATE` verb) is JSON: `{"id":"<nonce>","version":"<fw_version>","target":"<node_id>","url":"http://192.168.0.10/firmware/<FirmwareName>","sha256":"<64-hex>","size":<bytes>}`. `id`, `version`, `target`, `url`, and `sha256` are required; `size` is optional but sent by tooling.
+- OTA downloads are allowlisted to `http://192.168.0.10/firmware/<FirmwareName>`. Host/IP overrides are rejected; paths must stay under `/firmware/`. HTTPS is rejected.
+- Nodes verify the target before downloading, stream SHA-256 while writing, enforce length checks when provided, and abort on any mismatch.
+- PSK/HMAC has been removed; integrity relies on SHA-256 and the trusted LAN.
+- Update metadata (id/version) is persisted; success is only reported after reboot when the running firmware version matches the announced version.
 
 Build + tooling requirements:
 
-- `OTA_PSK` must be available at build time (`platformio.ini` pulls `${sysenv.OTA_PSK}`); export it temporarily from the Pi and avoid saving it on PCs.
-- `ota.ps1` uploads the binary, ensures legacy names (e.g., `maglock_ctrl.bin`), and SSHes into `~/er1/scripts/ota_publish.py`, which reads `/etc/er1/ota_psk` on the Pi to compute sha256 + HMAC and publish `UPDATE` to `<CmdNode>/cmd` (no PSK on the PC side).
-- Optional: define `OTA_VALIDATION_SELF_TEST` at build time to run a small self-test of the hash/HMAC helpers at startup.
+- `ota.ps1` uploads the binary, ensures legacy names (e.g., `maglock_ctrl.bin`), and SSHes into `~/er1/scripts/ota_publish.py`, which computes sha256 + size on the Pi and publishes `UPDATE <json>` to `<CmdNode>/cmd` (no secrets on the PC side).
 
 ### OTA status topic (per node)
 
@@ -321,17 +320,18 @@ Payload format (compact JSON, same logging schema as hb/log):
 {"fw":"<current_fw>","up":<uptime_s>,"st":"<state>","d":{...}}
 ```
 
-- `st="start"` (retained) right before HTTP GET, `d={"to":"<target_fw_or_?>"}`
-- `st="prog"` (not retained, max 1 msg/s) while pulling image, `d={"pct":42}`
-- `st="ok"` (retained) after `Update.end(true)` succeeds, `d={"bytes":123456}`
-- `st="fail"` (retained) on any OTA failure, `d={"at":"dns|conn|http|hdr|write|end|md5","code":<num>,"msg":"<short>","bytes":<optional_bytes>}`
+- `st="OTA_START"` (retained) right after accepting the OTA command, `d` includes id/version/url/target
+- `st="OTA_PROGRESS"` (not retained, max 1 msg/s) while pulling image, `d={"pct":42,...}`
+- `st="OTA_FLASHED"` (retained) after `Update.end(true)` succeeds and right before reboot, `d` includes bytes + sha256
+- `st="OTA_OK"` (retained) after reboot once FW_VERSION matches the announced version, `d` includes id/version/url info
+- `st="OTA_FAIL"` (retained) on any OTA failure, `d={"at":"dns|conn|http|hdr|write|end|hash","code":<num>,"msg":"<short>","bytes":<optional_bytes>}` plus `reason` fields
 
-Retained semantics: `start` stays until `ok`/`fail` overwrites it so operators can see stuck OTAs.
+Retained semantics: `OTA_START` stays until `OTA_OK`/`OTA_FAIL` overwrites it so operators can see stuck OTAs.
 
 New failure reasons are reported via `msg` + extra fields in `d`:
 
-- `missing_sha256`, `missing_hmac`, `invalid_sha256`, `invalid_hmac`
-- `hmac_mismatch`, `sha256_mismatch` (includes expected + actual hashes)
+- `missing_sha256`, `missing_version`, `missing_id`, `missing_target`, `invalid_sha256`
+- `target_mismatch`, `sha256_mismatch` (includes expected + actual hashes), `size_mismatch`
 - `host_not_allowed`, `path_not_allowed`
 - Legacy failure points (http/connect/write/etc.) remain unchanged.
 

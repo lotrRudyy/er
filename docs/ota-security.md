@@ -1,33 +1,16 @@
-# OTA Security (PSK Handling)
+# OTA Security (SHA-256 only)
 
-Where the OTA PSK lives and how to rotate/recover it without ever storing it on PCs.
+The OTA PSK/HMAC path has been removed. OTA integrity now relies on SHA-256 hashes delivered over the trusted LAN.
 
-## Canonical storage (Pi only)
-- Location: `/etc/er1/ota_psk` (single line, raw secret). Directory `/etc/er1` may be `0755`.
-- Ownership/permissions: `root:er1` with mode `0640` (group read only). No copy on operator PCs; keep an optional offline USB backup if needed.
-- Used by: `~/er1/scripts/ota_publish.py` (invoked by `firmware/ota.ps1` over SSH) to compute `sha256` + `hmac` on the Pi and publish `UPDATE` commands.
-- Dependencies: `python3` + `paho-mqtt` installed on the Pi (already required by `ota_verify.py`).
+## Current controls
+- OTA commands are JSON payloads sent as `UPDATE {...}` on `<CmdNode>/cmd` and must include: `id`, `version`, `target`, `url`, `sha256` (and optional `size`).
+- Nodes enforce host/path allowlists (`http://192.168.0.10/firmware/...` only), reject HTTPS, stream SHA-256 while flashing, and abort on any mismatch or target mismatch.
+- Each OTA persists `id` + `version` and only reports `OTA_OK` after reboot when the running FW_VERSION matches the announced version. Failures are retained on `<node>/ota`.
 
-## Setup / reset commands (run on Pi)
-```bash
-sudo mkdir -p /etc/er1
-sudo groupadd -f er1
-sudo sh -c 'umask 077; printf "%s\n" "REPLACE_WITH_RANDOM_SECRET" > /etc/er1/ota_psk'
-sudo chown root:er1 /etc/er1/ota_psk
-sudo chmod 640 /etc/er1/ota_psk
-sudo usermod -aG er1 rudyy
-sudo ls -la /etc/er1/ota_psk
-```
-Result should show `-rw-r----- root er1 /etc/er1/ota_psk`.
-If you must briefly lock it to root-only before granting group access, use `chmod 600` and `chown root:root /etc/er1/ota_psk` immediately after writing, then switch to `root:er1`/`640` for runtime use.
+## Operator expectations
+- Keep the Pi + HTTP server on the trusted LAN; do not expose `/firmware` over the internet.
+- Use `firmware/ota.ps1` (or `er1 ota <target>`) so the Pi computes the hash/size locally and publishes the correct JSON payload.
+- If OTA commands fail, check `<node>/ota` for `OTA_FAIL` details and the Pi logs for `ota_publish.py`.
 
-## Rotation procedure
-1. Generate a new random secret and rewrite `/etc/er1/ota_psk` using the commands above (umask keeps it private during write).
-2. Re-apply `chown root:er1` and `chmod 640` to enforce permissions.
-3. Firmware embeds `OTA_PSK` at compile-time today, so rebuild every env with the new PSK in the build environment and OTA/flash all nodes.
-4. Optional sanity check: `python3 /home/rudyy/er1/scripts/ota_publish.py --dev <dev> --cmd-node <CmdNode> --url /firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName> --dry-run` to verify HMAC/sha generation without publishing (values taken from the OTA map).
-
-## Recovery procedure
-- If `/etc/er1/ota_psk` is lost: restore the secret from the password manager/offline backup and re-apply the setup commands.
-- If no backup exists: flash a USB/serial "recovery firmware" built with a known temporary PSK, then immediately rotate again to a new secret and redeploy OTA.
-- Never disable OTA validation or ship firmware without `OTA_PSK`; validation must stay enabled.
+## Security note
+Removing the PSK reduces authentication; ensure network isolation and broker access controls are in place. If stronger auth is needed later, layer it on the MQTT side rather than reintroducing per-node PSKs.

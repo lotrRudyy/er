@@ -229,7 +229,7 @@ OTA steps:
 1. Resolve target via the canonical map (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames, VerifyNodes). Build the PlatformIO env unless `-NoBuild` is set.
 2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
 3. From the Pi, verify `http://192.168.0.10/firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
-4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --url /firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName>` so UPDATE is published to `<CmdNode>/cmd` with sha256 + HMAC computed on the Pi.
+4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
 5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_verify.py` watches `VerifyNodes` (images_piano verifies both `images` and `piano` even though `CmdNode=images`).
 
 ---

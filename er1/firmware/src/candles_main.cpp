@@ -9,8 +9,8 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "1.3";
-static const char* FW_DESC = "candles 1.3 - core shell + module (sequence/lighting identical)";
+static const char* FW_VERSION = "1.4";
+static const char* FW_DESC = "candles 1.4 - OTA JSON command, PSK removed";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
@@ -26,10 +26,6 @@ static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
 static const char* OTA_PATH = "/firmware/candles.bin";
 static const char* OTA_PATH_PREFIX = "/firmware/";
-#ifndef OTA_PSK
-#error "OTA_PSK must be defined (pre-shared OTA key)"
-#endif
-static const char* const OTA_PSK_VALUE = OTA_PSK;
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= CORE + MODULE =======================
@@ -118,7 +114,6 @@ void setup() {
   cfg.ota.path = OTA_PATH;
   cfg.ota.allowedHost = OTA_ALLOWED_HOST;
   cfg.ota.allowedPathPrefix = OTA_PATH_PREFIX;
-  cfg.ota.psk = OTA_PSK_VALUE;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
   cfg.ota.statusPublisher = publishOtaStatus;

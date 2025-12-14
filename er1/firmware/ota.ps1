@@ -133,6 +133,21 @@ function Test-RemoteFirmwareAvailability([string]$url, [string]$sshTarget) {
     return $true
 }
 
+function Get-FirmwareVersion([string]$dev) {
+    $mainPath = Join-Path $scriptDir "src/${dev}_main.cpp"
+    if (-not (Test-Path $mainPath)) {
+        Write-Error "Firmware source not found for $dev at $mainPath"
+        exit 1
+    }
+    $content = Get-Content -Path $mainPath -Raw
+    $match = [regex]::Match($content, 'FW_VERSION\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        Write-Error "Unable to locate FW_VERSION in $mainPath"
+        exit 1
+    }
+    return $match.Groups[1].Value
+}
+
 # ============ Resolve Env/Dev ============
 if ($Target) {
     $cfg = Resolve-Deployment $Target
@@ -157,6 +172,13 @@ $legacyNames = $cfg.LegacyFirmwareNames
 $verifyNodes = $cfg.VerifyNodes
 
 Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev  CmdNode=$cmdNode  Firmware=$firmwareName  VerifyNodes=$($verifyNodes -join ',') =="
+$otaVersion = Get-FirmwareVersion $Dev
+if (-not $otaVersion) {
+    Write-Error "Failed to determine firmware version for $Dev"
+    exit 1
+}
+$otaId = [guid]::NewGuid().ToString()
+Write-Host "== Version = $otaVersion  UpdateId=$otaId =="
 
 # ============ Locate platformio.exe ============
 $possiblePaths = @(
@@ -250,7 +272,10 @@ $otaPublishCmd = @(
     "--dev", "$Dev"
     "--cmd-node", "$cmdNode"
     "--broker", "192.168.0.10"
-    "--url", "/firmware/$firmwareName"
+    "--version", "$otaVersion"
+    "--target", "$Dev"
+    "--id", "$otaId"
+    "--url", "http://192.168.0.10/firmware/$firmwareName"
     "--file", "$piFirmwareDir/$firmwareName"
 ) -join " "
 
