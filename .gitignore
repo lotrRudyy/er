@@ -29,3 +29,5 @@ er3/pi-runtime/config/local.env
 
 # ---- Local helper scripts not tracked in repo ----
 deploy.sh
+er1/firmware/.vscode/launch.json
+er1/firmware/.vscode/c_cpp_properties.json

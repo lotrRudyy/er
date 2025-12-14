@@ -148,8 +148,8 @@ def log_line(msg: str) -> None:
 
 
 def format_ts_iso_like(dt: datetime) -> str:
-    """Format datetime as ISO-like: YYYY-MM-DD HH:MM:SS"""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    """Format datetime using canonical timestamp: YYYY.MM.DD HH:MM:SS.mmm"""
+    return dt.strftime("%Y.%m.%d %H:%M:%S.%f")[:-3]
 
 
 def publish_time_if_due(client) -> None:

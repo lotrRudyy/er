@@ -34,18 +34,18 @@ function Get-RemoteDestinationParts {
         throw "$Prefix Remote dest must be user@host:/abs/path (got '$Dest')"
     }
 
-    $host = $Matches.host
+    $RemoteHost = ([string]$Matches.host).Trim()
+    if ([string]::IsNullOrWhiteSpace($RemoteHost) -or $RemoteHost -like "System.Management.Automation") {
+        throw "Invalid SSH host resolved: '$RemoteHost'."
+    }
+
     $path = $Matches.path.Replace('\', '/')
     $path = "/" + $path.TrimStart("/")
 
-    if ($path -notlike "$($script:Er1RemoteRoot)*") {
-        throw "$Prefix Refusing to deploy outside $($script:Er1RemoteRoot). Got: $path"
-    }
-
     return @{
-        Host       = $host
+        Host       = $RemoteHost
         Path       = $path
-        Normalized = "{0}:{1}" -f $host, $path
+        Normalized = "{0}:{1}" -f $RemoteHost, $path
     }
 }
 
@@ -209,12 +209,36 @@ fi
 "@
     if ($LASTEXITCODE -ne 0) { throw "Unable to refresh remote permissions (exit $LASTEXITCODE)." }
 
+    $serviceManagerScript = @"
+set -e
+sudo install -m 644 -T '$remoteRoot/systemd/ota-http.service' '/etc/systemd/system/ota-http.service'
+sudo install -m 644 -T '$remoteRoot/systemd/ota-verify.service' '/etc/systemd/system/ota-verify.service'
+sudo chmod +x '$remoteRoot/scripts/ota-verify'
+sudo systemctl daemon-reload
+sudo systemctl enable ota-http.service ota-verify.service
+sudo systemctl restart ota-http.service ota-verify.service
+sudo systemctl status ota-http.service --no-pager
+sudo systemctl status ota-verify.service --no-pager
+"@
+
+    if ($DryRun) {
+        Write-Host "$Prefix [DryRun] Would install/enable systemd services:"
+        $serviceManagerScript -split "`n" | Where-Object { $_.Trim() } | ForEach-Object {
+            Write-Host "  $_"
+        }
+    }
+    else {
+        Write-Host "$Prefix Installing/refreshing systemd services..." -ForegroundColor Yellow
+        $serviceManagerScript | ssh $Er1Pi "bash -lc 'cat > /tmp/er1_systemd_apply.sh && chmod +x /tmp/er1_systemd_apply.sh && /tmp/er1_systemd_apply.sh'"
+        if ($LASTEXITCODE -ne 0) { throw "Systemd service setup failed." }
+    }
+
     if ($RestartServices) {
         Write-Host "$prefix Restarting services..." -ForegroundColor Yellow
         ssh $Er1Pi @"
 sudo systemctl daemon-reload
 sudo systemctl restart er1-mqtt-log.service
-sudo systemctl restart er1-ota-verify.service
+sudo systemctl restart ota-verify.service
 "@
         if ($LASTEXITCODE -ne 0) { throw "Service restart failed (exit $LASTEXITCODE)." }
     }
@@ -225,8 +249,8 @@ sudo systemctl restart er1-ota-verify.service
         ssh $Er1Pi "systemctl is-active er1-mqtt-log.service"
         if ($LASTEXITCODE -ne 0) { throw "er1-mqtt-log.service not active" }
 
-        ssh $Er1Pi "systemctl is-active er1-ota-verify.service"
-        if ($LASTEXITCODE -ne 0) { throw "er1-ota-verify.service not active" }
+        ssh $Er1Pi "systemctl is-active ota-verify.service"
+        if ($LASTEXITCODE -ne 0) { throw "ota-verify.service not active" }
 
         ssh $Er1Pi "$Er1Cmd status_mqtt"
         if ($LASTEXITCODE -ne 0) { throw "status_mqtt failed" }
@@ -237,7 +261,7 @@ sudo systemctl restart er1-ota-verify.service
     if ($LASTEXITCODE -ne 0) { throw "ota_publish.py missing after deploy: $otaRemotePath" }
 
     Write-Host "$prefix Deploy complete." -ForegroundColor Green
-    Write-Host "$prefix Verify publisher exists: ssh rudyy@<pi> \"ls -la /home/rudyy/er1/scripts/ota_publish.py\"" -ForegroundColor Cyan
+    Write-Host "$Prefix Verify publisher exists: ssh $Er1Pi 'ls -la /home/rudyy/er1/scripts/ota_publish.py'" -ForegroundColor Cyan
 }
 
 Invoke-Er1Deploy -Mode $Mode -DryRun:$DryRun -RestartServices:$RestartServices -Verify:$Verify
