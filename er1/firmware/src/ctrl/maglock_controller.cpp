@@ -4,7 +4,6 @@
 
 namespace {
 
-constexpr const char* kTopicMetric = "maglock/dbg";
 constexpr const char* kLockCmdPrefix = "maglock/lock/";
 constexpr const char* kLockStatePrefix = "maglock/lock/";
 constexpr const char* kLockCmdSuffix = "/cmd";
@@ -51,6 +50,8 @@ void MaglockController::begin(Core::NodeContext& ctx) {
   lastMetricMs_ = millis();
   applyHeartbeatInterval();
   publishStateSnapshot();
+  // use canonical dbg topic from node config
+  topicDbg_ = ctx.config().topics.dbg;
 }
 
 void MaglockController::tick(uint32_t nowMs) {
@@ -245,8 +246,9 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
 
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(nowMs / 1000) +
-                   ",\"k\":\"maglock_ctrl\"" +
+                   ",\"t\":\"MAG\"" +
                    ",\"mode\":\"" + String(modeName(gameMode_)) + "\"" +
+                   ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
                    ",\"locks\":[";
   for (size_t i = 0; i < kLockCount; i++) {
     if (i > 0) payload += ",";
@@ -264,7 +266,8 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
   }
   payload += "]}";
 
-  ctx_->publish(kTopicMetric, payload);
+  const char* topic = (topicDbg_.length() > 0) ? topicDbg_.c_str() : "maglock/dbg";
+  ctx_->publish(topic, payload);
 }
 
 void MaglockController::publishStateSnapshot() {

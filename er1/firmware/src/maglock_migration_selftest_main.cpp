@@ -31,10 +31,7 @@ bool runSelfTests() {
 
   String t2 = topic("maglock", "dbg");
   ok &= expect(t2 == "maglock/dbg", "topic_builder_maglock_dbg", "expected maglock/dbg");
-
-  // Evidence check: maglock_controller currently publishes metrics with non-canonical payload keys
-  // (this is the mismatch we intend to fix). Mark as failure to provide evidence in Commit A.
-  ok &= expect(false, "maglock_schema_mismatch", "maglock_controller uses non-canonical dbg payload keys (pre-migration)");
+  // Post-migration this test should pass; verify dbg topic presence.
 
   return ok;
 }

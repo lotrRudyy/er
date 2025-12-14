@@ -79,4 +79,5 @@ private:
   GameMode gameMode_ = GameMode::Off;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
+  String topicDbg_;
 };

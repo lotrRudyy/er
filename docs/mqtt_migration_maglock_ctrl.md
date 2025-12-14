@@ -30,6 +30,10 @@ Plan
 3. Keep backward compatibility: continue subscribing to legacy `maglock/lock/+/cmd` while accepting canonical `maglock/cmd`.
 4. Update this document after migration to mark completion and compatibility window.
 
+Migration: completed
+-------------------
+- `maglock_controller` now publishes metrics to the canonical `dbg` topic from `NodeContext::config().topics.dbg` and uses `"t":"MAG"` plus `"en"` fields aligned with other dbg payloads. It still subscribes to legacy `maglock/lock/+/cmd` for backward compatibility.
+
 References
 ----------
 - Topic builder: `lib/core/src/core_mqtt.cpp` (`Core::topic`).
