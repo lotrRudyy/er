@@ -1,3 +1,11 @@
+// SCHEMA GUARD: Reusable Pattern for New Nodes
+// This selftest validates canonical topic schema alignment (Core::topic builder).
+// Use this pattern for any node migration or new node integration to prevent regressions.
+// Steps:
+//   1. Create a selftest environment in platformio.ini: [env:node_schema_guard]
+//   2. Implement runSelfTests() to verify topic patterns and payload structure
+//   3. Run: pio run -e node_schema_guard to compile-time validate before deployment
+
 #include <Arduino.h>
 
 #include "core_mqtt.h"

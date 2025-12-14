@@ -114,6 +114,15 @@ void MaglockController::onKnockingEvent(const String& msg) {
 }
 
 void MaglockController::onLockCommandTopic(const char* topic, const String& payload) {
+  // DEPRECATION: Legacy maglock/lock/+/cmd topic is supported for backward compatibility.
+  // Rate-limit the warning to avoid log spam (once per 60 seconds).
+  uint32_t nowMs = millis();
+  if (nowMs - lastLegacyCmdWrnMs_ >= 60000) {
+    lastLegacyCmdWrnMs_ = nowMs;
+    String topicStr(topic ? topic : "");
+    log("WRN", String("legacy_cmd_used topic=") + topicStr +
+               " (migrate to maglock/cmd with PING, UPDATE, REBOOT)");
+  }
   handleLockCommandTopicInternal(String(topic ? topic : ""), payload);
 }
 

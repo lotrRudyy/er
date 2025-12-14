@@ -78,6 +78,7 @@ private:
   MaglockDriver driver_;
   GameMode gameMode_ = GameMode::Off;
   uint32_t lastMetricMs_ = 0;
+  uint32_t lastLegacyCmdWrnMs_ = 0;  // Rate limit for legacy command deprecation warning
   uint32_t errorCount_ = 0;
   String topicDbg_;
 };
