@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 [Unit]
 Description=OTA Firmware HTTP Server
 After=network.target
@@ -9,7 +8,7 @@ User=rudyy
 Group=rudyy
 WorkingDirectory=/home/rudyy/er1
 ExecStartPre=/usr/bin/mkdir -p /home/rudyy/firmware
-ExecStart=/usr/bin/python3 /home/rudyy/er1/scripts/ota_http.py daemon
+ExecStart=/usr/bin/python3 /home/rudyy/er1/scripts/ota_http.py
 Restart=always
 RestartSec=2
 

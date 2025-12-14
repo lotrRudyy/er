@@ -9,7 +9,7 @@ User=rudyy
 Group=rudyy
 WorkingDirectory=/home/rudyy/er1
 Environment=LOCAL_BROKER=127.0.0.1
-ExecStart=/home/rudyy/er1/scripts/ota-verify daemon
+ExecStart=/home/rudyy/er1/scripts/ota_verify daemon
 Restart=always
 RestartSec=3
 

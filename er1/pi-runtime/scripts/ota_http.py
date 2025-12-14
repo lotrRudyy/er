@@ -34,7 +34,7 @@ class FirmwareRequestHandler(http.server.SimpleHTTPRequestHandler):
 def main() -> None:
     DOC_ROOT.mkdir(parents=True, exist_ok=True)
     handler = functools.partial(FirmwareRequestHandler, directory=str(DOC_ROOT))
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", 80), handler)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 8080), handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
