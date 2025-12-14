@@ -77,10 +77,10 @@ Topic names, binaries, services, files, and folders must align
 
 Deployment and tooling live under:
 
-er/scripts/
+scripts/
 
-
-pc-scripts no longer exists
+scripts/er1_profile.ps1 defines the canonical developer commands (`er1 deploy`, `er1 ota`, `er1 push`).
+scripts/ is the only supported location; legacy folders have been removed.
 
 Scripts are ER-wide unless explicitly ERx-specific
 
@@ -104,13 +104,13 @@ If there is a conflict between:
 
 this file
 
-any other ER doc
+any other ER doc (all other docs must be kept in sync with this one)
 
 code comments
 
 or developer preference
 
-This file wins.
+This file wins and is treated as the ultimate truth.
 
 11. Change Control
 

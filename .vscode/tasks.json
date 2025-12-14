@@ -5,7 +5,7 @@
       "label": "Codex (auto-commit before/after)",
       "type": "shell",
       "command": "powershell",
-      "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\shared\\pc-scripts\\codex-commit.ps1"],
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\codex-commit.ps1"],
       "problemMatcher": []
     }
   ]

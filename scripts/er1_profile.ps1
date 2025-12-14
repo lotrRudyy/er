@@ -23,8 +23,11 @@ else {
 # Canonical repo root variable for helper functions
 $script:ER1_REPO = $erRepoRoot
 
-# ---- Device list (for log/ota completion) ----
-$er1Devices = @(
+# ---- Device lists ----
+# OTA targets must stay in sync with firmware/ota.ps1 ValidateSet.
+$er1OtaTargets = @("maglock","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")
+$er1LogDevices = @(
+    "maglock",
     "maglock_ctrl",
     "images",
     "images_piano",
@@ -497,9 +500,13 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
     $tokens = $commandAst.CommandElements
     if ($tokens.Count -lt 2) { return }
     $sub = $tokens[1].Value
-    if ($sub -in @("log","ota")) {
-        $list = @("*") + $er1Devices
-        $list |
+    if ($sub -eq "log") {
+        (@("*") + $er1LogDevices) |
+            Where-Object { $_ -like "$wordToComplete*" } |
+            ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+    }
+    elseif ($sub -eq "ota") {
+        $er1OtaTargets |
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
     }

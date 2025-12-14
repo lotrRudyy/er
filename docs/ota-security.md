@@ -25,7 +25,7 @@ If you must briefly lock it to root-only before granting group access, use `chmo
 1. Generate a new random secret and rewrite `/etc/er1/ota_psk` using the commands above (umask keeps it private during write).
 2. Re-apply `chown root:er1` and `chmod 640` to enforce permissions.
 3. Firmware embeds `OTA_PSK` at compile-time today, so rebuild every env with the new PSK in the build environment and OTA/flash all nodes.
-4. Optional sanity check: `python3 /home/rudyy/er1/scripts/ota_publish.py --dev <dev> --url /firmware/<dev>.bin --dry-run` to verify HMAC/sha generation without publishing.
+4. Optional sanity check: `python3 /home/rudyy/er1/scripts/ota_publish.py --dev <dev> --cmd-node <CmdNode> --url /firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName> --dry-run` to verify HMAC/sha generation without publishing (values taken from the OTA map).
 
 ## Recovery procedure
 - If `/etc/er1/ota_psk` is lost: restore the secret from the password manager/offline backup and re-apply the setup commands.

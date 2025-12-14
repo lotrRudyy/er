@@ -12,9 +12,9 @@ This repository contains the complete control system for the escape room project
 This README provides a quick overview.
 **Deep technical documentation lives in:**
 
-- `docs/er/workflow.md` — Developer workflow
-- `docs/er/er1_protocol.md` — Canonical ER1 Protocol
-- `docs/er/` — ER-wide docs (future cross-room content)
+- `docs/workflow.md` - Developer workflow
+- `docs/er_protocol.md` - Canonical ER1 Protocol
+- `docs/` - ER-wide docs (future cross-room content)
 
 ---
 
@@ -51,7 +51,7 @@ $laptop = "$HOME\Documents\er"
 $ROOT = if (Test-Path $pc) { $pc } elseif (Test-Path $laptop) { $laptop } else { "" }
 
 if ($ROOT -ne "") {
-    . "$ROOT\pc-scripts\er1_profile.ps1"
+    . "$ROOT\scripts\er1_profile.ps1"
 } else {
     Write-Warning "ER repo not found."
 }
@@ -66,13 +66,14 @@ This loads all development commands for both PC and laptop.
 ## Commit + push
 
 ```
-er-commit "message"
+er1 push "message"
 ```
 
 ## Deploy Pi runtime
 
 ```
-er1-deploy er1
+er1 deploy              # runtime subset
+er1 deploy full         # entire pi-runtime mirror
 ```
 
 Deploy script syncs:
@@ -82,31 +83,21 @@ Deploy script syncs:
 - `er1/pi-runtime/docs/`
 - `config/local.env.example`
 
-And restarts:
-
-```
-er1-runtime.service
-```
+Optional restart/verify flags are available; see `scripts/er1_profile.ps1`.
 
 ---
 
 ## OTA updates
 
 ```
-er1-ota <Dev>
+er1 ota <Dev>
 ```
 
 Examples:
 
 ```
-er1-ota images_piano
-er1-ota chess
-```
-
-Internally runs:
-
-```
-pwsh ota.ps1 -Target <Dev>
+er1 ota images_piano
+er1 ota chess
 ```
 
 Firmware must exist at:
@@ -181,15 +172,15 @@ Legacy names `door_to_r2`, `door_to_r3` are deprecated.
 
 ### Complete developer workflow:
 ```
-docs/er/workflow.md
+docs/workflow.md
 ```
 
-### Canonical ER1 protocol (wins over everything else):
+### Canonical ER1 protocol (ultimate truth):
 ```
-docs/er/er1_protocol.md
+docs/er_protocol.md
 ```
 
-Both files should always be updated together when modifying firmware, runtime, or MQTT conventions.
+Both files should always reflect the canonical commands defined in `scripts/er1_profile.ps1`.
 
 ---
 
@@ -208,9 +199,9 @@ er/
       config/
   er2/
   er3/
-  pc-scripts/
+  scripts/
     er1_profile.ps1
-    codex_commit.ps1
+    codex-commit.ps1
   web/
 ```
 

@@ -12,9 +12,9 @@ er/
   docs/
     er/
 
-  pc-scripts/          # PowerShell and deployment tooling (PC + laptop)
+  scripts/             # PowerShell and deployment tooling (PC + laptop)
     er1_profile.ps1
-    codex_commit.ps1
+    codex-commit.ps1
 
   er1/                 # PlatformIO firmware for ER1 devices
     firmware/
@@ -33,7 +33,7 @@ er/
     pi-runtime/
 ```
 
-`pc-scripts` is the single source of truth for all developer-side tools.
+scripts/ is the single source of truth for all developer-side tools.
 
 ---
 
@@ -94,32 +94,19 @@ er1 deploy full      # mirror the whole pi-runtime tree
 
 ---
 
-## 3.3 `er1-ota`
-Triggers OTA update for a specific ESP32 device.
-
-Correct command:
+## 3.3 `er1 ota`
+Triggers OTA update for a deployment target using the canonical OTA map inside `er1/firmware/ota.ps1`.
 
 ```
-er1-ota <Dev>
+er1 ota <target>
 ```
 
-Which internally runs:
+Examples:
 
-```
-pwsh ota.ps1 -Target <Dev>
-```
+- `er1 ota images_piano` (publishes UPDATE to `images/cmd`, verifies `images` + `piano`)
+- `er1 ota maglock` (canonical file `/firmware/maglock.bin`, also copies `maglock_ctrl.bin` on the Pi for migrations)
 
-Example:
-
-```
-er1-ota images_piano
-```
-
-The OTA binary must exist at:
-
-```
-/firmware/<Dev>.bin
-```
+The map aligns PlatformIO env, firmware filename, MQTT command topic, and verifier nodes. OTA artifact lives on the Pi at `/home/rudyy/firmware/<FirmwareName>`.
 
 ---
 
@@ -228,7 +215,7 @@ firmware/ota.ps1
 Correct usage:
 
 ```
-pwsh ota.ps1 -Target <Dev>
+pwsh ota.ps1 -Target <target>
 ```
 
 Example:
@@ -239,12 +226,11 @@ pwsh ota.ps1 -Target images_piano
 
 OTA steps:
 
-1. Build firmware via PlatformIO (requires `OTA_PSK` at build time; retrieve it from `/etc/er1/ota_psk` on the Pi without storing locally)
-2. Upload `<Dev>.bin` into `/home/rudyy/firmware/` on the Pi (handled by `ota.ps1`)
-3. `ota.ps1` SSHes into the Pi to run `~/er1/scripts/ota_publish.py --dev <Dev> --url /firmware/<Dev>.bin --broker 192.168.0.10`, which reads `/etc/er1/ota_psk`, computes sha256 + HMAC, and publishes `UPDATE sha256=... hmac=... url=...` to `<Dev>/cmd`
-4. ESP32 fetches OTA binary over HTTP
-5. ESP32 reboots
-6. Node publishes new heartbeat with updated FW_VERSION
+1. Resolve target via the canonical map (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames, VerifyNodes). Build the PlatformIO env unless `-NoBuild` is set.
+2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
+3. From the Pi, verify `http://192.168.0.10/firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
+4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --url /firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName>` so UPDATE is published to `<CmdNode>/cmd` with sha256 + HMAC computed on the Pi.
+5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_verify.py` watches `VerifyNodes` (images_piano verifies both `images` and `piano` even though `CmdNode=images`).
 
 ---
 
@@ -312,13 +298,13 @@ After deployment, this unit is restarted automatically.
 Steps:
 
 1. Add a PlatformIO environment to `er1/firmware/platformio.ini`
-2. Add `<Dev>.bin` to `deviceMap` in `ota.ps1`
+2. Add the deployment to the OTA map in `er1/firmware/ota.ps1` (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames + VerifyNodes)
 3. Add lock or diagnostic helpers in `er1_profile.ps1` if needed
 4. Deploy Pi runtime if systemd scripts or config change
 5. Perform OTA with:
 
 ```
-er1-ota <Dev>
+er1 ota <Dev>
 ```
 
 ---
@@ -339,9 +325,9 @@ er1-ota <Dev>
 - Use scp fallback on laptop (rsync missing)
 
 ### OTA fails
-- Wrong `Dev` name
-- Missing `<Dev>.bin`
-- Firmware path not copied to Pi
+- Wrong target name (must match OTA map keys)
+- Missing `/home/rudyy/firmware/<FirmwareName>` on the Pi
+- Firmware path not copied or legacy alias missing
 - ESP offline
 
 ### Logs missing

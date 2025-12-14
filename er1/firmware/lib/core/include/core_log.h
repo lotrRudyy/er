@@ -34,8 +34,10 @@ using LogFilterFn = bool (*)(const char* level, void* userData);
 struct LogOptions {
   const char* topic = nullptr;
   const char* fwVersion = nullptr;
+  const char* serialTag = nullptr;
   LogFormat format = LogFormat::FwUptimeLevelMsg;
   bool includeDataField = true;
+  bool serialDebug = true;
   LogFilterFn filter = nullptr;
   void* filterUser = nullptr;
 };
@@ -49,6 +51,8 @@ public:
   bool publish(const char* level, const String& msg);
   bool publish(const char* level, const String& msg, const String& dataJson);
 
+  void setSerialDebug(bool enabled) { serialDebug_ = enabled; }
+  void setSerialTag(const char* tag) { serialTag_ = tag; }
   void setTimestampSource(TimestampSource* src) { tsSource_ = src; }
   uint32_t errorCount() const { return errorCount_; }
   void resetErrorCount() { errorCount_ = 0; }
@@ -66,11 +70,14 @@ private:
   TimestampFields timestamp();
   String buildPayload(const LogMessage& msg, const TimestampFields& ts) const;
   bool emitMissingTsWarning(const TimestampFields& ts);
+  void serialPrint(const LogMessage& msg, const TimestampFields& ts) const;
 
   PubSubClient* client_ = nullptr;
   const char* topic_ = nullptr;
   const char* fwVersion_ = nullptr;
+  const char* serialTag_ = nullptr;
   LogFormat format_ = LogFormat::FwUptimeLevelMsg;
+  bool serialDebug_ = true;
   bool includeData_ = true;
   LogFilterFn filter_ = nullptr;
   void* filterUser_ = nullptr;

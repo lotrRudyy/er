@@ -26,7 +26,7 @@ Use kebab-case for all folders at every level.
 
 ```
 docs/
-pc-scripts/
+scripts/
 pi-runtime/
 firmware/
 web/
@@ -106,7 +106,7 @@ piano-calibrate
 If ambiguity exists across rooms/projects, prefix the command:
 
 ```
-er1-ota-verify
+er1-logs-tail
 room1-piano-calibrate
 ```
 

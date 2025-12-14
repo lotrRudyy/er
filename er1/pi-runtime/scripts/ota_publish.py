@@ -3,7 +3,7 @@
 Compute OTA sha256 + HMAC on the Pi and publish the UPDATE command.
 
 Reads PSK from /etc/er1/ota_psk (root-owned, group-readable) and publishes
-to <dev>/cmd on the configured broker.
+to <cmd_node>/cmd on the configured broker.
 """
 from __future__ import annotations
 
@@ -15,6 +15,73 @@ from pathlib import Path
 
 DEFAULT_PSK_PATH = Path("/etc/er1/ota_psk")
 DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/firmware")
+
+DEPLOYMENTS: dict[str, dict[str, object]] = {
+    "maglock": {
+        "env": "maglock",
+        "dev": "maglock",
+        "cmd_node": "maglock",
+        "firmware": "maglock.bin",
+        "legacy": ("maglock_ctrl.bin",),
+        "verify_nodes": ("maglock",),
+    },
+    "images_piano": {
+        "env": "images_piano",
+        "dev": "images_piano",
+        "cmd_node": "images",
+        "firmware": "images_piano.bin",
+        "legacy": (),
+        "verify_nodes": ("images", "piano"),
+    },
+    "chess": {
+        "env": "chess",
+        "dev": "chess",
+        "cmd_node": "chess",
+        "firmware": "chess.bin",
+        "legacy": (),
+        "verify_nodes": ("chess",),
+    },
+    "knocking": {
+        "env": "knocking",
+        "dev": "knocking",
+        "cmd_node": "knocking",
+        "firmware": "knocking.bin",
+        "legacy": (),
+        "verify_nodes": ("knocking",),
+    },
+    "candles": {
+        "env": "candles",
+        "dev": "candles",
+        "cmd_node": "candles",
+        "firmware": "candles.bin",
+        "legacy": (),
+        "verify_nodes": ("candles",),
+    },
+    "star_sky": {
+        "env": "star_sky",
+        "dev": "star_sky",
+        "cmd_node": "star_sky",
+        "firmware": "star_sky.bin",
+        "legacy": (),
+        "verify_nodes": ("star_sky",),
+    },
+    "star_slider": {
+        "env": "star_slider",
+        "dev": "star_slider",
+        "cmd_node": "star_slider",
+        "firmware": "star_slider.bin",
+        "legacy": (),
+        "verify_nodes": ("star_slider",),
+    },
+    "stop_timer": {
+        "env": "stop_timer",
+        "dev": "stop_timer",
+        "cmd_node": "stop_timer",
+        "firmware": "stop_timer.bin",
+        "legacy": (),
+        "verify_nodes": ("stop_timer",),
+    },
+}
 
 
 class OtaPublishError(Exception):
@@ -83,13 +150,23 @@ def parse_args() -> argparse.Namespace:
         description="Publish an OTA command from the Pi with HMAC computed locally."
     )
     parser.add_argument("--dev", required=True, help="Device name (topic prefix)")
+    parser.add_argument(
+        "--cmd-node",
+        dest="cmd_node",
+        help="MQTT command node for UPDATE topic (defaults from deployment map or dev)",
+    )
     parser.add_argument("--broker", default="192.168.0.10", help="MQTT broker host")
     parser.add_argument("--port", type=int, default=1883, help="MQTT broker port")
     parser.add_argument("--url", help="OTA URL (path or full http:// host/path)")
     parser.add_argument(
+        "--firmware-name",
+        dest="firmware_name",
+        help="Firmware filename (defaults from deployment map or <dev>.bin)",
+    )
+    parser.add_argument(
         "--file",
         dest="firmware_path",
-        help="Firmware file path on the Pi (defaults to /home/rudyy/firmware/<dev>.bin)",
+        help="Firmware file path on the Pi (defaults to /home/rudyy/firmware/<firmware_name>)",
     )
     parser.add_argument("--psk-path", default=str(DEFAULT_PSK_PATH), help="Path to OTA PSK file")
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
@@ -98,17 +175,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    deployment = DEPLOYMENTS.get(args.dev, {})
+    cmd_node = args.cmd_node or deployment.get("cmd_node") or args.dev
+    firmware_name = args.firmware_name or deployment.get("firmware") or f"{args.dev}.bin"
     firmware_path = (
-        Path(args.firmware_path) if args.firmware_path else DEFAULT_FIRMWARE_DIR / f"{args.dev}.bin"
+        Path(args.firmware_path) if args.firmware_path else DEFAULT_FIRMWARE_DIR / firmware_name
     )
-    url = args.url or f"/firmware/{firmware_path.name}"
+    url = args.url or f"/firmware/{firmware_name}"
     psk_path = Path(args.psk_path)
 
     try:
         psk = read_psk(psk_path)
         sha_hex = sha256_file(firmware_path)
         hmac_hex = compute_hmac(psk, sha_hex)
-        cmd_node = "images" if args.dev == "images_piano" else args.dev
         topic = f"{cmd_node}/cmd"
         payload = f"UPDATE sha256={sha_hex} hmac={hmac_hex} url={url}"
 
@@ -117,6 +196,7 @@ def main() -> int:
         print(f"SHA256   : {sha_hex}")
         print(f"HMAC     : {hmac_hex}")
         print(f"Dev      : {args.dev}")
+        print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
         print(f"Payload  : {payload}")
 

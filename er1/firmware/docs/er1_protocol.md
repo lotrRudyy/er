@@ -67,7 +67,7 @@ er/
       commands.md
       er1_logging_and_tools.md
 
-  pc-scripts/
+  scripts/
     er1_profile.ps1               # single source of truth for 'er1 <cmd>'
     codex_commit.ps1
 
@@ -274,13 +274,14 @@ OTA served by ER1 Pi.
 OTA path:
 
 ```
-/firmware/<Dev>.bin
+/firmware/<FirmwareName>
 ```
 
 Correct invocation (inside `er1/firmware`):
 
 ```
-pwsh ota.ps1 -Target <Dev>
+pwsh ota.ps1 -Target <target>
+# or via profile: er1 ota <target>
 ```
 
 Example:
@@ -289,21 +290,21 @@ Example:
 pwsh ota.ps1 -Target images_piano
 ```
 
-OTA lookup via deviceMap inside `ota.ps1`.
+OTA lookup via the deployment map inside `ota.ps1` (Env, Dev, CmdNode, FirmwareName, LegacyFirmwareNames, VerifyNodes). `CmdNode` is the MQTT node that receives `UPDATE` (images_piano uses `images/cmd`, verifier watches both `images` and `piano` heartbeats).
 
 Always bump `FW_VERSION`.
 
 Validation (fails closed):
 
 - Command payload must include `sha256` (lowercase hex) and `hmac` (HMAC-SHA256 over the `sha256` string, keyed by `OTA_PSK`).
-- OTA downloads are allowlisted to `http://192.168.0.10/firmware/<Dev>.bin`. Host/IP overrides are rejected; paths must stay under `/firmware/`.
+- OTA downloads are allowlisted to `http://192.168.0.10/firmware/<FirmwareName>`. Host/IP overrides are rejected; paths must stay under `/firmware/`.
 - Firmware bytes are streamed through SHA-256; mismatches abort the OTA and skip reboot.
 - HMAC is verified before any download; missing/invalid fields or PSK abort with a `fail` status.
 
 Build + tooling requirements:
 
 - `OTA_PSK` must be available at build time (`platformio.ini` pulls `${sysenv.OTA_PSK}`); export it temporarily from the Pi and avoid saving it on PCs.
-- `ota.ps1` now uploads the binary and SSHes into `~/er1/scripts/ota_publish.py`, which reads `/etc/er1/ota_psk` on the Pi to compute sha256 + HMAC and publish `UPDATE` to `<Dev>/cmd` (no PSK on the PC side).
+- `ota.ps1` uploads the binary, ensures legacy names (e.g., `maglock_ctrl.bin`), and SSHes into `~/er1/scripts/ota_publish.py`, which reads `/etc/er1/ota_psk` on the Pi to compute sha256 + HMAC and publish `UPDATE` to `<CmdNode>/cmd` (no PSK on the PC side).
 - Optional: define `OTA_VALIDATION_SELF_TEST` at build time to run a small self-test of the hash/HMAC helpers at startup.
 
 ### OTA status topic (per node)
@@ -336,7 +337,7 @@ New failure reasons are reported via `msg` + extra fields in `d`:
 
 ### Pi OTA verification
 
-`pi-runtime/scripts/ota_verify.py` subscribes to `+/cmd` + `+/hb`. When an `UPDATE` command is seen it opens a 90 s window and waits for:
+`pi-runtime/scripts/ota_verify.py` subscribes to `+/cmd` + `+/hb`. Cmd topics map back to deployments via the OTA map (e.g., images_piano listens on `images/cmd` but requires both `images` and `piano`). When an `UPDATE` command is seen it opens a 90s window and waits for:
 
 1. Device to go offline at least once (LWT `offline`) **or** its heartbeat uptime to reset.
 2. Device to publish a new heartbeat after reconnecting.
@@ -354,24 +355,24 @@ Failures log a single line with one of: `no_offline`, `no_return`, `no_fw_change
 OTA_RESULT dev=<dev> room=<room> result=FAIL reason=<reason> old_fw=<old> last_fw=<last>
 ```
 
-Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and systemd journal via `er1-ota-verify.service`).
+Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and the systemd OTA verify service journal).
 
 ---
 
 # 3. Device map (Env / Dev / IP / OTA)
 
-images and piano are separate logical MQTT nodes running on the same ESP32 and deployed together as the `images_piano` env/OTA.
+images and piano are separate logical MQTT nodes running on the same ESP32 and deployed together as the `images_piano` env/OTA. `CmdNode` is the MQTT prefix that receives `UPDATE`; `VerifyNodes` are the heartbeats watched by `ota_verify.py`.
 
-| Role               | Env name   | Dev name  | IP            | OTA path                    |
-|--------------------|------------|-----------|----------------|-----------------------------|
-| Maglock controller | maglock    | maglock   | 192.168.0.11  | /firmware/maglock_ctrl.bin  |
-| Images + piano     | images_piano | images_piano | 192.168.0.12  | /firmware/images_piano.bin  |
-| Chess              | chess      | chess     | 192.168.0.13  | /firmware/chess.bin         |
-| Knocking           | knocking   | knocking  | 192.168.0.14  | /firmware/knocking.bin      |
-| Candles            | candles    | candles   | 192.168.0.15  | /firmware/candles.bin       |
-| Star sky           | star_sky   | star_sky  | 192.168.0.16  | /firmware/star_sky.bin      |
-| Star slider        | star_slider| star_slider| 192.168.0.17 | /firmware/star_slider.bin   |
-| Stop timer         | stop_timer | stop_timer| 192.168.0.18  | /firmware/stop_timer.bin    |
+| Role               | Env/Target   | CmdNode | VerifyNodes       | OTA firmware path          | Legacy firmware names | IP            |
+|--------------------|--------------|---------|-------------------|----------------------------|----------------------|---------------|
+| Maglock controller | maglock      | maglock | maglock           | /firmware/maglock.bin      | maglock_ctrl.bin     | 192.168.0.11  |
+| Images + piano     | images_piano | images  | images, piano     | /firmware/images_piano.bin | -                    | 192.168.0.12  |
+| Chess              | chess        | chess   | chess             | /firmware/chess.bin        | -                    | 192.168.0.13  |
+| Knocking           | knocking     | knocking| knocking          | /firmware/knocking.bin     | -                    | 192.168.0.14  |
+| Candles            | candles      | candles | candles           | /firmware/candles.bin      | -                    | 192.168.0.15  |
+| Star sky           | star_sky     | star_sky| star_sky          | /firmware/star_sky.bin     | -                    | 192.168.0.16  |
+| Star slider        | star_slider  | star_slider | star_slider    | /firmware/star_slider.bin  | -                    | 192.168.0.17  |
+| Stop timer         | stop_timer   | stop_timer| stop_timer      | /firmware/stop_timer.bin   | -                    | 192.168.0.18  |
 
 Examples:
 
@@ -556,7 +557,7 @@ er1-mqtt-log.service
 ## 6.2 PC tools (PowerShell)
 
 All Windows-side interaction is now done through the single `er1` function
-loaded from `pc-scripts/er1_profile.ps1`.
+loaded from `scripts/er1_profile.ps1`.
 
 ### Core commands
 

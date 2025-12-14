@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-
 param(
     [Parameter(Mandatory = $true)][string]$RepoRoot,
     [Parameter(Mandatory = $true)][string]$Er1Pi,
@@ -9,6 +7,8 @@ param(
     [switch]$RestartServices,
     [switch]$Verify
 )
+
+Set-StrictMode -Version Latest
 
 $script:Er1RemoteRoot  = "/home/rudyy/er1"
 $script:Er1ExcludeArgs = @("--exclude=__pycache__/", "--exclude=*.pyc")

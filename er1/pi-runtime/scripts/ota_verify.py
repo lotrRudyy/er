@@ -24,8 +24,72 @@ PORT = int(os.getenv("LOCAL_BROKER_PORT", "1883"))
 VERIFY_WINDOW = int(os.getenv("OTA_VERIFY_WINDOW", "90"))
 LOG_DIR = Path(os.getenv("ER1_LOG_DIR", Path(__file__).resolve().parent.parent / "logs"))
 LOG_FILE = Path(os.getenv("OTA_VERIFY_LOG", str(LOG_DIR / "ota-verify.log")))
-DEPLOYMENT_GROUPS: dict[str, tuple[str, ...]] = {
-    "images_piano": ("images", "piano"),
+# Canonical deployment map (must mirror PC tooling)
+DEPLOYMENTS: dict[str, dict[str, object]] = {
+    "maglock": {
+        "env": "maglock",
+        "dev": "maglock",
+        "cmd_node": "maglock",
+        "firmware": "maglock.bin",
+        "legacy": ("maglock_ctrl.bin",),
+        "verify_nodes": ("maglock",),
+    },
+    "images_piano": {
+        "env": "images_piano",
+        "dev": "images_piano",
+        "cmd_node": "images",
+        "firmware": "images_piano.bin",
+        "legacy": (),
+        "verify_nodes": ("images", "piano"),
+    },
+    "chess": {
+        "env": "chess",
+        "dev": "chess",
+        "cmd_node": "chess",
+        "firmware": "chess.bin",
+        "legacy": (),
+        "verify_nodes": ("chess",),
+    },
+    "knocking": {
+        "env": "knocking",
+        "dev": "knocking",
+        "cmd_node": "knocking",
+        "firmware": "knocking.bin",
+        "legacy": (),
+        "verify_nodes": ("knocking",),
+    },
+    "candles": {
+        "env": "candles",
+        "dev": "candles",
+        "cmd_node": "candles",
+        "firmware": "candles.bin",
+        "legacy": (),
+        "verify_nodes": ("candles",),
+    },
+    "star_sky": {
+        "env": "star_sky",
+        "dev": "star_sky",
+        "cmd_node": "star_sky",
+        "firmware": "star_sky.bin",
+        "legacy": (),
+        "verify_nodes": ("star_sky",),
+    },
+    "star_slider": {
+        "env": "star_slider",
+        "dev": "star_slider",
+        "cmd_node": "star_slider",
+        "firmware": "star_slider.bin",
+        "legacy": (),
+        "verify_nodes": ("star_slider",),
+    },
+    "stop_timer": {
+        "env": "stop_timer",
+        "dev": "stop_timer",
+        "cmd_node": "stop_timer",
+        "firmware": "stop_timer.bin",
+        "legacy": (),
+        "verify_nodes": ("stop_timer",),
+    },
 }
 
 # Time sync configuration
@@ -135,14 +199,23 @@ def ensure_state(node: str) -> DeviceState:
 
 
 def deployment_for(node: str) -> str:
-    for deployment, nodes in DEPLOYMENT_GROUPS.items():
-        if node in nodes or node == deployment:
+    for deployment, cfg in DEPLOYMENTS.items():
+        verify_nodes = cfg.get("verify_nodes") or ()
+        cmd_node = cfg.get("cmd_node") or deployment
+        if node == deployment or node == cmd_node or node in verify_nodes:
             return deployment
     return node
 
 
 def nodes_for(deployment: str) -> tuple[str, ...]:
-    return DEPLOYMENT_GROUPS.get(deployment, (deployment,))
+    cfg = DEPLOYMENTS.get(deployment)
+    if not cfg:
+        return (deployment,)
+    verify_nodes = cfg.get("verify_nodes")
+    if verify_nodes:
+        return tuple(verify_nodes)
+    cmd_node = cfg.get("cmd_node") or deployment
+    return (cmd_node,)
 
 
 def complete_attempt(attempt: Attempt, success: bool, *, reason: str | None = None) -> None:
