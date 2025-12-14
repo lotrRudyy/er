@@ -6,6 +6,8 @@ OTA verification watcher.
 Subscribes to +/cmd and +/hb to track UPDATE commands.
 Emits OTA_RESULT lines once success/failure is determined.
 
+Also publishes authoritative Pi time to time/state topic for node clock sync.
+
 Dependencies:
   pip install paho-mqtt
 """
@@ -25,6 +27,12 @@ LOG_FILE = Path(os.getenv("OTA_VERIFY_LOG", str(LOG_DIR / "ota-verify.log")))
 DEPLOYMENT_GROUPS: dict[str, tuple[str, ...]] = {
     "images_piano": ("images", "piano"),
 }
+
+# Time sync configuration
+TIME_TOPIC = "time/state"
+TIME_PUBLISH_INTERVAL = 30  # seconds
+TIME_WARN_INTERVAL = 60  # max warn once per 60s if system time invalid
+TIME_EPOCH_MIN = 1672531200  # 2023-01-01 00:00:00 UTC
 
 
 class DeviceState:
@@ -61,6 +69,9 @@ attempts: dict[str, Attempt] = {}
 running = True
 _last_malformed_log: dict[str, float] = {}
 _suppress_malformed = False
+_time_seq = 0
+_last_time_publish = 0.0
+_last_time_invalid_warn = 0.0
 
 
 def log_line(msg: str) -> None:
@@ -70,6 +81,49 @@ def log_line(msg: str) -> None:
     with LOG_FILE.open("a", encoding="utf-8") as handle:
         handle.write(f"{line}\n")
     print(line, flush=True)
+
+
+def format_ts_iso_like(dt: datetime) -> str:
+    """Format datetime as ISO-like: YYYY-MM-DD HH:MM:SS"""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def publish_time_if_due(client) -> None:
+    """Publish Pi's wall-clock time to time/state topic (retained)."""
+    global _time_seq, _last_time_publish, _last_time_invalid_warn
+    now = time.time()
+
+    # Check if it's time to publish (every 30s)
+    if now - _last_time_publish < TIME_PUBLISH_INTERVAL:
+        return
+
+    # Check if system time is valid
+    if now < TIME_EPOCH_MIN:
+        # System time is invalid; warn at most once per 60s
+        if now - _last_time_invalid_warn >= TIME_WARN_INTERVAL:
+            _last_time_invalid_warn = now
+            log_line(f"[warn] system time invalid epoch={int(now)} (< {TIME_EPOCH_MIN})")
+        return
+
+    # System time is valid; publish it
+    _last_time_publish = now
+    _time_seq += 1
+
+    dt = datetime.fromtimestamp(now)
+    ts_str = format_ts_iso_like(dt)
+
+    payload = {
+        "epoch": int(now),
+        "ts": ts_str,
+        "src": "er1-pi",
+        "seq": _time_seq,
+    }
+
+    try:
+        payload_json = json.dumps(payload, separators=(',', ':'))
+        client.publish(TIME_TOPIC, payload_json, retain=True)
+    except Exception as e:
+        log_line(f"[err] time publish failed: {e}")
 
 
 def ensure_state(node: str) -> DeviceState:
@@ -309,6 +363,40 @@ def self_test() -> int:
         print(f"{topic} -> {result} (expected {expected})")
         if not ok:
             failures += 1
+
+    # Test time/state payload
+    print("\n--- Time Sync Payload Test ---")
+    now = time.time()
+    if now < TIME_EPOCH_MIN:
+        print(f"[skip] system time invalid, using placeholder")
+        now = TIME_EPOCH_MIN + 100
+
+    dt = datetime.fromtimestamp(now)
+    ts_str = format_ts_iso_like(dt)
+
+    sample_payload = {
+        "epoch": int(now),
+        "ts": ts_str,
+        "src": "er1-pi",
+        "seq": 1,
+    }
+
+    try:
+        payload_json = json.dumps(sample_payload, separators=(',', ':'))
+        print(f"topic: {TIME_TOPIC}")
+        print(f"payload: {payload_json}")
+
+        # Verify it parses
+        parsed = json.loads(payload_json)
+        assert "epoch" in parsed and isinstance(parsed["epoch"], int)
+        assert "ts" in parsed and isinstance(parsed["ts"], str)
+        assert "src" in parsed and isinstance(parsed["src"], str)
+        assert "seq" in parsed and isinstance(parsed["seq"], int)
+        print("✓ time/state payload valid")
+    except Exception as e:
+        print(f"✗ time/state payload invalid: {e}")
+        failures += 1
+
     return failures
 
 
@@ -324,6 +412,7 @@ def main() -> None:
     while running:
         client.loop(timeout=1.0)
         check_timeouts()
+        publish_time_if_due(client)
 
     client.disconnect()
 

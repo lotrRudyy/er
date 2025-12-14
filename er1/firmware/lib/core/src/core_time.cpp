@@ -116,3 +116,25 @@ bool core_format_build_ts(char* out, size_t outLen) {
 
   return formatTimestamp(tmBuild, 0, out, outLen);
 }
+bool core_set_time(int64_t epochSeconds) {
+  if (epochSeconds < kMinValidEpoch) {
+    return false;
+  }
+
+#if defined(ESP32)
+  struct timeval tv;
+  tv.tv_sec = static_cast<time_t>(epochSeconds);
+  tv.tv_usec = 0;
+  return settimeofday(&tv, nullptr) == 0;
+#else
+  // For non-ESP32, this may not be available or may require different handling
+  // For now, return false to indicate unsupported
+  (void)epochSeconds;
+  return false;
+#endif
+}
+
+bool core_time_valid() {
+  time_t now = ::time(nullptr);
+  return wallClockValid(now);
+}

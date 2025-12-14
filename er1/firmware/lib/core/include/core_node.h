@@ -160,6 +160,7 @@ private:
   bool publishEnvelope(const char* topic, const char* type, uint32_t version, const String& dataJson,
                        const char* id, bool retained);
   void maybeWarnMissingTs();
+  void handleTimeStateMessage(const String& payload);
 
   NodeCoreConfig cfg_{};
   HeartbeatConfig hbCfg_{};
@@ -173,6 +174,10 @@ private:
   uint32_t heartbeatIntervalMs_ = 0;
   bool heartbeatImmediate_ = false;
   char buildIdBuf_[24] = {0};
+
+  // Time sync state
+  bool timeValidFirstSet_ = false;
+  uint32_t lastTimeSyncParseErrorMs_ = 0;
 
   static constexpr size_t kMaxSubscriptions = 10;
   struct SubscriptionEntry {

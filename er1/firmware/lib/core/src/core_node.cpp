@@ -1,6 +1,8 @@
 #include "core_node.h"
 
 #include <cstdio>
+#include <ctime>
+#include <stdexcept>
 
 #include "core_time.h"
 
@@ -208,6 +210,9 @@ void NodeCore::onMqttConnected() {
     mqtt_.subscribe(cfg_.topics.cmd.c_str());
   }
 
+  // Subscribe to time/state for clock sync
+  mqtt_.subscribe("time/state");
+
   for (size_t i = 0; i < subCount_; i++) {
     mqtt_.subscribe(subs_[i].topic);
   }
@@ -222,6 +227,12 @@ void NodeCore::onMqttMessage(const char* topic, const uint8_t* payload, size_t l
     msg += static_cast<char>(payload[i]);
   }
   msg.trim();
+
+  // Handle time sync before other messages
+  if (strcmp(topic, "time/state") == 0) {
+    handleTimeStateMessage(msg);
+    return;
+  }
 
   if (cfg_.topics.cmd.length() > 0 && strcmp(topic, cfg_.topics.cmd.c_str()) == 0) {
     logCommandEnvelope(topic, msg);
@@ -467,6 +478,83 @@ void NodeCore::maybeWarnMissingTs() {
   missingTsWarned_ = true;
   logger_.publish("WRN", "wall-clock time not available; time_valid=false");
   missingTsWarningActive_ = false;
+}
+
+void NodeCore::handleTimeStateMessage(const String& payload) {
+  // Parse JSON: {"epoch": <int>, "ts": "<str>", "src": "<str>", "seq": <int>}
+  // Minimal JSON parsing to avoid bloat
+
+  // Look for "epoch" field
+  int epochIdx = payload.indexOf("\"epoch\":");
+  if (epochIdx < 0) {
+    uint32_t now = millis();
+    if (now - lastTimeSyncParseErrorMs_ >= 60000) {
+      lastTimeSyncParseErrorMs_ = now;
+      logger_.publish("ERR", "time_sync_parse epoch field missing");
+    }
+    return;
+  }
+
+  // Extract epoch value
+  int colonIdx = payload.indexOf(':', epochIdx);
+  if (colonIdx < 0) return;
+
+  int commaIdx = payload.indexOf(',', colonIdx);
+  if (commaIdx < 0) {
+    commaIdx = payload.indexOf('}', colonIdx);
+  }
+  if (commaIdx < 0) return;
+
+  String epochStr = payload.substring(colonIdx + 1, commaIdx);
+  epochStr.trim();
+
+  int64_t epoch = 0;
+  try {
+    epoch = std::stoll(epochStr.c_str());
+  } catch (...) {
+    uint32_t now = millis();
+    if (now - lastTimeSyncParseErrorMs_ >= 60000) {
+      lastTimeSyncParseErrorMs_ = now;
+      logger_.publish("ERR", String("time_sync_parse invalid epoch: ") + epochStr);
+    }
+    return;
+  }
+
+  // Validate epoch
+  if (epoch < 1672531200) { // kMinValidEpoch
+    return;
+  }
+
+  // Check if we should sync
+  bool wasValid = core_time_valid();
+  int64_t currentEpoch = ::time(nullptr);
+  int64_t deltaSec = 0;
+
+  if (wasValid) {
+    deltaSec = (currentEpoch > epoch) ? (currentEpoch - epoch) : (epoch - currentEpoch);
+    if (deltaSec <= 2) {
+      // Delta <= 2 seconds, ignore silently
+      return;
+    }
+  }
+
+  // Set time
+  if (!core_set_time(epoch)) {
+    logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
+    return;
+  }
+
+  // Log appropriately
+  if (!wasValid) {
+    // First time setting valid time
+    if (!timeValidFirstSet_) {
+      timeValidFirstSet_ = true;
+      logger_.publish("INF", String("time_sync epoch=") + static_cast<long long>(epoch) + " src=mqtt");
+    }
+  } else {
+    // Resync
+    logger_.publish("WRN", String("time_resync delta_s=") + static_cast<long long>(deltaSec));
+  }
 }
 
 TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg) {
