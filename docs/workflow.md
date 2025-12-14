@@ -87,7 +87,7 @@ er1 deploy full      # mirror the whole pi-runtime tree
 
 - Uses `rsync -avz --delete` if available, `scp -r` fallback otherwise.
 - Syncs scripts/, systemd/, docs/, and config/ (skipping `config/local.env`).
-- Leaves `/home/rudyy/er1/logs/` untouched.
+- Leaves `/home/rudyy/er1/data/logs/` untouched.
 - Re-applies execute bits on the remote runtime tree.
 - Prints each rsync/scp command before running it so you know what will happen.
 - Follow deployment with `er1 push "<msg>"` so Pi + Git stay aligned.
@@ -241,7 +241,7 @@ Logging is centralized on ER1 Pi.
 Logs stored at:
 
 ```
-/home/rudyy/er1/logs/er1-DD.MM.YYYY.log
+/home/rudyy/er1/data/logs/er1-DD.MM.YYYY.log
 ```
 
 Format:

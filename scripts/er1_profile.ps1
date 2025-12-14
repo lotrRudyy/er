@@ -4,6 +4,9 @@ Set-StrictMode -Version Latest
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
 $er1Cmd = "/home/rudyy/er1/er1"
+$er1DataDir = "~/er1/data"
+$er1RemoteLogDir = "$er1DataDir/logs"
+$er1TodayLog = "$er1RemoteLogDir/er1-" + '$(date +%d.%m.%Y).log'
 
 # ---- Repo root detection (PC + Laptop) ----
 $pcPath     = "$HOME\Documents\Escape Room\er"
@@ -179,7 +182,7 @@ function Invoke-Er1Status {
     ssh $er1Pi "$er1Cmd status_mqtt"
 
     Write-Host "`n=== LAST ERR LOGS (today, last 20) ===" -ForegroundColor Cyan
-    ssh $er1Pi "grep '""lv"":""ERR""' ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null | tail -n 20 || true"
+    ssh $er1Pi "grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 20 || true"
 }
 
 function Invoke-Er1Doctor {
@@ -212,8 +215,8 @@ function Invoke-Er1Doctor {
         "echo '--- journal mqtt-log (200) ---'; journalctl -u er1-mqtt-log.service -n 200 --no-pager || true",
         "echo '--- journal ota-verify (200) ---'; journalctl -u er1-ota-verify.service -n 200 --no-pager || true",
         "echo '--- status_mqtt ---'; $er1Cmd status_mqtt || true",
-        "echo '--- today log tail (200) ---'; tail -n 200 ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null || true",
-        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null | tail -n 50 || true"
+        "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
+        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"
     )
 
     foreach ($cmd in $remoteCmds) {
@@ -371,7 +374,7 @@ function er1 {
             $useAll = ($patterns.Count -eq 1 -and $patterns[0] -eq "*")
             $regex  = if ($useAll) { $null } else { ($patterns -join "|") }
 
-            $todayFile = "logs/er1-`$(date +%d.%m.%Y).log"
+            $todayFile = $er1TodayLog
 
             if ($live) {
                 if ($useAll) {

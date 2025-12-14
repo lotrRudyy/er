@@ -5,7 +5,7 @@ Source of truth for `/home/rudyy/er1` on the Pi.
 - `scripts/` -> `/home/rudyy/er1/scripts/`
 - `systemd/` -> `/etc/systemd/system/` (manual copy), working dir `/home/rudyy/er1`
 - `config/local.env` -> `/home/rudyy/er1/config/local.env` (create from `local.env.example`, not committed)
-- `logs/` -> `/home/rudyy/er1/logs/` (runtime only, not committed)
+- `data/logs/` -> `/home/rudyy/er1/data/logs/` (runtime only, not committed)
 
 Workflow:
 1) Deploy these files to the Pi under `/home/rudyy/er1`.
