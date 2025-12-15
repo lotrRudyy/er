@@ -58,6 +58,8 @@ void Logger::begin(PubSubClient* client, const LogOptions& opts) {
   client_ = client;
   topic_ = opts.topic;
   fwVersion_ = opts.fwVersion;
+  serialTag_ = opts.serialTag;
+  serialDebug_ = opts.serialDebug;
   format_ = opts.format;
   includeData_ = opts.includeDataField;
   filter_ = opts.filter;

@@ -337,6 +337,57 @@ er1 ota <Dev>
 
 ---
 
+## Manual update on Pi: MQTT logging runtime files
+
+Use these steps after the log path move to `/home/rudyy/er1/data/logs/` when you need to refresh only the logging runtime files (no deploy helpers used).
+
+1) Copy updated files from this repo to the Pi (from Windows/dev box, repo root):
+
+```bash
+scp er1/pi-runtime/scripts/mqtt_logs.sh rudyy@100.108.1.80:/home/rudyy/er1/scripts/mqtt_logs.sh
+scp er1/pi-runtime/systemd/er1-mqtt-log.service rudyy@100.108.1.80:/home/rudyy/er1/systemd/er1-mqtt-log.service
+ssh rudyy@100.108.1.80 "chmod +x /home/rudyy/er1/scripts/mqtt_logs.sh && sudo cp /home/rudyy/er1/systemd/er1-mqtt-log.service /etc/systemd/system/er1-mqtt-log.service"
+```
+
+Optional if rsync is available on both ends (behaves like deploy tooling):
+
+```bash
+rsync -avz er1/pi-runtime/scripts/mqtt_logs.sh rudyy@100.108.1.80:/home/rudyy/er1/scripts/
+rsync -avz er1/pi-runtime/systemd/er1-mqtt-log.service rudyy@100.108.1.80:/home/rudyy/er1/systemd/
+ssh rudyy@100.108.1.80 "chmod +x /home/rudyy/er1/scripts/mqtt_logs.sh && sudo cp /home/rudyy/er1/systemd/er1-mqtt-log.service /etc/systemd/system/er1-mqtt-log.service"
+```
+
+Notes:
+- `er1-mqtt-log.service` must land in `/etc/systemd/system/er1-mqtt-log.service` (sudo required).
+- Script path must stay `/home/rudyy/er1/scripts/mqtt_logs.sh` to match `ExecStart`.
+- `chmod +x` keeps the service runnable.
+
+2) Reload + restart systemd service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart er1-mqtt-log.service
+sudo systemctl status er1-mqtt-log.service --no-pager
+```
+
+3) Validate log directory and output:
+
+```bash
+ls -lah /home/rudyy/er1/data/logs
+journalctl -u er1-mqtt-log.service -n 200 --no-pager
+```
+
+Expected:
+- service is active/running
+- /home/rudyy/er1/data/logs exists
+- log files appear/rotate
+
+If broken:
+- permission errors → check ownership and mkdir pre-start
+- wrong paths → check ExecStart and script location
+- missing directory → ensure mkdir -p step exists / ExecStartPre used
+
+# 10. Best Practices
 # 10. Best Practices
 
 - Commit before deploying.

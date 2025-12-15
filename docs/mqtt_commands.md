@@ -53,3 +53,4 @@ Each line is prefixed by `date +"%Y.%m.%d %H:%M:%S.%3N"` and written to `<deploy
 - Daily logging helpers live in `scripts/mqtt_logs.sh`. Use `daemon`, `live`, `tail`, or `grep` subcommands.
 - Lock helpers live in `scripts/mqtt_locks.sh` with `open`/`close` actions.
 - Source `scripts/aliases_er1.sh` to load the `log_*` and `lock_*` aliases (`log_live`, `log_tail`, `log_grep`, `log_help`, `lock_open`, `lock_close`).
+- For Pi-side file refresh (log path now `/home/rudyy/er1/data/logs/`), see the manual steps in `docs/workflow.md#manual-update-on-pi-mqtt-logging-runtime-files`.
