@@ -41,3 +41,13 @@ er1/data/**/*.log.*
 deploy.sh
 er1/firmware/.vscode/launch.json
 er1/firmware/.vscode/c_cpp_properties.json
+er1/firmware/.vscode/c_cpp_properties.json
+er1/firmware/.vscode/launch.json
+
+# Global outputs
+out/
+
+# Logs
+*.log
+er1/firmware/.vscode/c_cpp_properties.json
+er1/firmware/.vscode/launch.json
