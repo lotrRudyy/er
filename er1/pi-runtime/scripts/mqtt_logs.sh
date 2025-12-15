@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="$ROOT_DIR/logs"
+DATA_DIR="${ER1_DATA_DIR:-$ROOT_DIR/data}"
+LOG_DIR="$DATA_DIR/logs"
 BROKER="${LOCAL_BROKER:-127.0.0.1}"
 
 ensure_log_dir() {
@@ -75,7 +76,7 @@ print_help() {
 Usage: scripts/mqtt_logs.sh <command> [args]
 
 Commands:
-  daemon          Capture +/log,+/hb,+/evt,+/state to /home/rudyy/er1/logs/er1-DD.MM.YYYY.log (no stdout).
+  daemon          Capture +/log,+/hb,+/evt,+/state to /home/rudyy/er1/data/logs/er1-DD.MM.YYYY.log (no stdout).
                   Set INCLUDE_DBG=1 to also subscribe to +/dbg.
   live            Same as daemon but also echoes to stdout.
   tail            tail -f today's logfile.

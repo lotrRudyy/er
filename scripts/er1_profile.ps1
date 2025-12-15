@@ -4,6 +4,9 @@ Set-StrictMode -Version Latest
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
 $er1Cmd = "/home/rudyy/er1/er1"
+$er1DataDir = "~/er1/data"
+$er1RemoteLogDir = "$er1DataDir/logs"
+$er1TodayLog = "$er1RemoteLogDir/er1-" + '$(date +%d.%m.%Y).log'
 
 # ---- Repo root detection (PC + Laptop) ----
 $pcPath     = "$HOME\Documents\Escape Room\er"
@@ -57,7 +60,7 @@ $er1LockIds = @(
 $er1Commands = [ordered]@{
     "help"   = "Show help + examples"
     "pi"     = "SSH into the ER1 Pi"
-    "log"    = "Tail logs (today/errors/live), optional --save"
+    "log"    = "Tail logs (today/errors/live), tag markers, or extract slices"
     "ota"    = "Upload firmware to a device via ota.ps1"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
@@ -179,7 +182,7 @@ function Invoke-Er1Status {
     ssh $er1Pi "$er1Cmd status_mqtt"
 
     Write-Host "`n=== LAST ERR LOGS (today, last 20) ===" -ForegroundColor Cyan
-    ssh $er1Pi "grep '""lv"":""ERR""' ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null | tail -n 20 || true"
+    ssh $er1Pi "grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 20 || true"
 }
 
 function Invoke-Er1Doctor {
@@ -212,8 +215,8 @@ function Invoke-Er1Doctor {
         "echo '--- journal mqtt-log (200) ---'; journalctl -u er1-mqtt-log.service -n 200 --no-pager || true",
         "echo '--- journal ota-verify (200) ---'; journalctl -u er1-ota-verify.service -n 200 --no-pager || true",
         "echo '--- status_mqtt ---'; $er1Cmd status_mqtt || true",
-        "echo '--- today log tail (200) ---'; tail -n 200 ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null || true",
-        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' ~/er1/logs/er1-\$(date +%d.%m.%Y).log 2>/dev/null | tail -n 50 || true"
+        "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
+        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"
     )
 
     foreach ($cmd in $remoteCmds) {
@@ -234,6 +237,201 @@ function Invoke-Er1Mqtt {
         "status"  { ssh $er1Pi "$er1Cmd status_mqtt"; return }
         "restart" { ssh $er1Pi "$er1Cmd restart_mqtt"; return }
         "logs"    { ssh $er1Pi "journalctl -u er1-mqtt-log.service -n 200 -f"; return }
+    }
+}
+
+function Invoke-Er1LogTag {
+    param(
+        [string]$TagName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TagName)) {
+        throw "Usage: er1 log tag <tag-name>"
+    }
+
+    $payloadObj = [ordered]@{
+        msg = "LOG_TAG"
+        d   = @{ tag = $TagName }
+    }
+    $payload = $payloadObj | ConvertTo-Json -Compress
+    $payloadEscaped = $payload -replace "'", "'`"`'`"`'"
+
+    $topic = "cli/log"
+    $cmd = "mosquitto_pub -h 127.0.0.1 -t $topic -m '$payloadEscaped'"
+    ssh $er1Pi $cmd
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to publish log tag '$TagName' (exit $LASTEXITCODE)."
+    }
+    Write-Host "[er1 log tag] Emitted LOG_TAG '$TagName' to $topic" -ForegroundColor Green
+}
+
+function Get-Er1LogTagFromLine {
+    param(
+        [string]$Line
+    )
+
+    if (-not $Line) { return $null }
+    $idx = $Line.IndexOf("{")
+    if ($idx -lt 0) { return $null }
+    $json = $Line.Substring($idx)
+    try {
+        $obj = $json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $null
+    }
+    if ($obj -and $obj.msg -eq "LOG_TAG" -and $obj.d -and $obj.d.tag) {
+        return [string]$obj.d.tag
+    }
+    return $null
+}
+
+function Invoke-Er1LogExtract {
+    param(
+        [string[]]$Args
+    )
+
+    if (-not $Args -or $Args.Count -eq 0) {
+        throw "Usage: er1 log extract --from <tagA> --to <tagB> [--date YYYY-MM-DD] [--open|--no-open] OR er1 log extract --tag <name> [--date YYYY-MM-DD] [--open|--no-open]"
+    }
+
+    $fromTag = $null
+    $toTag = $null
+    $baseTag = $null
+    $dateInput = $null
+    $openExplorer = $true
+
+    for ($i = 0; $i -lt $Args.Count; $i++) {
+        $arg = $Args[$i]
+        switch ($arg) {
+            "--from" {
+                if ($i + 1 -ge $Args.Count) { throw "Missing value for --from" }
+                $fromTag = $Args[$i + 1]; $i++; continue
+            }
+            "--to" {
+                if ($i + 1 -ge $Args.Count) { throw "Missing value for --to" }
+                $toTag = $Args[$i + 1]; $i++; continue
+            }
+            "--tag" {
+                if ($i + 1 -ge $Args.Count) { throw "Missing value for --tag" }
+                $baseTag = $Args[$i + 1]
+                $fromTag = "$baseTag-start"
+                $toTag = "$baseTag-end"
+                $i++
+                continue
+            }
+            "--date" {
+                if ($i + 1 -ge $Args.Count) { throw "Missing value for --date" }
+                $dateInput = $Args[$i + 1]; $i++; continue
+            }
+            "--open" {
+                $openExplorer = $true
+                continue
+            }
+            "--no-open" {
+                $openExplorer = $false
+                continue
+            }
+            default {
+                throw "Unknown option '$arg'. Usage: er1 log extract --from <tagA> --to <tagB> [--date YYYY-MM-DD] [--open|--no-open] OR er1 log extract --tag <name> [--date YYYY-MM-DD] [--open|--no-open]"
+            }
+        }
+    }
+
+    if (-not $fromTag -or -not $toTag) {
+        throw "Usage: er1 log extract --from <tagA> --to <tagB> [--date YYYY-MM-DD] [--open|--no-open] OR er1 log extract --tag <name> [--date YYYY-MM-DD] [--open|--no-open]"
+    }
+
+    $extractLabel = if ($baseTag) { $baseTag } else { "$fromTag-to-$toTag" }
+    $safeLabel = $extractLabel
+    foreach ($c in [IO.Path]::GetInvalidFileNameChars()) {
+        $safeLabel = $safeLabel -replace ([Regex]::Escape($c)), "_"
+    }
+
+    $date = $null
+    if ($dateInput) {
+        try {
+            $date = [datetime]::ParseExact($dateInput, "yyyy-MM-dd", $null)
+        } catch {
+            throw "Invalid date. Use YYYY-MM-DD."
+        }
+    } else {
+        $date = Get-Date
+    }
+
+    $dateHyphen = $date.ToString("yyyy-MM-dd")
+    $dateDots = $date.ToString("dd.MM.yyyy")
+    $remoteCandidates = @(
+        "$er1RemoteLogDir/er1-$dateHyphen.log",
+        "$er1RemoteLogDir/er1-$dateDots.log"
+    )
+
+    $remoteFile = $null
+    foreach ($candidate in $remoteCandidates) {
+        ssh $er1Pi "test -f $candidate"
+        if ($LASTEXITCODE -eq 0) {
+            $remoteFile = $candidate
+            break
+        }
+    }
+
+    if (-not $remoteFile) {
+        throw "Remote log file not found for $dateHyphen (tried $($remoteCandidates -join ', '))."
+    }
+
+    $localLogDir = Join-Path $erRepoRoot "er1\data\logs"
+    New-Item -ItemType Directory -Force $localLogDir | Out-Null
+
+    $localRaw = Join-Path $localLogDir ("er1-raw-$($date.ToString('yyyyMMdd')).log")
+    scp "${er1Pi}:$remoteFile" $localRaw
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to copy $remoteFile from Pi (exit $LASTEXITCODE)."
+    }
+
+    $lines = Get-Content $localRaw
+    if (-not $lines -or $lines.Count -eq 0) {
+        Write-Error "[er1 log extract] Remote log file was empty: $remoteFile"
+        return
+    }
+
+    $startIdx = $null
+    $endIdx = $null
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $tag = Get-Er1LogTagFromLine -Line $lines[$i]
+        if (-not $tag) { continue }
+
+        if ($startIdx -eq $null -and $tag -eq $fromTag) {
+            $startIdx = $i
+            continue
+        }
+
+        if ($startIdx -ne $null -and $tag -eq $toTag) {
+            $endIdx = $i
+            break
+        }
+    }
+
+    if ($startIdx -eq $null) {
+        Write-Error "[er1 log extract] Tag '$fromTag' not found in $remoteFile."
+        return
+    }
+    if ($endIdx -eq $null -or $endIdx -lt $startIdx) {
+        Write-Error "[er1 log extract] Tag '$toTag' not found after '$fromTag' in $remoteFile."
+        return
+    }
+
+    $slice = $lines[$startIdx..$endIdx]
+    if (-not $slice -or $slice.Count -eq 0) {
+        Write-Error "[er1 log extract] Extracted slice is empty; no file created."
+        return
+    }
+
+    $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+    $outPath = Join-Path $localLogDir ("extract_{0}_{1}.log" -f $safeLabel, $ts)
+    $slice | Set-Content -Path $outPath -Encoding utf8
+
+    Write-Host "[er1 log extract] Saved slice -> $outPath" -ForegroundColor Green
+    if ($openExplorer) {
+        Invoke-Item -Path (Split-Path $outPath -Parent)
     }
 }
 
@@ -289,6 +487,9 @@ function er1 {
             Write-Host "  er1 log -live"
             Write-Host "  er1 log -errors"
             Write-Host "  er1 log images --save"
+            Write-Host "  er1 log tag game-start"
+            Write-Host "  er1 log extract --tag game"
+            Write-Host "  er1 log extract --from game-start --to game-end --date 2025-12-14 --no-open"
             Write-Host ""
             return
         }
@@ -343,6 +544,22 @@ function er1 {
 
         "log" {
             # Minimal (fast) implementation: today/errors/live + simple regex filter + optional --save.
+            if ($cmdArgs -and $cmdArgs.Count -gt 0) {
+                $sub = $cmdArgs[0].ToLowerInvariant()
+                if ($sub -eq "tag") {
+                    if ($cmdArgs.Count -lt 2) { throw "Usage: er1 log tag <tag-name>" }
+                    $tagValue = ($cmdArgs | Select-Object -Skip 1) -join " "
+                    Invoke-Er1LogTag -TagName $tagValue
+                    return
+                }
+                elseif ($sub -eq "extract") {
+                    $extractArgs = @()
+                    if ($cmdArgs.Count -gt 1) { $extractArgs = $cmdArgs[1..($cmdArgs.Count - 1)] }
+                    Invoke-Er1LogExtract -Args $extractArgs
+                    return
+                }
+            }
+
             $argsNoSave = @()
             $saveRequested = $false
 
@@ -371,7 +588,7 @@ function er1 {
             $useAll = ($patterns.Count -eq 1 -and $patterns[0] -eq "*")
             $regex  = if ($useAll) { $null } else { ($patterns -join "|") }
 
-            $todayFile = "logs/er1-`$(date +%d.%m.%Y).log"
+            $todayFile = $er1TodayLog
 
             if ($live) {
                 if ($useAll) {

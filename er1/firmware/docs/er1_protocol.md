@@ -143,7 +143,7 @@ Mapping from repo → Pi:
 - `er1/pi-runtime/systemd/  → /home/rudyy/er1/systemd/`
 - `er1/pi-runtime/docs/     → /home/rudyy/er1/docs/`
 - `er1/pi-runtime/config/local.env.example → /home/rudyy/er1/config/local.env` (manual edit)
-- `/home/rudyy/er1/logs/` exists only on Pi (repo only stores `.gitkeep`)
+- `/home/rudyy/er1/data/logs/` exists only on Pi (runtime logs are ignored in the repo)
 
 ### Deploy behavior (canonical)
 `er1 deploy` (defined in `er1_profile.ps1`):
@@ -152,7 +152,7 @@ Mapping from repo → Pi:
 2. Syncs **er1/pi-runtime/** into `/home/rudyy/er1/`
    (scripts, systemd, docs, config template) using `rsync -avz --delete`
    when available, else `scp -r` fallback.
-3. Excludes `/home/rudyy/er1/logs/` and `config/local.env` so Pi-specific
+3. Excludes `/home/rudyy/er1/data/logs/` and `config/local.env` so Pi-specific
    state survives each deploy.
 4. Re-applies execute bits on the remote runtime tree.
 
@@ -355,7 +355,7 @@ Failures log a single line with one of: `no_offline`, `no_return`, `no_fw_change
 OTA_RESULT dev=<dev> room=<room> result=FAIL reason=<reason> old_fw=<old> last_fw=<last>
 ```
 
-Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and the systemd OTA verify service journal).
+Output is appended to `/home/rudyy/er1/data/logs/ota-verify.log` (and the systemd OTA verify service journal).
 
 ---
 
@@ -512,7 +512,7 @@ On boot:
 Log directory:
 
 ```
-/home/rudyy/er1/logs/
+/home/rudyy/er1/data/logs/
 ```
 
 Filename:

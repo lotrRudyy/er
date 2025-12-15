@@ -20,12 +20,22 @@ er1/firmware/.pio/
 er1/pi-runtime/logs/
 er1/pi-runtime/config/local.env
 
+# --- Local diagnostic / tooling projects (never commit) ---
+er1/tools/
+
 # Skeleton placeholders for future rooms
 # (ignore their runtime logs/config if created)
 er2/pi-runtime/logs/
 er2/pi-runtime/config/local.env
 er3/pi-runtime/logs/
 er3/pi-runtime/config/local.env
+
+# ---- Data runtime logs & temporary dumps ----
+er1/data/logs/**
+er1/data/*.log
+er1/data/*.log.*
+er1/data/**/*.log
+er1/data/**/*.log.*
 
 # ---- Local helper scripts not tracked in repo ----
 deploy.sh
