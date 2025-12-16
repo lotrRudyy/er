@@ -20,8 +20,12 @@ er1/firmware/.pio/
 er1/pi-runtime/logs/
 er1/pi-runtime/config/local.env
 
-# --- Local diagnostic / tooling projects (never commit) ---
-er1/tools/
+# --- Tools: commit code, ignore outputs ---
+er1/tools/out/
+er1/tools/**/*.csv
+er1/tools/**/*.png
+er1/tools/**/*.log
+
 
 # Skeleton placeholders for future rooms
 # (ignore their runtime logs/config if created)
