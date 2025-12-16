@@ -4,7 +4,7 @@
 - Final per-key/map summary JSON files (`map_*` and `cal_*`) that capture the compact output of a completed calibration run.
 
 ## What stays out
-- Runtime logs, streaming dumps, and raw key/state traces belong under `data/logs/` and are ignored by git.
+- Runtime logs, streaming dumps, and raw key/state traces belong under `logs/` and are ignored by git.
 - Intermediate/raw calibration captures should be kept locally (or archived elsewhere) but not committed here.
 
 ## File naming

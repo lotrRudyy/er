@@ -11,7 +11,7 @@ import sys
 import uuid
 from pathlib import Path
 
-DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/firmware")
+DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/er1/node_firmware")
 
 DEPLOYMENTS: dict[str, dict[str, object]] = {
     "maglock": {
@@ -144,7 +144,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--file",
         dest="firmware_path",
-        help="Firmware file path on the Pi (defaults to /home/rudyy/firmware/<firmware_name>)",
+        help="Firmware file path on the Pi (defaults to /home/rudyy/er1/node_firmware/<firmware_name>)",
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
     parser.add_argument("--target", help="Expected target node id (defaults from deployment map or dev)")

@@ -6,7 +6,7 @@
 #include <ArduinoJson.h>
 #include <float.h>
 
-static const char* BUILD_TAG = "cal_v7_shift12_logspec_autoshift_taptrainer";
+static const char* BUILD_TAG = "cal_v7_shift12_logspec_autoshift";
 
 // =====================================================
 // CONFIG
@@ -71,7 +71,7 @@ static const char* KEY_LABELS[NUM_KEYS] = {
 struct CalRowBin {
   uint32_t t_ms;
   uint8_t  key_idx;
-  uint8_t  cap_phase;     // 0..6 (we also use 9 for tap trainer)
+  uint8_t  cap_phase;     // 0..6
   uint16_t reserved;
 
   float rms_ac;
@@ -80,7 +80,7 @@ struct CalRowBin {
   float vmin;
   float vmax;
 
-  float spec_total;       // log10(power/N + 1)
+  float spec_total;
   float centroid_hz;
   float bandwidth_hz;
   float rolloff85_hz;
@@ -282,7 +282,7 @@ static float hz_for_bin(int k) {
 static void top_k_peaks(float fmin, float fmax, float* out_hz, float* out_mag) {
   for (int i = 0; i < K_PEAKS; i++) { out_hz[i] = 0.0f; out_mag[i] = 0.0f; }
 
-  // Ignore sub-120Hz rumble for peak picking only (does NOT change band energies etc.)
+  // Ignore sub-80Hz rumble for peak picking only (does NOT change band energies etc.)
   const float PEAK_FLOOR_HZ = 120.0f;
   float fmin_pk = (fmin < PEAK_FLOOR_HZ) ? PEAK_FLOOR_HZ : fmin;
 
@@ -380,6 +380,7 @@ static void compute_features(const int16_t* x, CalRowBin &row) {
     sum_m  += m;
   }
   // Prevent CSV/model overflow: store log10(power_norm + 1)
+  // power_norm keeps scale stable across N_FFT changes.
   double power_norm = spec_total / (double)N_FFT;
   double spec_log = log10(power_norm + 1.0);
   if (!isfinite(spec_log) || spec_log < 0.0) spec_log = 0.0;
@@ -458,7 +459,6 @@ static void print_help() {
   Serial.println("  redo prev          redo key before last recorded");
   Serial.println("  noise              record 10s silence -> /noise.json");
   Serial.println("  noise show         show if /noise.json exists");
-  Serial.println("  tap [n]            one-go tap trainer A0..A7, volume-based progress (default n=5)");
   Serial.println("  help               show this help");
 }
 
@@ -510,13 +510,13 @@ static void dump_row_csv(const CalRowBin &r) {
   Serial.println();
 }
 
-static void dump_capture_csv(const String& filename, bool include_header) {
+static void dump_capture_csv(const String& filename) {
   File f = SPIFFS.open(filename, "r");
   if (!f) {
     Serial.println("ERR: cannot open capture file for dump");
     return;
   }
-  if (include_header) dump_header_csv();
+  dump_header_csv();
   CalRowBin r;
   while (f.read((uint8_t*)&r, sizeof(CalRowBin)) == sizeof(CalRowBin)) {
     dump_row_csv(r);
@@ -527,20 +527,15 @@ static void dump_capture_csv(const String& filename, bool include_header) {
 // =====================================================
 // SPIFFS capture file
 // =====================================================
-static void begin_capture_file_path(const char* path) {
-  curFilename = String(path);
+static void begin_capture_file(int key_idx) {
+  (void)key_idx;
+  curFilename = "/cal_last.bin";
   if (SPIFFS.exists(curFilename)) SPIFFS.remove(curFilename);
   curFile = SPIFFS.open(curFilename, "w");
   if (!curFile) Serial.println("ERR: SPIFFS open failed");
 }
 
-static void begin_capture_file(int key_idx) {
-  (void)key_idx;
-  begin_capture_file_path("/cal_last.bin");
-}
-
 static void end_capture_file() { if (curFile) curFile.close(); }
-
 static void write_row_bin(const CalRowBin& r) {
   if (!curFile) return;
   curFile.write((const uint8_t*)&r, sizeof(CalRowBin));
@@ -578,6 +573,7 @@ static bool save_models_doc(DynamicJsonDocument &doc) {
 }
 
 static void write_model_for_key(int key_idx, uint32_t windows) {
+  // capacity: tune if you add more fields
   DynamicJsonDocument doc(160 * 1024);
 
   if (!load_models_doc(doc)) {
@@ -600,6 +596,7 @@ static void write_model_for_key(int key_idx, uint32_t windows) {
   m["windows"] = windows;
   m["resp_ms_est"] = resp_ms_est;
 
+  // Per-phase summary (0..6)
   JsonArray phases = m["phase_stats"].to<JsonArray>();
   for (int ph = 0; ph < 7; ph++) {
     JsonObject p = phases.add<JsonObject>();
@@ -622,6 +619,7 @@ static void write_model_for_key(int key_idx, uint32_t windows) {
     }
   }
 
+  // Press-phase peak averages (phases 1/3/5)
   JsonArray press_peaks = m["press_peaks_mean"].to<JsonArray>();
   for (int i = 0; i < K_PEAKS; i++) {
     JsonObject pk = press_peaks.add<JsonObject>();
@@ -636,10 +634,9 @@ static void write_model_for_key(int key_idx, uint32_t windows) {
 }
 
 // =====================================================
-// /noise.json helpers
+// /noise.json helpers (Option B)
 // =====================================================
-static bool save_noise_json(const Acc &rms, const Acc &flat, const Acc &cent, const Acc &roll,
-                            const Acc band[B_BANDS], uint32_t windows) {
+static bool save_noise_json(const Acc &rms, const Acc &flat, const Acc &cent, const Acc &roll, const Acc band[B_BANDS], uint32_t windows) {
   DynamicJsonDocument doc(24 * 1024);
   JsonObject o = doc.to<JsonObject>();
   o["type"] = "silence_profile";
@@ -679,14 +676,15 @@ static void run_noise_capture_10s() {
   coach_line("  - Do NOT touch the piano.");
   coach_line("");
 
+  // local accumulators (single “silence phase”)
   Acc nrms, nflat, ncent, nroll;
   Acc nband[B_BANDS];
   for (int b = 0; b < B_BANDS; b++) nband[b] = Acc{};
 
+  // Prime ring buffer
   g_shift_right = 12;
   g_clip_samples = 0;
   g_total_samples = 0;
-
   ring_fill = 0;
   while (ring_fill < N_FFT) {
     int need = min(HOP, N_FFT - ring_fill);
@@ -731,172 +729,6 @@ static void run_noise_capture_10s() {
   Serial.print(",\"path\":\"");
   Serial.print(NOISE_PATH);
   Serial.println("\"}");
-}
-
-// =====================================================
-// Tap Trainer (one-go): each key tapped N times, progress by volume only.
-// Writes to /tap_last.bin and dumps CSV at end. Does NOT write models.json.
-// =====================================================
-static void run_tap_trainer(int reps_per_key) {
-  if (reps_per_key < 1) reps_per_key = 1;
-  if (reps_per_key > 20) reps_per_key = 20;
-
-  g_shift_right = 12;
-  g_clip_samples = 0;
-  g_total_samples = 0;
-
-  // Capture file (separate from /cal_last.bin)
-  begin_capture_file_path("/tap_last.bin");
-  if (!curFile) return;
-
-  Serial.print("TAP_BEGIN {\"type\":\"TAP_BEGIN\",\"reps\":");
-  Serial.print(reps_per_key);
-  Serial.println("}");
-
-  // Prime ring buffer
-  ring_fill = 0;
-  while (ring_fill < N_FFT) {
-    int need = min(HOP, N_FFT - ring_fill);
-    if (!read_audio_samples(&ring[ring_fill], need)) {
-      Serial.println("ERR: audio read failed during TAP prime");
-      end_capture_file();
-      return;
-    }
-    ring_fill += need;
-    yield();
-  }
-
-  // Baseline (1s)
-  baseline_reset();
-  const uint32_t BASELINE_MS = 1000;
-  uint32_t start_ms = millis();
-  uint32_t t0 = millis();
-  uint32_t rows = 0;
-
-  while ((millis() - t0) < BASELINE_MS) {
-    memmove(ring, ring + HOP, (N_FFT - HOP) * sizeof(int16_t));
-    if (!read_audio_samples(ring + (N_FFT - HOP), HOP)) {
-      Serial.println("ERR: audio read failed during TAP baseline");
-      end_capture_file();
-      return;
-    }
-
-    CalRowBin r = {};
-    r.t_ms = millis() - start_ms;
-    r.key_idx = 0;
-    r.cap_phase = 9; // tap mode
-    compute_features(ring, r);
-    write_row_bin(r);
-    rows++;
-
-    baseline_push(r.rms_ac);
-    yield();
-  }
-
-  float b_mean = (float)baseline_mean;
-  float b_std  = baseline_std();
-
-  // Hysteresis thresholds (volume-only detection)
-  float thr_on  = b_mean + max(6.0f * b_std, 25.0f);
-  float thr_off = b_mean + max(3.0f * b_std, 15.0f);
-
-  Serial.print("TAP_BASE {\"type\":\"TAP_BASE\",\"mean\":");
-  Serial.print(b_mean, 3);
-  Serial.print(",\"std\":");
-  Serial.print(b_std, 3);
-  Serial.print(",\"thr_on\":");
-  Serial.print(thr_on, 3);
-  Serial.print(",\"thr_off\":");
-  Serial.print(thr_off, 3);
-  Serial.println("}");
-
-  int key_idx = 0;
-  int left = reps_per_key;
-
-  bool in_press = false;
-  uint8_t on_hits = 0;
-  uint8_t off_hits = 0;
-
-  const uint8_t ON_CONFIRM  = 3; // ~16ms
-  const uint8_t OFF_CONFIRM = 6; // ~32ms
-
-  Serial.print("PLAY "); Serial.print(KEY_LABELS[key_idx]);
-  Serial.print(" — "); Serial.print(left); Serial.println(" taps left");
-
-  while (key_idx < NUM_KEYS) {
-    memmove(ring, ring + HOP, (N_FFT - HOP) * sizeof(int16_t));
-    if (!read_audio_samples(ring + (N_FFT - HOP), HOP)) {
-      Serial.println("ERR: audio read failed during TAP loop");
-      break;
-    }
-
-    CalRowBin r = {};
-    r.t_ms = millis() - start_ms;
-    r.key_idx = (uint8_t)key_idx;  // label rows with expected key
-    r.cap_phase = 9;               // tap mode
-    compute_features(ring, r);
-    write_row_bin(r);
-    rows++;
-
-    float x = r.rms_ac;
-
-    if (!in_press) {
-      if (x >= thr_on) {
-        if (++on_hits >= ON_CONFIRM) {
-          in_press = true;
-          on_hits = 0;
-          off_hits = 0;
-        }
-      } else {
-        on_hits = 0;
-      }
-    } else {
-      if (x <= thr_off) {
-        if (++off_hits >= OFF_CONFIRM) {
-          // tap completed (press -> release)
-          in_press = false;
-          off_hits = 0;
-          on_hits = 0;
-
-          left--;
-          if (left > 0) {
-            Serial.print("OK "); Serial.print(KEY_LABELS[key_idx]);
-            Serial.print(" — "); Serial.print(left); Serial.println(" taps left");
-          } else {
-            key_idx++;
-            if (key_idx >= NUM_KEYS) break;
-            left = reps_per_key;
-            Serial.print("NEXT "); Serial.print(KEY_LABELS[key_idx]);
-            Serial.print(" — "); Serial.print(left); Serial.println(" taps left");
-          }
-        }
-      } else {
-        off_hits = 0;
-      }
-    }
-
-    yield();
-  }
-
-  end_capture_file();
-
-  Serial.println("CSV_BEGIN");
-  dump_capture_csv(curFilename, true); // include header
-  Serial.println("CSV_END");
-
-  Serial.print("TAP_END {\"type\":\"TAP_END\",\"rows\":");
-  Serial.print((uint32_t)rows);
-  Serial.print(",\"shift_right_final\":");
-  Serial.print(g_shift_right);
-  Serial.print(",\"clip_pct\":");
-  float clip_pct = (g_total_samples ? (100.0f * (float)g_clip_samples / (float)g_total_samples) : 0.0f);
-  Serial.print(clip_pct, 3);
-  Serial.println("}");
-
-  // Keep SPIFFS clean like normal capture
-  SPIFFS.remove(curFilename);
-
-  Serial.println("DONE.");
 }
 
 // =====================================================
@@ -948,7 +780,7 @@ static void run_one_key_capture(int key_idx) {
   coach_line("INSTRUCTIONS:");
   coach_line("  - Keep room silent for 1s.");
   coach_line("  - Then PRESS+HOLD when told (3 times), with releases in between.");
-  coach_line("  - After final press, tail is recorded (no prompt).");
+  coach_line("  - After final press, let it ring (tail).");
   coach_line("  - Do NOT touch other keys.");
   coach_line("");
 
@@ -995,7 +827,7 @@ static void run_one_key_capture(int key_idx) {
       coach_line("PRESS + HOLD (2s)...");
       prompt_done[5] = true;
     }
-    // user-request: remove ONLY tail prompt line => no print here
+    // user-request: remove ONLY this line, so no tail prompt
 
     memmove(ring, ring + HOP, (N_FFT - HOP) * sizeof(int16_t));
     if (!read_audio_samples(ring + (N_FFT - HOP), HOP)) break;
@@ -1009,8 +841,10 @@ static void run_one_key_capture(int key_idx) {
     write_row_bin(r);
     rows++;
 
+    // baseline (phase 0)
     if (r.cap_phase == 0) baseline_push(r.rms_ac);
 
+    // accumulators for model json
     int ph = r.cap_phase;
     acc_rms[ph].push(r.rms_ac);
     acc_flat[ph].push(r.flatness);
@@ -1025,6 +859,7 @@ static void run_one_key_capture(int key_idx) {
       }
     }
 
+    // onset detection
     if (baseline_n > 20) {
       float thr = (float)baseline_mean + ONSET_K_STD * baseline_std();
       for (int i = 0; i < 3; i++) {
@@ -1044,6 +879,7 @@ static void run_one_key_capture(int key_idx) {
 
   end_capture_file();
 
+  // median resp estimate
   uint32_t resp_list[3];
   int nresp = 0;
   for (int i = 0; i < 3; i++) {
@@ -1058,8 +894,10 @@ static void run_one_key_capture(int key_idx) {
     resp_ms_est = resp_list[nresp/2];
   }
 
+
+  // Dump CSV
   Serial.println("CSV_BEGIN");
-  dump_capture_csv(curFilename, true);
+  dump_capture_csv(curFilename);
   Serial.println("CSV_END");
 
   Serial.print("CAP_END {\"type\":\"CAP_END\",\"key_idx\":");
@@ -1081,8 +919,10 @@ static void run_one_key_capture(int key_idx) {
   Serial.print(clip_pct, 3);
   Serial.println("}");
 
+  // Save model (overwrite this key)
   write_model_for_key(key_idx, rows);
 
+  // delete temporary capture
   SPIFFS.remove(curFilename);
 
   Serial.println("DONE.");
@@ -1128,26 +968,6 @@ static void handle_command_line(const String& line) {
       Serial.print("NOISE: exists at "); Serial.print(NOISE_PATH);
       Serial.print(" size="); Serial.println((uint32_t)sz);
     }
-    return;
-  }
-
-  if (s.equalsIgnoreCase("tap") || s.startsWith("tap ")) {
-    int reps = 5;
-    if (s.startsWith("tap ")) {
-      String arg = s.substring(4);
-      arg.trim();
-      bool is_num = arg.length() > 0;
-      for (int i = 0; i < (int)arg.length(); i++) {
-        char c = arg[i];
-        if (!(c >= '0' && c <= '9')) { is_num = false; break; }
-      }
-      if (!is_num) {
-        Serial.println("ERR: tap expects a number (e.g. tap 5)");
-        return;
-      }
-      reps = arg.toInt();
-    }
-    run_tap_trainer(reps);
     return;
   }
 

@@ -131,19 +131,21 @@ ER1 Pi runtime root:
 /home/rudyy/er1
   scripts/
   systemd/
+  node_firmware/
   logs/
   config/
     local.env
   docs/
 ```
 
-Mapping from repo → Pi:
+Mapping from repo -> Pi:
 
-- `er1/pi-runtime/scripts/  → /home/rudyy/er1/scripts/`
-- `er1/pi-runtime/systemd/  → /home/rudyy/er1/systemd/`
-- `er1/pi-runtime/docs/     → /home/rudyy/er1/docs/`
-- `er1/pi-runtime/config/local.env.example → /home/rudyy/er1/config/local.env` (manual edit)
-- `/home/rudyy/er1/data/logs/` exists only on Pi (runtime logs are ignored in the repo)
+- `er1/pi-runtime/scripts/  -> /home/rudyy/er1/scripts/`
+- `er1/pi-runtime/systemd/  -> /home/rudyy/er1/systemd/`
+- `er1/pi-runtime/docs/     -> /home/rudyy/er1/docs/`
+- `er1/pi-runtime/config/local.env.example -> /home/rudyy/er1/config/local.env` (manual edit)
+- `/home/rudyy/er1/logs/` exists only on Pi (runtime logs are ignored in the repo)
+- `/home/rudyy/er1/node_firmware/` holds OTA payloads + ota_http/ota_verify entrypoints; created/maintained on the Pi (not synced from the repo)
 
 ### Deploy behavior (canonical)
 `er1 deploy` (defined in `er1_profile.ps1`):
@@ -152,7 +154,7 @@ Mapping from repo → Pi:
 2. Syncs **er1/pi-runtime/** into `/home/rudyy/er1/`
    (scripts, systemd, docs, config template) using `rsync -avz --delete`
    when available, else `scp -r` fallback.
-3. Excludes `/home/rudyy/er1/data/logs/` and `config/local.env` so Pi-specific
+3. Excludes `/home/rudyy/er1/logs/` and `config/local.env` so Pi-specific
    state survives each deploy.
 4. Re-applies execute bits on the remote runtime tree.
 
@@ -304,7 +306,7 @@ Validation (fails closed):
 
 Build + tooling requirements:
 
-- `ota.ps1` uploads the binary, ensures legacy names (e.g., `maglock_ctrl.bin`), and SSHes into `~/er1/scripts/ota_publish.py`, which computes sha256 + size on the Pi and publishes `UPDATE <json>` to `<CmdNode>/cmd` (no secrets on the PC side).
+- `ota.ps1` uploads the binary, ensures legacy names (e.g., `maglock_ctrl.bin`), and SSHes into `~/er1/node_firmware/ota_publish.py`, which computes sha256 + size on the Pi and publishes `UPDATE <json>` to `<CmdNode>/cmd` (no secrets on the PC side).
 
 ### OTA status topic (per node)
 
@@ -337,7 +339,7 @@ New failure reasons are reported via `msg` + extra fields in `d`:
 
 ### Pi OTA verification
 
-`pi-runtime/scripts/ota_verify.py` subscribes to `+/cmd` + `+/hb`. Cmd topics map back to deployments via the OTA map (e.g., images_piano listens on `images/cmd` but requires both `images` and `piano`). When an `UPDATE` command is seen it opens a 90s window and waits for:
+`~/er1/node_firmware/ota_verify.py` subscribes to `+/cmd` + `+/hb`. Cmd topics map back to deployments via the OTA map (e.g., images_piano listens on `images/cmd` but requires both `images` and `piano`). When an `UPDATE` command is seen it opens a 90s window and waits for:
 
 1. Device to go offline at least once (LWT `offline`) **or** its heartbeat uptime to reset.
 2. Device to publish a new heartbeat after reconnecting.
@@ -355,7 +357,7 @@ Failures log a single line with one of: `no_offline`, `no_return`, `no_fw_change
 OTA_RESULT dev=<dev> room=<room> result=FAIL reason=<reason> old_fw=<old> last_fw=<last>
 ```
 
-Output is appended to `/home/rudyy/er1/data/logs/ota-verify.log` (and the systemd OTA verify service journal).
+Output is appended to `/home/rudyy/er1/logs/ota-verify.log` (and the systemd OTA verify service journal).
 
 ---
 
@@ -512,7 +514,7 @@ On boot:
 Log directory:
 
 ```
-/home/rudyy/er1/data/logs/
+/home/rudyy/er1/logs/
 ```
 
 Filename:

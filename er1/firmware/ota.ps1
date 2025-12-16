@@ -221,7 +221,7 @@ if (-not (Test-Path $firmwarePath)) {
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
 $piHost        = "100.108.1.80"    # Tailscale IP of Pi
-$piFirmwareDir = "/home/rudyy/firmware"
+$piFirmwareDir = "/home/rudyy/er1/node_firmware"
 
 # Topic form: <CmdNode>/cmd
 $topicUpdate = "$cmdNode/cmd"

@@ -2,7 +2,7 @@
 """
 Minimal HTTP server for OTA firmware artifacts.
 
-Serves /firmware/<name>.bin from /home/rudyy/firmware.
+Serves /firmware/<name>.bin from /home/rudyy/er1/node_firmware.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import functools
 import http.server
 from pathlib import Path
 
-DOC_ROOT = Path("/home/rudyy/firmware")
+DOC_ROOT = Path("/home/rudyy/er1/node_firmware")
 URL_PREFIX = "/firmware"
 
 

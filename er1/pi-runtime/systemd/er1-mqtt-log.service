@@ -1,5 +1,5 @@
 [Unit]
-Description=ER1 MQTT logger (+/log|hb|evt|state -> /home/rudyy/er1/data/logs/er1-DD.MM.YYYY.log)
+Description=ER1 MQTT logger (+/log|hb|evt|state -> /home/rudyy/er1/logs/er1-DD.MM.YYYY.log)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,8 +9,8 @@ User=rudyy
 Group=rudyy
 WorkingDirectory=/home/rudyy/er1
 Environment=LOCAL_BROKER=127.0.0.1
-Environment=ER1_DATA_DIR=/home/rudyy/er1/data
-ExecStartPre=/bin/mkdir -p /home/rudyy/er1/data/logs
+Environment=ER1_DATA_DIR=/home/rudyy/er1
+ExecStartPre=/bin/mkdir -p /home/rudyy/er1/logs
 ExecStart=/home/rudyy/er1/scripts/mqtt_logs.sh daemon
 Restart=always
 RestartSec=3

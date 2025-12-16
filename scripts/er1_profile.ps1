@@ -4,9 +4,8 @@ Set-StrictMode -Version Latest
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
 $er1Cmd = "/home/rudyy/er1/er1"
-$er1DataDir = "~/er1/data"
-$er1RemoteLogDir = "$er1DataDir/logs"
-$er1TodayLog = "$er1RemoteLogDir/er1-" + '$(date +%d.%m.%Y).log'
+$er1RemoteLogDir = "/home/rudyy/er1/logs"
+$er1TodayLog = "$er1RemoteLogDir/er1-" + (Get-Date -Format "dd.MM.yyyy") + ".log"
 
 # ---- Repo root detection (PC + Laptop) ----
 $pcPath     = "$HOME\Documents\Escape Room\er"
@@ -176,7 +175,8 @@ function Invoke-Er1Status {
 
     Write-Host "`n=== SERVICES ===" -ForegroundColor Cyan
     ssh $er1Pi "systemctl is-active er1-mqtt-log.service"
-    ssh $er1Pi "systemctl is-active er1-ota-verify.service"
+    ssh $er1Pi "systemctl is-active ota-http.service"
+    ssh $er1Pi "systemctl is-active ota-verify.service"
 
     Write-Host "`n=== MQTT ===" -ForegroundColor Cyan
     ssh $er1Pi "$er1Cmd status_mqtt"
@@ -211,9 +211,11 @@ function Invoke-Er1Doctor {
         "echo '--- ip ---'; hostname -I || true",
         "echo '--- df ---'; df -h",
         "echo '--- svc er1-mqtt-log ---'; systemctl --no-pager --full status er1-mqtt-log.service || true",
-        "echo '--- svc er1-ota-verify ---'; systemctl --no-pager --full status er1-ota-verify.service || true",
+        "echo '--- svc ota-http ---'; systemctl --no-pager --full status ota-http.service || true",
+        "echo '--- svc ota-verify ---'; systemctl --no-pager --full status ota-verify.service || true",
         "echo '--- journal mqtt-log (200) ---'; journalctl -u er1-mqtt-log.service -n 200 --no-pager || true",
-        "echo '--- journal ota-verify (200) ---'; journalctl -u er1-ota-verify.service -n 200 --no-pager || true",
+        "echo '--- journal ota-http (200) ---'; journalctl -u ota-http.service -n 200 --no-pager || true",
+        "echo '--- journal ota-verify (200) ---'; journalctl -u ota-verify.service -n 200 --no-pager || true",
         "echo '--- status_mqtt ---'; $er1Cmd status_mqtt || true",
         "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
         "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"

@@ -35,7 +35,7 @@ er3/pi-runtime/logs/
 er3/pi-runtime/config/local.env
 
 # ---- Data runtime logs & temporary dumps ----
-er1/data/logs/**
+er1/logs/**
 er1/data/*.log
 er1/data/*.log.*
 er1/data/**/*.log
@@ -55,3 +55,4 @@ out/
 *.log
 er1/firmware/.vscode/c_cpp_properties.json
 er1/firmware/.vscode/launch.json
+er1/tools/compile_commands.json

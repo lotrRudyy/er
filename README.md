@@ -121,7 +121,7 @@ er1 log star_sky --save
 er1 log -live --save
 ```
 
-`--save` writes the live stream (with timestamps) under `<repo>\logs\yyyy-MM-dd_HH-mm-ss__pi_*.log` while still echoing to the console. Pi logfile source remains `/home/rudyy/er1/data/logs/er1-DD.MM.YYYY.log`.
+`--save` writes the live stream (with timestamps) under `<repo>\logs\yyyy-MM-dd_HH-mm-ss__pi_*.log` while still echoing to the console. Pi logfile source remains `/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`.
 
 ---
 

@@ -87,7 +87,7 @@ er1 deploy full      # mirror the whole pi-runtime tree
 
 - Uses `rsync -avz --delete` if available, `scp -r` fallback otherwise.
 - Syncs scripts/, systemd/, docs/, and config/ (skipping `config/local.env`).
-- Leaves `/home/rudyy/er1/data/logs/` untouched.
+- Leaves `/home/rudyy/er1/logs/` untouched.
 - Re-applies execute bits on the remote runtime tree.
 - Prints each rsync/scp command before running it so you know what will happen.
 - Follow deployment with `er1 push "<msg>"` so Pi + Git stay aligned.
@@ -106,7 +106,7 @@ Examples:
 - `er1 ota images_piano` (publishes UPDATE to `images/cmd`, verifies `images` + `piano`)
 - `er1 ota maglock` (canonical file `/firmware/maglock.bin`, also copies `maglock_ctrl.bin` on the Pi for migrations)
 
-The map aligns PlatformIO env, firmware filename, MQTT command topic, and verifier nodes. OTA artifact lives on the Pi at `/home/rudyy/firmware/<FirmwareName>`.
+The map aligns PlatformIO env, firmware filename, MQTT command topic, and verifier nodes. OTA artifact lives on the Pi at `/home/rudyy/er1/node_firmware/<FirmwareName>`.
 
 ---
 
@@ -166,6 +166,7 @@ Pi runtime directory after deploy:
 /home/rudyy/er1/
   scripts/
   systemd/
+  node_firmware/
   docs/
   config/local.env      # preserved
   logs/                 # preserved
@@ -227,10 +228,10 @@ pwsh ota.ps1 -Target images_piano
 OTA steps:
 
 1. Resolve target via the canonical map (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames, VerifyNodes). Build the PlatformIO env unless `-NoBuild` is set.
-2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
+2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/er1/node_firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
 3. From the Pi, verify `http://192.168.0.10/firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
-4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/firmware/<FirmwareName> --file /home/rudyy/firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
-5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_verify.py` watches `VerifyNodes` (images_piano verifies both `images` and `piano` even though `CmdNode=images`).
+4. Run `~/er1/node_firmware/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/firmware/<FirmwareName> --file /home/rudyy/er1/node_firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
+5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_verify.py` (running from `~/er1/node_firmware/`) watches `VerifyNodes` (images_piano verifies both `images` and `piano` even though `CmdNode=images`).
 
 ---
 
@@ -241,7 +242,7 @@ Logging is centralized on ER1 Pi.
 Logs stored at:
 
 ```
-/home/rudyy/er1/data/logs/er1-DD.MM.YYYY.log
+/home/rudyy/er1/logs/er1-DD.MM.YYYY.log
 ```
 
 Format:
@@ -326,7 +327,7 @@ er1 ota <Dev>
 
 ### OTA fails
 - Wrong target name (must match OTA map keys)
-- Missing `/home/rudyy/firmware/<FirmwareName>` on the Pi
+- Missing `/home/rudyy/er1/node_firmware/<FirmwareName>` on the Pi
 - Firmware path not copied or legacy alias missing
 - ESP offline
 
@@ -339,7 +340,7 @@ er1 ota <Dev>
 
 ## Manual update on Pi: MQTT logging runtime files
 
-Use these steps after the log path move to `/home/rudyy/er1/data/logs/` when you need to refresh only the logging runtime files (no deploy helpers used).
+Use these steps after the log path move to `/home/rudyy/er1/logs/` when you need to refresh only the logging runtime files (no deploy helpers used).
 
 1) Copy updated files from this repo to the Pi (from Windows/dev box, repo root):
 
@@ -373,13 +374,13 @@ sudo systemctl status er1-mqtt-log.service --no-pager
 3) Validate log directory and output:
 
 ```bash
-ls -lah /home/rudyy/er1/data/logs
+ls -lah /home/rudyy/er1/logs
 journalctl -u er1-mqtt-log.service -n 200 --no-pager
 ```
 
 Expected:
 - service is active/running
-- /home/rudyy/er1/data/logs exists
+- /home/rudyy/er1/logs exists
 - log files appear/rotate
 
 If broken:
