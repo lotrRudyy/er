@@ -1,9 +1,3 @@
-# Generated artifacts
-out/
-*.csv
-*.png
-*.log
-
 # Python junk
 __pycache__/
 *.pyc

@@ -11,7 +11,6 @@ Push-Location $scriptDir
 try {
 
 # ============ DEPLOYMENT MAP ============
-# Canonical OTA map (Env/Dev/CmdNode/FirmwareName/LegacyFirmwareNames/VerifyNodes)
 $deployments = @{
     "maglock" = @{
         Env                 = "maglock"
@@ -133,12 +132,17 @@ function Test-RemoteFirmwareAvailability([string]$url, [string]$sshTarget) {
     return $true
 }
 
-function Get-FirmwareVersion([string]$dev) {
+function Get-FirmwareMainPath([string]$dev) {
     $mainPath = Join-Path $scriptDir "src/${dev}_main.cpp"
     if (-not (Test-Path $mainPath)) {
         Write-Error "Firmware source not found for $dev at $mainPath"
         exit 1
     }
+    return $mainPath
+}
+
+function Get-FirmwareVersion([string]$dev) {
+    $mainPath = Get-FirmwareMainPath $dev
     $content = Get-Content -Path $mainPath -Raw
     $match = [regex]::Match($content, 'FW_VERSION\s*=\s*"([^"]+)"')
     if (-not $match.Success) {
@@ -146,6 +150,26 @@ function Get-FirmwareVersion([string]$dev) {
         exit 1
     }
     return $match.Groups[1].Value
+}
+
+function Get-FirmwareBuild {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Dev
+    )
+
+    # We no longer parse FW_BUILD from *_main.cpp.
+    # Use a deterministic build id that the firmware can also expose (we use compile timestamp),
+    # but on PC tooling we can just use git commit count (deterministic) or timestamp fallback.
+
+    try {
+        $gitCount = & git rev-list --count HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $gitCount) {
+            return [string]$gitCount
+        }
+    } catch {}
+
+    return (Get-Date -Format "yyyy.MM.dd-HH.mm.ss")
 }
 
 # ============ Resolve Env/Dev ============
@@ -172,11 +196,16 @@ $legacyNames = $cfg.LegacyFirmwareNames
 $verifyNodes = $cfg.VerifyNodes
 
 Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev  CmdNode=$cmdNode  Firmware=$firmwareName  VerifyNodes=$($verifyNodes -join ',') =="
+
 $otaVersion = Get-FirmwareVersion $Dev
+$otaBuild   = Get-FirmwareBuild $Dev
+Write-Host "== Build = $otaBuild =="
+
 if (-not $otaVersion) {
     Write-Error "Failed to determine firmware version for $Dev"
     exit 1
 }
+
 $otaId = [guid]::NewGuid().ToString()
 Write-Host "== Version = $otaVersion  UpdateId=$otaId =="
 
@@ -220,17 +249,14 @@ if (-not (Test-Path $firmwarePath)) {
 
 # ============ PI / MQTT CONFIG ============
 $piUser        = "rudyy"
-$piHost        = "100.108.1.80"    # Tailscale IP of Pi
+$piHost        = "100.108.1.80"
 $piFirmwareDir = "/home/rudyy/er1/node_firmware"
-
-# Topic form: <CmdNode>/cmd
-$topicUpdate = "$cmdNode/cmd"
+$topicUpdate   = "$cmdNode/cmd"
 
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $firmwareName =="
 
-$ensureDirCmd = "mkdir -p $piFirmwareDir"
-ssh "$piUser@$piHost" $ensureDirCmd
+ssh "$piUser@$piHost" "mkdir -p $piFirmwareDir"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to create firmware directory on Pi at $piFirmwareDir"
     exit 1
@@ -244,11 +270,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ============ LEGACY FILENAME COPIES ============
-# Keep legacy filenames available on the Pi during rolling migrations.
 foreach ($legacyName in $legacyNames) {
-    $copyCmd = "cp $piFirmwareDir/$firmwareName $piFirmwareDir/$legacyName"
     Write-Host "== Creating legacy copy on Pi: $legacyName =="
-    ssh "$piUser@$piHost" $copyCmd
+    ssh "$piUser@$piHost" "cp $piFirmwareDir/$firmwareName $piFirmwareDir/$legacyName"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to create legacy firmware copy $legacyName on Pi"
         exit 1
@@ -257,7 +281,7 @@ foreach ($legacyName in $legacyNames) {
 }
 
 # ============ POSTFLIGHT CHECK ============
-$postflightUrl = "http://192.168.0.10/firmware/$firmwareName"
+$postflightUrl = "http://192.168.0.10/node_firmware/$firmwareName"
 Write-Host "== Verifying OTA URL from Pi: $postflightUrl =="
 if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
     exit 1
@@ -266,17 +290,19 @@ if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
 # ============ TRIGGER OTA ============
 Write-Host "== Triggering OTA on $topicUpdate =="
 
+# IMPORTANT: quote build/version on the remote shell in case they contain spaces
 $otaPublishCmd = @(
-    "python3"
-    "/home/rudyy/er1/scripts/ota_publish.py"
-    "--dev", "$Dev"
-    "--cmd-node", "$cmdNode"
-    "--broker", "192.168.0.10"
-    "--version", "$otaVersion"
-    "--target", "$Dev"
-    "--id", "$otaId"
-    "--url", "http://192.168.0.10/firmware/$firmwareName"
-    "--file", "$piFirmwareDir/$firmwareName"
+    "python3",
+    "/home/rudyy/er1/scripts/ota_publish.py",
+    "--dev", $Dev,
+    "--cmd-node", $cmdNode,
+    "--broker", "192.168.0.10",
+    "--version", "`"$otaVersion`"",
+    "--build",   "`"$otaBuild`"",
+    "--target",  $Dev,
+    "--id",      $otaId,
+    "--url",     "http://192.168.0.10/node_firmware/$firmwareName",
+    "--file",    "$piFirmwareDir/$firmwareName"
 ) -join " "
 
 ssh "$piUser@$piHost" $otaPublishCmd
