@@ -1,0 +1,17 @@
+{
+  "proto_ver": 1,
+  "label": "talkkey_b1",
+  "fw_rep": 3,
+  "fw_reps_per_label": 10,
+  "fs": 48000,
+  "format": "int16",
+  "channels": 1,
+  "pre_ms": 300,
+  "lead_ms": 0,
+  "post_ms": 400,
+  "total_samples": 33600,
+  "clip_count": 0,
+  "max_abs": 3320,
+  "saved_rep_index": 3,
+  "saved_timestamp": "20251218-234249"
+}

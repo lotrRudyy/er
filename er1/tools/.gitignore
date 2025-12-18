@@ -1,6 +1,6 @@
 # Python junk
 __pycache__/
-*.pyc
+#*.pyc
 .venv/
 
 # Editor

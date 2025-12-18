@@ -22,9 +22,9 @@ er1/pi-runtime/config/local.env
 
 # --- Tools: commit code, ignore outputs ---
 er1/tools/out/
-er1/tools/**/*.csv
-er1/tools/**/*.png
-er1/tools/**/*.log
+#er1/tools/**/*.csv
+#er1/tools/**/*.png
+#er1/tools/**/*.log
 
 
 # Skeleton placeholders for future rooms
