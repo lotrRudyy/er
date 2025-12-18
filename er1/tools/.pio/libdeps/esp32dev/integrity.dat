@@ -1,2 +1,3 @@
 bblanchon/ArduinoJson@^7
 kosme/arduinoFFT@^2
+https://github.com/sheaivey/ESP32-AudioInI2S.git
