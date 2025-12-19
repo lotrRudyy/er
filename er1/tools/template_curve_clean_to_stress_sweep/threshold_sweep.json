@@ -1,9 +1,0 @@
-{
-  "1": {
-    "min_cov": 0.3,
-    "best_t_abs": 0.5,
-    "best_t_margin": 0.02,
-    "best_accepted_acc": 1.0,
-    "best_coverage": 0.9155
-  }
-}

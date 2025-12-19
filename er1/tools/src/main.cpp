@@ -7,12 +7,16 @@
 //   start <start_key> <end_key> <reps> [clean|stress]   (keys only; stops at end_key)
 //     - default mode: clean
 //     - if <label> parses as piano key (a0..a7 with optional #):
-//         chromatic auto-advance in THIS order:
+//         chromatic auto-advance in THIS order (A-based octaves):
 //         a0 a#0 b0 c1 c#1 d1 d#1 e1 f1 f#1 g1 g#1 a1 ... a7
 //     - else:
 //         fixed-label mode (repeat that label for <reps> then stop)
 //   stop
-//   <empty line>   (Enter trigger) => capture + stream if run_active and waiting for Enter
+//   <empty line>   (Enter trigger)
+//     - In stress mode: triggers capture when prompted.
+//     - In clean mode:
+//         * first Enter after start triggers the 2s baseline recording
+//         * later Enters trigger captures when prompted.
 //
 // Output: ALL framed (no raw Serial println):
 //   TXT: "TXT"+ver+len+msg+crc
@@ -24,7 +28,7 @@
 //   => full raw PCM before and after Enter trigger.
 //
 // Clean mode (optional):
-//   - At run start, capture 2 seconds of silence baseline (RMS)
+//   - After start, waits for Enter to record 2 seconds of silence baseline (RMS)
 //   - Before each rep prompt, wait until RMS is below an adaptive threshold
 //   - Helps reduce overlap/ringing contamination in template recordings.
 //
@@ -74,7 +78,16 @@ static volatile bool ring_freeze = false;
 
 // ------------------ Run mode + state ------------------
 enum RunMode : uint8_t { MODE_CLEAN = 0, MODE_STRESS = 1 };
-enum RunState : uint8_t { ST_IDLE = 0, ST_BASELINE = 1, ST_WAIT_QUIET = 2, ST_WAIT_ENTER = 3, ST_CAPTURING = 4 };
+
+// NEW: ST_WAIT_BASELINE_ENTER so clean mode baseline starts on Enter.
+enum RunState : uint8_t {
+  ST_IDLE = 0,
+  ST_WAIT_BASELINE_ENTER = 1,
+  ST_BASELINE = 2,
+  ST_WAIT_QUIET = 3,
+  ST_WAIT_ENTER = 4,
+  ST_CAPTURING = 5
+};
 
 static volatile RunMode  run_mode  = MODE_STRESS;
 static volatile RunState run_state = ST_IDLE;
@@ -91,7 +104,7 @@ static int rep_idx = 1;
 static const char* NOTE_SEQ[] = {"a","a#","b","c","c#","d","d#","e","f","f#","g","g#"};
 static constexpr int NOTE_COUNT = 12;
 static int note_i = 0;   // index in NOTE_SEQ
-static int octave = 0;   // piano-style octaves for your labels
+static int octave = 0;   // your label octave number (increments at C)
 
 // Optional chromatic end key limit (when using start <start_key> <end_key> <reps> [mode])
 static bool chromatic_has_end = false;
@@ -272,8 +285,11 @@ static bool parse_key_label(const char* lbl, int& out_note_i, int& out_octave) {
   return true;
 }
 
+// FIXED: absolute semitone index with A0=0, A#0=1, B0=2, C1=3, ...
+// In your labeling, octave increments at C, so C..G# belong to (octave-1) in A-based indexing.
 static inline int key_index(int ni, int oc) {
-  return oc * NOTE_COUNT + ni;
+  if (ni >= 3) return (oc - 1) * NOTE_COUNT + ni; // C..G#
+  return oc * NOTE_COUNT + ni;                     // A, A#, B
 }
 
 static inline bool chromatic_end_is_exact_current() {
@@ -282,30 +298,37 @@ static inline bool chromatic_end_is_exact_current() {
 }
 
 static void set_label_to_current_key() {
-  // builds label from note_i/octave in normalized format
   char tmp[24] = {0};
   snprintf(tmp, sizeof(tmp), "%s%d", NOTE_SEQ[note_i], octave);
   memset(label, 0, sizeof(label));
   strncpy(label, tmp, sizeof(label)-1);
 }
 
+// FIXED: octave increments at C (B->C), not at G#->A.
+// Also allow traversal through c7..g#7 -> a7; stop only after a7.
 static bool next_chromatic_key() {
-  // advance in NOTE_SEQ; octave increments when we roll over from g# to a
-  // End at a7 inclusive.
-  if (octave > 7) return false;
+  // If we're already at the final key (a7), we cannot advance.
+  if (octave == 7 && note_i == 0) return false;
 
   int ni = note_i + 1;
   int oc = octave;
-  if (ni >= NOTE_COUNT) { ni = 0; oc += 1; }
 
-  // Stop after a7 (note_i=0, octave=7). Next would be a#7, which we don't want.
+  if (ni >= NOTE_COUNT) {
+    // wrap g# -> a (same label octave in this scheme)
+    ni = 0;
+  }
+
+  // b -> c causes octave increment in your label convention
+  // (b is NOTE_SEQ index 2, c is index 3)
+  if (note_i == 2 && ni == 3) {
+    oc += 1;
+  }
+
+  // Prevent going past label octave 7 (would require c8 etc)
   if (oc > 7) return false;
 
   note_i = ni;
   octave = oc;
-
-  // If we've advanced beyond a7? (i.e. octave==7 and note_i>0) => done.
-  if (octave == 7 && note_i > 0) return false;
 
   set_label_to_current_key();
   return true;
@@ -396,8 +419,6 @@ static void serial_rx_task(void*) {
           cmdq_push("");
         } else {
           if (!cmdq_push(trimmed)) {
-            // Queue full: drop newest (but keep going)
-            // We avoid printing raw Serial here; framed TXT is ok.
             send_txt("warn cmdq full, dropped command");
           }
         }
@@ -417,20 +438,17 @@ static void serial_rx_task(void*) {
 
 // ------------------ Compute capture indices ------------------
 static inline uint32_t cap_start_from_w0(uint32_t w0) {
-  // start of capture = w0 - PRELEAD_SAMPLES (mod TOTAL)
   return (w0 + TOTAL_SAMPLES - PRELEAD_SAMPLES) % TOTAL_SAMPLES;
 }
 
 // ------------------ Wait for post samples then freeze ------------------
 static void wait_post_and_freeze(uint32_t w0) {
-  // Wait until POST samples have arrived after w0
   while (true) {
     uint32_t w = ring_write;
     uint32_t delta = (w + TOTAL_SAMPLES - w0) % TOTAL_SAMPLES;
     if (delta >= POST_SAMPLES) break;
     delay(1);
   }
-  // Freeze ring so capture window won't be overwritten while streaming
   ring_freeze = true;
 }
 
@@ -441,7 +459,6 @@ static inline int16_t cap_sample(uint32_t cap_start, uint32_t i) {
 
 // ------------------ Stream CAP + DA (from ring) ------------------
 static void send_capture_frames_from_ring(uint32_t cap_start, uint32_t clip_count, uint16_t max_abs) {
-  // CAP header
   uint8_t cap[3 + 1 + 24 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 4 + 4 + 2 + 2 + 4];
   size_t p = 0;
 
@@ -479,7 +496,6 @@ static void send_capture_frames_from_ring(uint32_t cap_start, uint32_t clip_coun
 
   send_framed(cap, p);
 
-  // DA frames (from ring, stable because ring_freeze=true)
   uint32_t offset = 0;
   static uint8_t da[2 + 4 + 2 + (2 * CHUNK_SAMPLES) + 4];
   static int16_t tmp[CHUNK_SAMPLES];
@@ -505,7 +521,6 @@ static void send_capture_frames_from_ring(uint32_t cap_start, uint32_t clip_coun
     send_framed(da, q);
     offset += nsamp;
 
-    // allow other tasks (incl RX task) to run
     delay(0);
   }
 }
@@ -523,7 +538,6 @@ static uint16_t compute_rms_i16_last_window(int win_ms) {
   const uint32_t win_samp = (uint32_t)((FS_HZ * (uint32_t)win_ms) / 1000u);
   if (win_samp < 8) return 0;
 
-  // snapshot head (avoid tearing)
   uint32_t w = ring_write;
 
   uint64_t ss = 0;
@@ -551,9 +565,9 @@ static void begin_run_after_start() {
   last_quiet_check_ms = 0;
 
   if (run_mode == MODE_CLEAN) {
-    send_txt("baseline: stay silent for 2 seconds...");
-    baseline_start_2s();
-    run_state = ST_BASELINE;
+    // FIXED: baseline starts only after Enter
+    send_txt("press enter to record 2s baseline...");
+    run_state = ST_WAIT_BASELINE_ENTER;
   } else {
     run_state = ST_WAIT_ENTER;
     prompt_next();
@@ -593,41 +607,55 @@ static void handle_start(const char* in_label, int reps, RunMode mode) {
 
   int ni = 0, oc = 0;
   if (parse_key_label(label, ni, oc)) {
+    // Reject keys beyond a7 (e.g., a#7, b7) explicitly.
+    const int a7idx = key_index(0, 7); // a7
+    const int kidx  = key_index(ni, oc);
+    if (kidx < 0 || kidx > a7idx) {
+      send_txt("err key must be within a0..a7");
+      reset_run_state();
+      return;
+    }
+
     mode_chromatic = true;
     chromatic_has_end = false;
     note_i = ni;
     octave = oc;
-    set_label_to_current_key(); // normalized key label
-    send_txtf("run start %s reps/key=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
+    set_label_to_current_key();
+    send_txtf("run start %s reps/key=%d mode=%s",
+              label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   } else {
     mode_chromatic = false;
     chromatic_has_end = false;
-    send_txtf("run start %s reps=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
+    send_txtf("run start %s reps=%d mode=%s",
+              label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   }
 
   begin_run_after_start();
 }
 
-// ------------------ Enter trigger (capture + stream) ------------------
+// ------------------ Enter trigger (baseline OR capture + stream) ------------------
 static void handle_enter_trigger() {
   if (!run_active) return;
+
+  // NEW: In clean mode, first Enter starts baseline collection.
+  if (run_state == ST_WAIT_BASELINE_ENTER) {
+    send_txt("baseline: stay silent for 2 seconds...");
+    baseline_start_2s();
+    run_state = ST_BASELINE;
+    return;
+  }
+
+  // Existing: Enter triggers a capture only when waiting for Enter
   if (run_state != ST_WAIT_ENTER) return;
 
   run_state = ST_CAPTURING;
 
-  // Ensure ring is not frozen (shouldn't be), but be safe.
   ring_freeze = false;
-
-  // Snapshot the write head at trigger time
   const uint32_t w0 = ring_write;
 
-  // Wait for post window to arrive, then freeze ring writes
   wait_post_and_freeze(w0);
-
-  // Now the full capture window exists in ring and won't be overwritten.
   const uint32_t cap_start = cap_start_from_w0(w0);
 
-  // stats computed from frozen capture window
   uint32_t clip_count = 0;
   uint16_t max_abs = 0;
   for (uint32_t i = 0; i < TOTAL_SAMPLES; i++) {
@@ -641,7 +669,6 @@ static void handle_enter_trigger() {
   send_capture_frames_from_ring(cap_start, clip_count, max_abs);
   send_txtf("sent %s rep %d/%d", label, rep_idx, reps_per_label);
 
-  // Unfreeze so audio keeps updating ring
   ring_freeze = false;
 
   // advance
@@ -650,7 +677,6 @@ static void handle_enter_trigger() {
     rep_idx = 1;
 
     if (mode_chromatic) {
-      // If this chromatic run has an explicit end key, stop after completing that key.
       if (chromatic_end_is_exact_current()) {
         reset_run_state();
         send_txt("done run");
@@ -668,7 +694,6 @@ static void handle_enter_trigger() {
     }
   }
 
-  // Between reps: in clean mode, gate; in stress, prompt immediately.
   if (run_mode == MODE_CLEAN) {
     quiet_passes = 0;
     last_quiet_check_ms = 0;
@@ -690,25 +715,18 @@ static void exec_command_line(const char* cmd_in) {
     return;
   }
 
-  // work on a local mutable copy
   char cmd[CMD_MAX_CHARS];
   strncpy(cmd, cmd_in, sizeof(cmd) - 1);
   cmd[sizeof(cmd) - 1] = 0;
 
-  // lowercase for parsing
   to_lower_inplace(cmd);
 
-  // stop
   if (streq(cmd, "stop")) {
     handle_stop();
     return;
   }
 
-  // start command forms:
-  //   1) start <label> <reps> [clean|stress]
-  //   2) start <start_key> <end_key> <reps> [clean|stress]   (keys only; chromatic stops at end_key)
   if (strncmp(cmd, "start ", 6) == 0) {
-    // Tokenize (simple whitespace split)
     const int MAX_TOK = 6;
     const char* tok[MAX_TOK] = {0};
     int nt = 0;
@@ -746,25 +764,17 @@ static void exec_command_line(const char* cmd_in) {
       if (mode_tok) {
         if (strcmp(mode_tok, "stress") == 0) m = MODE_STRESS;
         else if (strcmp(mode_tok, "clean") == 0) m = MODE_CLEAN;
-        else {
-          send_txt("err mode must be clean or stress");
-          return;
-        }
+        else { send_txt("err mode must be clean or stress"); return; }
       }
 
       int sni = 0, soc = 0, eni = 0, eoc = 0;
-      if (!parse_key_label(start_lbl, sni, soc)) {
-        send_txt("err range start must be key like a0..g#7");
-        return;
-      }
-      if (!parse_key_label(end_lbl, eni, eoc)) {
-        send_txt("err range end must be key like a0..g#7");
-        return;
-      }
+      if (!parse_key_label(start_lbl, sni, soc)) { send_txt("err range start must be key like a0..g#7"); return; }
+      if (!parse_key_label(end_lbl,   eni, eoc)) { send_txt("err range end must be key like a0..g#7");   return; }
 
+      const int a7idx = key_index(0, 7); // a7
       int sidx = key_index(sni, soc);
       int eidx = key_index(eni, eoc);
-      int a7idx = key_index(0, 7); // a7
+
       if (sidx < 0 || eidx < 0 || sidx > a7idx || eidx > a7idx) {
         send_txt("err key range must be within a0..a7");
         return;
@@ -774,15 +784,13 @@ static void exec_command_line(const char* cmd_in) {
         return;
       }
 
-      // Set explicit end key for this chromatic run.
       chromatic_has_end = true;
       end_note_i = eni;
       end_octave = eoc;
 
-      // Start from the requested start label (handle_start normalizes + starts run).
       handle_start(start_lbl, reps, m);
 
-      // handle_start() clears chromatic_has_end in key mode; restore it.
+      // handle_start clears chromatic_has_end in key mode; restore it.
       chromatic_has_end = true;
       end_note_i = eni;
       end_octave = eoc;
@@ -802,10 +810,7 @@ static void exec_command_line(const char* cmd_in) {
     if (mode_tok) {
       if (strcmp(mode_tok, "stress") == 0) m = MODE_STRESS;
       else if (strcmp(mode_tok, "clean") == 0) m = MODE_CLEAN;
-      else {
-        send_txt("err mode must be clean or stress");
-        return;
-      }
+      else { send_txt("err mode must be clean or stress"); return; }
     }
 
     handle_start(lbl, reps, m);
@@ -821,12 +826,10 @@ static void tick_baseline() {
   if (run_state != ST_BASELINE) return;
 
   if (!baseline_done) {
-    // still collecting; yield
     delay(2);
     return;
   }
 
-  // Compute baseline RMS (int16 units)
   baseline_done = false;
   uint64_t ss = baseline_sumsq;
   uint32_t n = baseline_target;
@@ -838,16 +841,12 @@ static void tick_baseline() {
 
   uint16_t rms_i16 = (uint16_t)min<double>(32767.0, rms);
 
-  // Adaptive threshold:
-  //   thr = rms * 3 + 50 counts
-  // This is intentionally simple + deterministic.
   double thr = (double)rms_i16 * 3.0 + 50.0;
   if (thr > 32767.0) thr = 32767.0;
   quiet_thr_rms_i16 = (uint16_t)lround(thr);
 
   send_txtf("baseline ok: rms_i16=%u thr_i16=%u", (unsigned)rms_i16, (unsigned)quiet_thr_rms_i16);
 
-  // Now gate before the first prompt
   quiet_passes = 0;
   last_quiet_check_ms = 0;
   send_txt("waiting for quiet...");
@@ -858,7 +857,6 @@ static void tick_quiet_gate() {
   if (!run_active || run_mode != MODE_CLEAN) return;
   if (run_state != ST_WAIT_QUIET) return;
 
-  // Debounced periodic checks
   uint32_t now = millis();
   if (last_quiet_check_ms != 0 && (now - last_quiet_check_ms) < (uint32_t)QUIET_CHECK_PERIOD_MS) {
     delay(2);
@@ -868,15 +866,11 @@ static void tick_quiet_gate() {
 
   uint16_t rms_i16 = compute_rms_i16_last_window(QUIET_WIN_MS);
 
-  // If threshold not set for some reason, be conservative.
   uint16_t thr = quiet_thr_rms_i16;
   if (thr == 0) thr = 200;
 
-  if (rms_i16 <= thr) {
-    quiet_passes++;
-  } else {
-    quiet_passes = 0;
-  }
+  if (rms_i16 <= thr) quiet_passes++;
+  else quiet_passes = 0;
 
   if (quiet_passes >= QUIET_NEED_PASSES) {
     quiet_passes = 0;
@@ -885,7 +879,6 @@ static void tick_quiet_gate() {
     return;
   }
 
-  // occasional progress ping
   static uint32_t last_ping = 0;
   if (now - last_ping > 1000) {
     last_ping = now;
@@ -902,32 +895,24 @@ void setup() {
 
   i2s_init();
   xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 2, nullptr, 0);
-
-  // Serial RX task (higher priority than loop)
   xTaskCreatePinnedToCore(serial_rx_task, "ser_rx", 4096, nullptr, 3, nullptr, 1);
 
   send_txt("ready");
 }
 
 void loop() {
-  // Clean-mode state machine ticks
   tick_baseline();
   tick_quiet_gate();
 
-  // Execute queued commands sequentially.
-  // We still allow processing while waiting for baseline/quiet/etc.
-  // Only block command execution during CAPTURING (handle_enter_trigger will set/clear it).
   if (run_state != ST_CAPTURING) {
     char cmd[CMD_MAX_CHARS];
-    // Process a small batch each loop to stay responsive
+
     for (int i = 0; i < 8; i++) {
       if (!cmdq_pop(cmd, sizeof(cmd))) break;
 
-      // If we are waiting for Enter, only ENTER token should trigger capture.
-      // But allow stop/start at any time.
       if (cmd[0] == 0) {
         // ENTER token
-        if (run_state == ST_WAIT_ENTER) {
+        if (run_state == ST_WAIT_ENTER || run_state == ST_WAIT_BASELINE_ENTER) {
           exec_command_line(cmd);
         } else {
           // ignore stray empty lines when not prompted
@@ -936,7 +921,6 @@ void loop() {
         exec_command_line(cmd);
       }
 
-      // If a command caused capturing, stop this batch immediately.
       if (run_state == ST_CAPTURING) break;
     }
   }

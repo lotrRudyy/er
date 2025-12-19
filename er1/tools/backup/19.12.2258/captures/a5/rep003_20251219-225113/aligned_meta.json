@@ -1,0 +1,30 @@
+{
+  "aligned": {
+    "onset_sample": 16800,
+    "onset_ms": 350.0,
+    "pre_align_ms": -200,
+    "post_align_ms": 300,
+    "slice_start_sample": 26400,
+    "slice_end_sample": 31200,
+    "nsamples": 4800
+  },
+  "qc": {
+    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures\\a5\\rep003_20251219-225113",
+    "label": "a5",
+    "fs": 48000,
+    "pre_ms": 300,
+    "lead_ms": 0,
+    "post_ms": 400,
+    "peak": 0.141937255859375,
+    "clip": 0,
+    "rms_pre": 0.00032877596095204353,
+    "rms_post": 0.03286054730415344,
+    "snr_proxy_db": 39.995468579200924,
+    "onset_sample": 16800,
+    "onset_ms_est": 350.0,
+    "onset_minus_enter_ms": 50.0,
+    "flags": [],
+    "is_bad": false,
+    "status": "ok"
+  }
+}

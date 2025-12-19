@@ -42,17 +42,48 @@ def should_qc_label(lbl: str, include_talkkey: bool) -> bool:
     return False
 
 
+def infer_mode(rep_folder: Path, meta: Dict[str, Any], lbl: str) -> str:
+    """
+    Returns 'clean' or 'stress'.
+
+    Priority:
+      1) meta['mode'] if present
+      2) folder path contains captures_stress (common in your workflow)
+      3) talkkey_* label treated as stress-ish by default
+      4) default clean
+    """
+    m = str(meta.get("mode", "")).strip().lower()
+    if m in ("stress", "clean"):
+        return m
+
+    p = str(rep_folder).lower()
+    if "captures_stress" in p or "stress" in p:
+        # keep it simple: if the path clearly indicates stress dataset
+        return "stress"
+
+    if is_talkkey_label(lbl):
+        return "stress"
+
+    return "clean"
+
+
 # ------------------------------
 # QC thresholds
 # ------------------------------
 @dataclass
 class QcCfg:
-    # strict (template keys)
+    # strict (clean templates; key labels)
     min_peak: float = 0.03
     min_snr_db: float = 20.0
     max_rms_pre: float = 0.005
 
-    # relaxed for talkkey_* (stress)
+    # relaxed (stress recordings; ringing expected)
+    stress_min_peak: float = 0.03
+    stress_min_snr_db: float = 10.0
+    stress_max_rms_pre: float = 0.020
+    stress_ignore_noisy_pre: bool = True  # ringing makes pre "noisy" by design
+
+    # relaxed for talkkey_* (kept for backward compatibility)
     talkkey_min_peak: float = 0.03
     talkkey_min_snr_db: float = 16.0
     talkkey_max_rms_pre: float = 0.012
@@ -67,7 +98,15 @@ class QcCfg:
     onset_frame_ms: float = 10.0
     onset_hop_ms: float = 5.0
     onset_consec: int = 2
-    onset_k_sigma: float = 6.0
+
+    # onset thresholding (clean vs stress)
+    onset_k_sigma_clean: float = 6.0   # old behavior
+    onset_k_sigma_stress: float = 4.0  # easier trigger in stress
+
+    # onset search windows around Enter
+    onset_search_pre_ms: int = 120      # includes some lead + safety
+    onset_search_post_ms_clean: int = 160
+    onset_search_post_ms_stress: int = 260  # wider window helps low keys / messy reps
 
     # aligned export window (ms) relative to detected onset
     pre_align_ms: int = 0
@@ -120,6 +159,20 @@ def move_rep_to_bad(rep_folder: Path, bad_dir: Path) -> Path:
     return dest
 
 
+def robust_center_scale(x: np.ndarray) -> Tuple[float, float]:
+    """
+    Robust baseline stats for flux:
+      center = median
+      scale  = 1.4826 * MAD
+    """
+    if x.size == 0:
+        return 0.0, 0.0
+    med = float(np.median(x))
+    mad = float(np.median(np.abs(x - med)))
+    scale = 1.4826 * mad
+    return med, scale
+
+
 # ------------------------------
 # Onset detector (spectral flux)
 # ------------------------------
@@ -137,6 +190,12 @@ def spectral_flux_onset(
     consec: int,
     k_sigma: float,
 ) -> Optional[int]:
+    """
+    Spectral-flux onset around Enter.
+
+    Uses robust median+MAD baseline for thresholding (less sensitive to ringing),
+    and falls back to mean+std if MAD is ~0.
+    """
     n = x.size
     if n < 128:
         return None
@@ -152,6 +211,7 @@ def spectral_flux_onset(
     if s1 - s0 < win:
         return None
 
+    # baseline window: last 60ms before enter (can include ringing; robust stats handle it)
     b1 = max(0, min(n, enter_sample))
     b0 = max(0, b1 - int(round(fs * 60 / 1000.0)))
 
@@ -191,12 +251,15 @@ def spectral_flux_onset(
 
     base_mask = (frame_starts_np >= b0) & (frame_starts_np < b1)
     base = flux_vals_np[base_mask]
-    if base.size < 8:
+
+    if base.size >= 8:
+        mu, sd = robust_center_scale(base)
+        if sd < 1e-9:
+            mu = float(np.mean(base))
+            sd = float(np.std(base))
+    else:
         mu = float(np.mean(flux_vals_np))
         sd = float(np.std(flux_vals_np))
-    else:
-        mu = float(np.mean(base))
-        sd = float(np.std(base))
 
     thr = mu + k_sigma * sd if sd > 1e-9 else (mu * 10.0 + 1e-9)
 
@@ -287,6 +350,8 @@ def qc_one_rep(
             "flags": [],
         }
 
+    mode = infer_mode(rep_folder, meta, lbl)
+
     enter_ms = pre_ms + lead_ms
     enter_sample = int(round(fs * enter_ms / 1000.0))
 
@@ -303,8 +368,30 @@ def qc_one_rep(
     rms_post = rms(x_post)
     snr_proxy_db = 20.0 * safe_log10((rms_post + 1e-9) / (rms_pre + 1e-9))
 
-    search_pre_ms = int(max(50, lead_ms + 80))
-    search_post_ms = 150
+    # thresholds by mode / label type
+    if is_talkkey_label(lbl):
+        min_peak = cfg.talkkey_min_peak
+        min_snr_db = cfg.talkkey_min_snr_db
+        max_rms_pre = cfg.talkkey_max_rms_pre
+        ignore_noisy_pre = False
+        k_sigma = cfg.onset_k_sigma_stress
+        search_post_ms = cfg.onset_search_post_ms_stress
+    elif mode == "stress":
+        min_peak = cfg.stress_min_peak
+        min_snr_db = cfg.stress_min_snr_db
+        max_rms_pre = cfg.stress_max_rms_pre
+        ignore_noisy_pre = cfg.stress_ignore_noisy_pre
+        k_sigma = cfg.onset_k_sigma_stress
+        search_post_ms = cfg.onset_search_post_ms_stress
+    else:
+        min_peak = cfg.min_peak
+        min_snr_db = cfg.min_snr_db
+        max_rms_pre = cfg.max_rms_pre
+        ignore_noisy_pre = False
+        k_sigma = cfg.onset_k_sigma_clean
+        search_post_ms = cfg.onset_search_post_ms_clean
+
+    search_pre_ms = int(max(cfg.onset_search_pre_ms, lead_ms + 80))
 
     onset_sample = spectral_flux_onset(
         x=x,
@@ -317,20 +404,11 @@ def qc_one_rep(
         f_lo=cfg.onset_f_lo,
         f_hi=cfg.onset_f_hi,
         consec=cfg.onset_consec,
-        k_sigma=cfg.onset_k_sigma,
+        k_sigma=k_sigma,
     )
 
     onset_ms = (1000.0 * onset_sample / fs) if onset_sample is not None else None
     onset_minus_enter_ms = (onset_ms - enter_ms) if onset_ms is not None else None
-
-    if is_talkkey_label(lbl):
-        min_peak = cfg.talkkey_min_peak
-        min_snr_db = cfg.talkkey_min_snr_db
-        max_rms_pre = cfg.talkkey_max_rms_pre
-    else:
-        min_peak = cfg.min_peak
-        min_snr_db = cfg.min_snr_db
-        max_rms_pre = cfg.max_rms_pre
 
     flags: List[str] = []
 
@@ -338,7 +416,7 @@ def qc_one_rep(
         flags.append("clipped")
     if peak < min_peak:
         flags.append("too_quiet")
-    if rms_pre > max_rms_pre:
+    if (not ignore_noisy_pre) and (rms_pre > max_rms_pre):
         flags.append("noisy_pre")
     if snr_proxy_db < min_snr_db:
         flags.append("low_snr")
@@ -356,6 +434,7 @@ def qc_one_rep(
     result: Dict[str, Any] = {
         "rep_folder": str(rep_folder),
         "label": lbl,
+        "mode": mode,
         "fs": fs,
         "pre_ms": pre_ms,
         "lead_ms": lead_ms,
@@ -423,10 +502,18 @@ def main() -> None:
     ap.add_argument("--include_talkkey", action="store_true", help="QC talkkey_* (default: on)")
     ap.add_argument("--no_talkkey", action="store_true", help="Disable QC for talkkey_* labels")
 
+    # clean thresholds
     ap.add_argument("--min_peak", type=float, default=0.03)
     ap.add_argument("--min_snr_db", type=float, default=20.0)
     ap.add_argument("--max_rms_pre", type=float, default=0.005)
 
+    # stress thresholds
+    ap.add_argument("--stress_min_peak", type=float, default=0.03)
+    ap.add_argument("--stress_min_snr_db", type=float, default=10.0)
+    ap.add_argument("--stress_max_rms_pre", type=float, default=0.020)
+    ap.add_argument("--stress_ignore_noisy_pre", action="store_true", help="do not fail stress reps for noisy_pre (default on)")
+
+    # talkkey thresholds
     ap.add_argument("--talkkey_min_peak", type=float, default=0.03)
     ap.add_argument("--talkkey_min_snr_db", type=float, default=16.0)
     ap.add_argument("--talkkey_max_rms_pre", type=float, default=0.012)
@@ -443,6 +530,10 @@ def main() -> None:
         min_peak=args.min_peak,
         min_snr_db=args.min_snr_db,
         max_rms_pre=args.max_rms_pre,
+        stress_min_peak=args.stress_min_peak,
+        stress_min_snr_db=args.stress_min_snr_db,
+        stress_max_rms_pre=args.stress_max_rms_pre,
+        stress_ignore_noisy_pre=True if args.stress_ignore_noisy_pre else True,  # default on
         talkkey_min_peak=args.talkkey_min_peak,
         talkkey_min_snr_db=args.talkkey_min_snr_db,
         talkkey_max_rms_pre=args.talkkey_max_rms_pre,
@@ -497,6 +588,7 @@ def main() -> None:
 
         row = {
             "label": res.get("label", ""),
+            "mode": res.get("mode", ""),
             "folder": folder_rel,
             "fs": res.get("fs", ""),
             "pre_ms": res.get("pre_ms", ""),
