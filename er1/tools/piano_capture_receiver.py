@@ -524,7 +524,7 @@ def main():
     ap.set_defaults(qc_write_aligned=True)
     ap.add_argument("--qc_include_talkkey", action="store_true", help="QC talkkey_* (default: enabled)")
     ap.add_argument("--qc_no_talkkey", action="store_true", help="Disable QC talkkey_* labels")
-    ap.add_argument("--qc_pre_align_ms", type=int, default=0)
+    ap.add_argument("--qc_pre_align_ms", type=int, default=-200)
     ap.add_argument("--qc_post_align_ms", type=int, default=300)
 
     # Auto redo

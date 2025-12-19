@@ -1,12 +1,12 @@
 {
   "seed": 123,
   "Ns": [
+    1,
     2,
     3,
     5,
     7,
-    10,
-    15
+    10
   ],
   "K": 100,
   "mode": "single_root",
@@ -60,17 +60,20 @@
     "min_templates_per_label": 3,
     "min_queries_per_label": 1,
     "min_test_per_label": 2,
-    "maxN": 15
+    "maxN": 10
   },
   "feat_cfg": {
     "fs": 48000,
+    "feature": "delta",
     "seg_ms": 200,
+    "pre_ms": 200,
+    "post_ms": 200,
     "fft_n": 4096,
     "hop": 512,
     "fmin_hz": 80.0,
     "fmax_hz": 8000.0,
     "smooth_bins": 3,
-    "eps": 1e-08
+    "eps": 1e-07
   },
   "thresholds": {
     "t_abs": null,

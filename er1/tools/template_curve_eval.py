@@ -163,7 +163,12 @@ def main():
     )
 
     # feature config (must match matcher)
-    ap.add_argument("--seg_ms", type=int, default=200)
+    ap.add_argument("--feature", default="post", choices=["post", "delta"], help="feature type")
+    ap.add_argument("--seg_ms", type=int, default=200, help="post-only window (ms)")
+    ap.add_argument("--pre_ms", type=int, default=200, help="delta pre window (ms)")
+    ap.add_argument("--post_ms", type=int, default=200, help="delta post window (ms)")
+    ap.add_argument("--eps", type=float, default=1e-7, help="log epsilon")
+
     ap.add_argument("--fft_n", type=int, default=4096)
     ap.add_argument("--hop", type=int, default=512)
     ap.add_argument("--fmin", type=float, default=80.0)
@@ -211,7 +216,11 @@ def main():
     maxN = max(Ns)
 
     cfg = FeatConfig(
+        feature=args.feature,
         seg_ms=args.seg_ms,
+        pre_ms=args.pre_ms,
+        post_ms=args.post_ms,
+        eps=args.eps,
         fft_n=args.fft_n,
         hop=args.hop,
         fmin_hz=args.fmin,
@@ -228,10 +237,6 @@ def main():
     qry_by_label_all = load_all_features_by_label(query_root, cfg)
 
     # Determine usable label set (keep consistent across all N)
-    # Requirements:
-    #   templates_count >= maxN AND >= min_templates_per_label
-    #   queries_count   >= min_queries_per_label
-    # In single-root mode: total_count >= maxN + min_test_per_label
     usable_labels: List[str] = []
     for lbl in sorted(set(tmpl_by_label_all.keys()) & set(qry_by_label_all.keys())):
         tcnt = len(tmpl_by_label_all.get(lbl, []))
@@ -242,7 +247,6 @@ def main():
         if qcnt < args.min_queries_per_label:
             continue
         if not two_root:
-            # same pool; ensure enough tests remain even at maxN
             if tcnt < (maxN + args.min_test_per_label):
                 continue
 
@@ -261,16 +265,13 @@ def main():
     sweep_abs = [float(x.strip()) for x in args.sweep_abs.split(",") if x.strip()]
     sweep_margin = [float(x.strip()) for x in args.sweep_margin.split(",") if x.strip()]
 
-    # Results storage
     curve_rows = []
     per_label_rows = []
 
-    # Confusion matrices accumulated over all repeats, per N
     label_to_idx = {lbl: i for i, lbl in enumerate(labels)}
     conf_by_N: Dict[int, np.ndarray] = {}
     confA_by_N: Dict[int, np.ndarray] = {}
 
-    # For plotting
     plot_N: List[int] = []
     plot_acc_mean: List[float] = []
     plot_acc_ci_lo: List[float] = []
@@ -292,7 +293,6 @@ def main():
         if N > maxN:
             raise SystemExit(f"Internal error: N={N} > maxN={maxN}")
 
-        # Sanity per label: ensure enough templates
         for lbl in labels:
             if len(tmpl_feats[lbl]) < N:
                 raise SystemExit(f"Label {lbl} has only {len(tmpl_feats[lbl])} templates but N={N}")
@@ -323,8 +323,6 @@ def main():
             stats = EvalStats()
 
             # Build query sets for this repeat
-            # - two-root: use all query reps every repeat
-            # - single-root: exclude the sampled exemplars by resampling from the same pool
             if two_root:
                 test_sets = qry_feats
             else:
@@ -332,10 +330,9 @@ def main():
                 for lbl in labels:
                     feats = tmpl_feats[lbl]
                     idx = np.random.permutation(len(feats))
-                    te_idx = idx[N:]  # remaining as tests
+                    te_idx = idx[N:]
                     test_sets[lbl] = [feats[i] for i in te_idx]
 
-            # classify all queries
             for y in labels:
                 for q in test_sets[y]:
                     pr = matcher.predict(q, t_abs=args.t_abs, t_margin=args.t_margin)
@@ -369,12 +366,7 @@ def main():
         acc_mean = float(np.mean(acc_samples))
         acc_lo, acc_hi = percentile_ci(acc_samples)
 
-        row = {
-            "N": N,
-            "acc_mean": acc_mean,
-            "acc_ci_lo": acc_lo,
-            "acc_ci_hi": acc_hi,
-        }
+        row = {"N": N, "acc_mean": acc_mean, "acc_ci_lo": acc_lo, "acc_ci_hi": acc_hi}
 
         if args.t_abs is not None or args.t_margin is not None:
             cov_mean = float(np.mean(cov_samples)) if cov_samples else 0.0
@@ -396,18 +388,10 @@ def main():
 
         curve_rows.append(row)
 
-        # per-label rows for this N (aggregate over all repeats)
         for lbl in labels:
             tot = per_lbl_total[lbl]
             cor = per_lbl_correct[lbl]
-            per_label_rows.append(
-                {
-                    "N": N,
-                    "label": lbl,
-                    "acc": (cor / tot) if tot else 0.0,
-                    "total": tot,
-                }
-            )
+            per_label_rows.append({"N": N, "label": lbl, "acc": (cor / tot) if tot else 0.0, "total": tot})
 
         plot_N.append(N)
         plot_acc_mean.append(acc_mean)
@@ -490,8 +474,7 @@ def main():
     if args.sweep_thresholds:
         (out_dir / "threshold_sweep.json").write_text(json.dumps(sweep_summary, indent=2), encoding="utf-8")
 
-    # ---------------- best-N selection + confusion matrix outputs ----------------
-
+    # best-N selection
     bestN = None
     curve_by_N = {int(r["N"]): r for r in curve_rows}
     for N in sorted(Ns):
@@ -553,8 +536,7 @@ def main():
     if args.t_abs is not None or args.t_margin is not None:
         _write_confusion(confA_by_N[int(bestN)], f"confusion_bestN_{int(bestN)}_accepted")
 
-    # ---------------- plots ----------------
-
+    # plots
     plt.figure()
     plt.plot(plot_N, plot_acc_mean)
     plt.fill_between(plot_N, plot_acc_ci_lo, plot_acc_ci_hi, alpha=0.2)

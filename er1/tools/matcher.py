@@ -2,32 +2,12 @@
 """
 matcher.py — deterministic set-of-exemplars piano key matcher
 
-Reads per-rep folders produced by receiver/QC:
-  captures/<label>/repNNN_YYYYMMDD-HHMMSS/
-    meta.json
-    raw_audio_i16.raw
-    (optional) aligned_i16.raw + aligned_meta.json
+Adds feature="post" (existing) and feature="delta" (new):
+  delta = log(post+eps) - log(pre+eps), computed from RAW windows around onset.
 
-Feature extractor (deterministic):
-  - segment: post-onset window (default 200 ms)
-  - STFT magnitude with Hann window
-  - median over time of log-magnitude spectrum
-  - bandpass select (default 80..8000 Hz)
-  - optional mild frequency smoothing
-  - L2 normalize
-
-Matcher:
-  - templates: set of exemplar feature vectors per label
-  - similarity: cosine
-  - label score: max(sim(query, exemplar)) over exemplars
-  - prediction: argmax label score
-  - confidence: (S1, S2, margin=S1-S2)
-  - optional reject: accept if S1>=T_abs and margin>=T_margin
-
-Outputs:
-  - predict_one(...) returns best label + diagnostics
-  - can save/load templates to npz
-
+Important with your QC:
+- qc_captures.py default pre_align_ms=0 means aligned_i16.raw has no pre-onset context,
+  so delta must use raw_audio_i16.raw (but can still use aligned_meta.json for onset_sample).
 """
 
 from __future__ import annotations
@@ -35,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,13 +98,23 @@ def detect_onset_rms(
 @dataclass
 class FeatConfig:
     fs: int = 48000
-    seg_ms: int = 200           # post-onset segment length used for features
+
+    # feature mode
+    feature: str = "post"        # "post" or "delta"
+
+    # windows
+    seg_ms: int = 200            # post-only window length
+    pre_ms: int = 200            # delta pre window length
+    post_ms: int = 200           # delta post window length
+
+    # stft
     fft_n: int = 4096
     hop: int = 512
     fmin_hz: float = 80.0
     fmax_hz: float = 8000.0
     smooth_bins: int = 3        # 0 disables smoothing
-    eps: float = 1e-8
+    eps: float = 1e-7
+
 
 def hann(n: int) -> np.ndarray:
     return 0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(n, dtype=np.float32) / max(1, (n - 1)))
@@ -138,7 +127,6 @@ def stft_mag(x: np.ndarray, cfg: FeatConfig) -> np.ndarray:
     win = hann(cfg.fft_n)
     step = cfg.hop
     if n < cfg.fft_n:
-        # zero-pad to at least one frame
         pad = cfg.fft_n - n
         x = np.pad(x, (0, pad), mode="constant")
         n = x.size
@@ -157,61 +145,35 @@ def stft_mag(x: np.ndarray, cfg: FeatConfig) -> np.ndarray:
 def smooth1d(v: np.ndarray, k: int) -> np.ndarray:
     if k <= 0:
         return v
-    # simple moving average, reflect pad
     pad = k
     vp = np.pad(v, (pad, pad), mode="reflect")
     c = np.cumsum(vp, dtype=np.float64)
     out = (c[2 * pad:] - c[:-2 * pad]) / float(2 * pad)
     return out.astype(np.float32, copy=False)
 
-def extract_feature_from_aligned(
-    aligned_i16: np.ndarray,
-    meta: dict,
-    cfg: FeatConfig,
-    onset_sample_in_aligned: int = 0,
-) -> np.ndarray:
-    """
-    aligned signal is assumed already onset-aligned with onset at index 0 by default.
-    We take [onset : onset + seg_ms].
-    """
-    fs = int(meta.get("fs", cfg.fs))
-    cfg_local = FeatConfig(**{**cfg.__dict__, "fs": fs})
-
-    x = to_float(aligned_i16)
-    seg_len = int(round(fs * (cfg_local.seg_ms / 1000.0)))
-    a0 = max(0, onset_sample_in_aligned)
-    a1 = min(x.size, a0 + seg_len)
-    seg = x[a0:a1]
-    if seg.size < max(64, cfg_local.fft_n // 8):
-        # pad to avoid empty STFT
-        seg = np.pad(seg, (0, max(0, cfg_local.fft_n - seg.size)), mode="constant")
-
-    mag = stft_mag(seg, cfg_local)  # [T, F]
+def _logmag_median(seg: np.ndarray, fs: int, cfg: FeatConfig) -> np.ndarray:
+    mag = stft_mag(seg, cfg)  # [T, F]
     if mag.size == 0:
         return np.zeros((1,), dtype=np.float32)
-
-    # log compression
-    logm = np.log(cfg_local.eps + mag)
-
-    # median over time
+    logm = np.log(cfg.eps + mag)
     v = np.median(logm, axis=0).astype(np.float32)
 
-    # band selection
-    freqs = np.fft.rfftfreq(cfg_local.fft_n, d=1.0 / fs)
-    m = (freqs >= cfg_local.fmin_hz) & (freqs <= cfg_local.fmax_hz)
+    freqs = np.fft.rfftfreq(cfg.fft_n, d=1.0 / fs)
+    m = (freqs >= cfg.fmin_hz) & (freqs <= cfg.fmax_hz)
     v = v[m]
     if v.size == 0:
         return np.zeros((1,), dtype=np.float32)
 
-    # optional smoothing
-    if cfg_local.smooth_bins > 0:
-        v = smooth1d(v, cfg_local.smooth_bins)
+    if cfg.smooth_bins > 0:
+        v = smooth1d(v, cfg.smooth_bins)
 
-    # normalize (zero-mean optional; L2 is simplest for cosine)
+    return v
+
+def _norm(v: np.ndarray) -> np.ndarray:
+    v = v.astype(np.float32, copy=False)
     v = v - float(np.mean(v))
     nrm = float(np.linalg.norm(v) + 1e-12)
-    v = (v / nrm).astype(np.float32, copy=False)
-    return v
+    return (v / nrm).astype(np.float32, copy=False)
 
 def extract_feature_from_raw_rep(
     raw_i16: np.ndarray,
@@ -220,54 +182,96 @@ def extract_feature_from_raw_rep(
     onset_hop: int = 256,
 ) -> Tuple[np.ndarray, Optional[int]]:
     """
-    Fallback when aligned_i16.raw is not present:
-    - compute onset via RMS
-    - take segment starting at onset
+    Use aligned_meta.json onset_sample if present (preferred), else fallback RMS onset.
+    Then compute either post-only or delta feature from RAW.
     """
     fs = int(meta["fs"])
-    pre_ms = int(meta["pre_ms"])
-    lead_ms = int(meta["lead_ms"])
-    enter_sample = int(meta.get("enter_sample", int(round(fs * (pre_ms + lead_ms) / 1000.0))))
+    pre_ms_cap = int(meta.get("pre_ms", 0))
+    lead_ms = int(meta.get("lead_ms", 0))
+    enter_sample = int(meta.get("enter_sample", int(round(fs * ((pre_ms_cap + lead_ms) / 1000.0)))))
 
     x = to_float(raw_i16)
-    onset = detect_onset_rms(x, fs=fs, enter_sample=enter_sample, hop=onset_hop)
+
+    onset = None
+    # if aligned_meta.json exists, it may contain onset_sample (absolute, in raw)
+    # (template_curve_eval calls load_feature_for_rep; we load that file there)
+    if "aligned_onset_sample" in meta:
+        try:
+            onset = int(meta["aligned_onset_sample"])
+        except Exception:
+            onset = None
+
+    if onset is None:
+        onset = detect_onset_rms(x, fs=fs, enter_sample=enter_sample, hop=onset_hop)
     if onset is None:
         return np.zeros((1,), dtype=np.float32), None
 
-    seg_len = int(round(fs * (cfg.seg_ms / 1000.0)))
+    cfg_local = FeatConfig(**{**cfg.__dict__, "fs": fs})
+
+    if cfg_local.feature == "delta":
+        pre_len = int(round(fs * (cfg_local.pre_ms / 1000.0)))
+        post_len = int(round(fs * (cfg_local.post_ms / 1000.0)))
+
+        p0 = max(0, onset - pre_len)
+        p1 = max(0, onset)
+        pre_seg = x[p0:p1]
+        if pre_seg.size < pre_len:
+            pre_seg = np.pad(pre_seg, (pre_len - pre_seg.size, 0), mode="constant")
+
+        q0 = onset
+        q1 = min(x.size, onset + post_len)
+        post_seg = x[q0:q1]
+        if post_seg.size < post_len:
+            post_seg = np.pad(post_seg, (0, post_len - post_seg.size), mode="constant")
+
+        v_pre = _logmag_median(pre_seg, fs, cfg_local)
+        v_post = _logmag_median(post_seg, fs, cfg_local)
+        n = min(v_pre.size, v_post.size)
+        d = (v_post[:n] - v_pre[:n]).astype(np.float32)
+        return _norm(d), onset
+
+    # post-only
+    seg_len = int(round(fs * (cfg_local.seg_ms / 1000.0)))
     a0 = onset
     a1 = min(x.size, a0 + seg_len)
     seg = x[a0:a1]
-    if seg.size < max(64, cfg.fft_n // 8):
-        seg = np.pad(seg, (0, max(0, cfg.fft_n - seg.size)), mode="constant")
+    if seg.size < max(64, cfg_local.fft_n // 8):
+        seg = np.pad(seg, (0, max(0, cfg_local.fft_n - seg.size)), mode="constant")
+    v = _logmag_median(seg, fs, cfg_local)
+    return _norm(v), onset
 
+
+def extract_feature_from_aligned(
+    aligned_i16: np.ndarray,
+    aligned_meta: dict,
+    cfg: FeatConfig,
+    onset_sample_in_aligned: int = 0,
+) -> np.ndarray:
+    """
+    For post-only features, aligned_i16 is fine (onset at index 0 by default).
+    For delta features, aligned_i16 is only usable if it contains pre-onset context;
+    your QC default pre_align_ms=0 usually does NOT, so we avoid delta-on-aligned here.
+    """
+    fs = int(aligned_meta.get("fs", cfg.fs))
     cfg_local = FeatConfig(**{**cfg.__dict__, "fs": fs})
-    mag = stft_mag(seg, cfg_local)
-    logm = np.log(cfg_local.eps + mag)
-    v = np.median(logm, axis=0).astype(np.float32)
 
-    freqs = np.fft.rfftfreq(cfg_local.fft_n, d=1.0 / fs)
-    m = (freqs >= cfg_local.fmin_hz) & (freqs <= cfg_local.fmax_hz)
-    v = v[m]
-    if v.size == 0:
-        return np.zeros((1,), dtype=np.float32), onset
+    x = to_float(aligned_i16)
+    if cfg_local.feature == "delta":
+        # refuse silently; caller should fall back to raw
+        return np.zeros((1,), dtype=np.float32)
 
-    if cfg_local.smooth_bins > 0:
-        v = smooth1d(v, cfg_local.smooth_bins)
+    seg_len = int(round(fs * (cfg_local.seg_ms / 1000.0)))
+    a0 = max(0, onset_sample_in_aligned)
+    a1 = min(x.size, a0 + seg_len)
+    seg = x[a0:a1]
+    if seg.size < max(64, cfg_local.fft_n // 8):
+        seg = np.pad(seg, (0, max(0, cfg_local.fft_n - seg.size)), mode="constant")
 
-    v = v - float(np.mean(v))
-    nrm = float(np.linalg.norm(v) + 1e-12)
-    v = (v / nrm).astype(np.float32, copy=False)
-    return v, onset
+    v = _logmag_median(seg, fs, cfg_local)
+    return _norm(v)
 
 
 # ------------------------- Templates + matching -------------------------
-
-def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
-    # assumes already normalized; still guard
-    da = float(np.linalg.norm(a) + 1e-12)
-    db = float(np.linalg.norm(b) + 1e-12)
-    return float(np.dot(a, b) / (da * db))
 
 @dataclass
 class PredictResult:
@@ -280,12 +284,7 @@ class PredictResult:
 
 class ExemplarMatcher:
     def __init__(self, templates: Dict[str, np.ndarray]):
-        """
-        templates[label] = array shape [N, D] of float32 normalized vectors.
-        """
         self.templates = {ensure_lower(k): v.astype(np.float32, copy=False) for k, v in templates.items()}
-
-        # sanity: ensure consistent dims
         dims = {v.shape[1] for v in self.templates.values() if v.ndim == 2 and v.shape[0] > 0}
         if len(dims) > 1:
             raise ValueError(f"Template feature dimension mismatch: {dims}")
@@ -294,8 +293,6 @@ class ExemplarMatcher:
         q = q.astype(np.float32, copy=False)
         scores: Dict[str, float] = {}
         for lbl, ex in self.templates.items():
-            # label score = max cosine similarity over exemplars
-            # faster via dot product since vectors are normalized-ish
             sims = ex @ q
             scores[lbl] = float(np.max(sims)) if sims.size else float("-inf")
         return scores
@@ -325,27 +322,8 @@ class ExemplarMatcher:
         return PredictResult(pred_label=pred, s1=float(s1), s2=float(s2),
                              margin=margin, accepted=accepted, scores=scores)
 
-def save_templates_npz(out_path: Path, templates: Dict[str, np.ndarray], feat_cfg: FeatConfig):
-    out = {"__feat_cfg__": np.array([json.dumps(feat_cfg.__dict__)], dtype=object)}
-    for lbl, arr in templates.items():
-        out[f"tmpl__{ensure_lower(lbl)}"] = arr.astype(np.float32, copy=False)
-    np.savez_compressed(out_path, **out)
 
-def load_templates_npz(path: Path) -> Tuple[Dict[str, np.ndarray], FeatConfig]:
-    z = np.load(path, allow_pickle=True)
-    cfg = FeatConfig()
-    if "__feat_cfg__" in z:
-        cfgd = json.loads(str(z["__feat_cfg__"][0]))
-        cfg = FeatConfig(**cfgd)
-    templates: Dict[str, np.ndarray] = {}
-    for k in z.files:
-        if k.startswith("tmpl__"):
-            lbl = k[len("tmpl__"):]
-            templates[lbl] = z[k].astype(np.float32, copy=False)
-    return templates, cfg
-
-
-# ------------------------- CLI: build templates from folders -------------------------
+# ------------------------- folder feature loader -------------------------
 
 def find_rep_dirs(root: Path) -> List[Path]:
     rep_dirs: List[Path] = []
@@ -361,16 +339,23 @@ def load_feature_for_rep(rep_dir: Path, cfg: FeatConfig) -> Tuple[Optional[np.nd
     meta = load_json(meta_path)
     label = ensure_lower(meta.get("label", rep_dir.parent.name))
 
-    aligned_path = rep_dir / "aligned_i16.raw"
+    # If QC onset exists, inject it into meta so raw extractor can use it
     aligned_meta_path = rep_dir / "aligned_meta.json"
-    if aligned_path.exists() and aligned_meta_path.exists():
+    if aligned_meta_path.exists():
+        am = load_json(aligned_meta_path)
+        onset_sample = am.get("aligned", {}).get("onset_sample", None)
+        if isinstance(onset_sample, (int, float)):
+            meta = dict(meta)
+            meta["aligned_onset_sample"] = int(onset_sample)
+
+    aligned_path = rep_dir / "aligned_i16.raw"
+    if cfg.feature == "post" and aligned_path.exists() and aligned_meta_path.exists():
         a = read_i16_raw(aligned_path)
         am = load_json(aligned_meta_path)
-        # aligned is onset-aligned, onset at index 0
         f = extract_feature_from_aligned(a, am, cfg, onset_sample_in_aligned=0)
         return f, label
 
-    # fallback raw
+    # fallback to RAW (and for delta, RAW is required)
     raw_path = rep_dir / "raw_audio_i16.raw"
     if not raw_path.exists():
         return None, label
@@ -380,11 +365,20 @@ def load_feature_for_rep(rep_dir: Path, cfg: FeatConfig) -> Tuple[Optional[np.nd
         return None, label
     return f, label
 
+
+# ------------------------- CLI (optional) -------------------------
+
 def cli():
     ap = argparse.ArgumentParser()
     ap.add_argument("--captures_root", default="captures")
     ap.add_argument("--out_npz", default="templates.npz")
+
+    ap.add_argument("--feature", default="post", choices=["post", "delta"])
     ap.add_argument("--seg_ms", type=int, default=200)
+    ap.add_argument("--pre_ms", type=int, default=200)
+    ap.add_argument("--post_ms", type=int, default=200)
+    ap.add_argument("--eps", type=float, default=1e-7)
+
     ap.add_argument("--fft_n", type=int, default=4096)
     ap.add_argument("--hop", type=int, default=512)
     ap.add_argument("--fmin", type=float, default=80.0)
@@ -392,7 +386,19 @@ def cli():
     ap.add_argument("--smooth_bins", type=int, default=3)
     args = ap.parse_args()
 
-    cfg = FeatConfig(seg_ms=args.seg_ms, fft_n=args.fft_n, hop=args.hop, fmin_hz=args.fmin, fmax_hz=args.fmax, smooth_bins=args.smooth_bins)
+    cfg = FeatConfig(
+        feature=args.feature,
+        seg_ms=args.seg_ms,
+        pre_ms=args.pre_ms,
+        post_ms=args.post_ms,
+        eps=args.eps,
+        fft_n=args.fft_n,
+        hop=args.hop,
+        fmin_hz=args.fmin,
+        fmax_hz=args.fmax,
+        smooth_bins=args.smooth_bins,
+    )
+
     root = Path(args.captures_root)
     templates: Dict[str, List[np.ndarray]] = {}
 
@@ -402,9 +408,11 @@ def cli():
             continue
         templates.setdefault(lbl, []).append(f)
 
-    tmpl_arr: Dict[str, np.ndarray] = {lbl: np.stack(v, axis=0).astype(np.float32) for lbl, v in templates.items() if len(v) > 0}
-    save_templates_npz(Path(args.out_npz), tmpl_arr, cfg)
-    print(f"Wrote {args.out_npz} with labels={len(tmpl_arr)}")
+    tmpl_arr: Dict[str, np.ndarray] = {
+        lbl: np.stack(v, axis=0).astype(np.float32) for lbl, v in templates.items() if len(v) > 0
+    }
+    np.savez_compressed(Path(args.out_npz), **{f"tmpl__{lbl}": arr for lbl, arr in tmpl_arr.items()})
+    print(f"Wrote {args.out_npz} with labels={len(tmpl_arr)} (feature={cfg.feature})")
 
 if __name__ == "__main__":
     cli()
