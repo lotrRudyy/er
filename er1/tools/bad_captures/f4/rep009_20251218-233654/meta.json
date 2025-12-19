@@ -1,0 +1,18 @@
+{
+  "proto_ver": 1,
+  "label": "f4",
+  "fw_rep": 9,
+  "fw_reps_per_label": 10,
+  "fs": 48000,
+  "format": "int16",
+  "channels": 1,
+  "pre_ms": 300,
+  "lead_ms": 0,
+  "post_ms": 400,
+  "total_samples": 33600,
+  "clip_count": 0,
+  "max_abs": 2561,
+  "saved_rep_index": 9,
+  "saved_timestamp": "20251218-233654",
+  "enter_sample": 14400
+}

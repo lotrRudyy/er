@@ -1,0 +1,21 @@
+{
+  "label": "f4",
+  "rep_dir": "rep006_20251218-233647",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 14592,
+  "onset_minus_enter_ms": 4.0,
+  "align_window_samples": [
+    13632,
+    26592
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": true,
+  "qc_flags": [],
+  "rms_pre": 0.0008771669818088412,
+  "rms_post": 0.021812845021486282,
+  "peak": 0.082183837890625,
+  "snr_db": 27.912591257662932,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

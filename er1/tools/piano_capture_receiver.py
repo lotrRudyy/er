@@ -1,239 +1,444 @@
-import os
-import re
-import time
+#!/usr/bin/env python3
+"""
+piano_capture_receiver.py
+
+Host receiver for ESP32 Piano Collector (COBS framing + CRC32).
+
+- Reads framed binary packets delimited by 0x00
+- COBS decodes each frame, verifies CRC32
+- Handles TXT/CAP/DA message types
+- Writes captures/<label>/repNNN_YYYYMMDD-HHMMSS/ with:
+    raw_audio_i16.raw
+    meta.json
+- Rep numbering is monotonic per label across sessions
+- Stdin thread forwards pasted multi-line commands to ESP32 robustly
+
+Protocol (must match firmware):
+
+TXT:
+  b"TXT" + ver(u8) + msg_len(u16le) + msg(bytes) + crc32(u32le)
+
+CAP:
+  b"CAP" + ver(u8) + label(24 bytes, null padded) +
+  rep(i32le) + reps(i32le) + fs(u32le) +
+  pre_ms(u16le) + lead_ms(u16le) + post_ms(u16le) + flags(u16le) +
+  total_samples(u32le) + clip_count(u32le) + max_abs(u16le) + rsv(u16le) +
+  crc32(u32le)
+
+DA:
+  b"DA" + offset(u32le) + nsamp(u16le) + pcm(int16le * nsamp) + crc32(u32le)
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
-import zlib
+import os
+import queue
+import re
 import struct
+import sys
 import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
 import serial
-from cobs import cobs
 
-# ==============================
-# CONFIG
-# ==============================
-PORT = "COM3"
-BAUD = 921600
-OUT_DIR = "captures"
-os.makedirs(OUT_DIR, exist_ok=True)
 
-REP_RE = re.compile(r"^rep(\d+)_\d{8}-\d{6}$")
+# -------------------------- CRC32 --------------------------
 
-def crc32(data: bytes) -> int:
+def crc32_ieee(data: bytes) -> int:
+    import zlib
     return zlib.crc32(data) & 0xFFFFFFFF
 
-def norm_label(s: str) -> str:
-    return (s or "").strip().lower()
 
-def timestamp_tag() -> str:
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+# -------------------------- COBS --------------------------
 
-def next_rep_index(label_dir: str) -> int:
-    mx = 0
-    try:
-        for name in os.listdir(label_dir):
-            m = REP_RE.match(name)
+def cobs_decode(frame: bytes) -> bytes:
+    """
+    COBS decode. `frame` must NOT include the delimiter 0x00.
+    Raises ValueError on malformed input.
+    """
+    out = bytearray()
+    i = 0
+    n = len(frame)
+    while i < n:
+        code = frame[i]
+        if code == 0:
+            raise ValueError("COBS: code=0")
+        i += 1
+        end = i + code - 1
+        if end > n and code != 1:
+            raise ValueError("COBS: overrun")
+        out += frame[i:end]
+        i = end
+        if code != 0xFF and i < n:
+            out.append(0)
+    return bytes(out)
+
+
+# -------------------------- CAP session --------------------------
+
+@dataclass
+class CapHeader:
+    ver: int
+    label: str
+    rep_from_device: int
+    reps_per_label: int
+    fs: int
+    pre_ms: int
+    lead_ms: int
+    post_ms: int
+    flags: int
+    total_samples: int
+    clip_count: int
+    max_abs: int
+
+    @property
+    def enter_sample(self) -> int:
+        # Enter is at end of (pre + lead)
+        return int(round(self.fs * (self.pre_ms + self.lead_ms) / 1000.0))
+
+    @property
+    def nsamples(self) -> int:
+        return int(self.total_samples)
+
+
+class CaptureAssembler:
+    def __init__(self, out_root: Path):
+        self.out_root = out_root
+        self.active: Optional[CapHeader] = None
+        self.buf: Optional[bytearray] = None
+        self.filled: Optional[bytearray] = None
+        self.started_at: Optional[float] = None
+        self.out_dir: Optional[Path] = None
+        self.rep_num: Optional[int] = None
+        self.timestamp: Optional[str] = None
+
+    def reset(self):
+        self.active = None
+        self.buf = None
+        self.filled = None
+        self.started_at = None
+        self.out_dir = None
+        self.rep_num = None
+        self.timestamp = None
+
+    def _next_rep_dir(self, label: str) -> tuple[Path, int, str]:
+        label_dir = self.out_root / label
+        label_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find max existing repNNN_YYYYMMDD-HHMMSS
+        max_rep = 0
+        pat = re.compile(r"^rep(\d{3})_\d{8}-\d{6}$")
+        for p in label_dir.iterdir():
+            if not p.is_dir():
+                continue
+            m = pat.match(p.name)
             if m:
-                mx = max(mx, int(m.group(1)))
-    except FileNotFoundError:
-        return 1
-    return mx + 1
+                max_rep = max(max_rep, int(m.group(1)))
 
-# ==============================
-# SERIAL OPEN
-# ==============================
-ser = serial.Serial(PORT, BAUD, timeout=0.1)
-time.sleep(2.0)
-ser.reset_input_buffer()
-ser.reset_output_buffer()
-print(f"[OK] Connected to {PORT} @ {BAUD}")
-print("[OK] Type commands here (e.g. start c4 10, start silence 30). Empty line triggers capture when prompted.")
+        rep_num = max_rep + 1
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        rep_name = f"rep{rep_num:03d}_{ts}"
+        return label_dir / rep_name, rep_num, ts
 
-# ==============================
-# COMMAND THREAD (input())
-# ==============================
-def command_thread():
-    while True:
+    def begin(self, hdr: CapHeader):
+        # If a capture is already active, abandon it safely
+        if self.active is not None:
+            print("WARN: New CAP while previous capture active; abandoning previous.", file=sys.stderr)
+            self.reset()
+
+        self.active = hdr
+        self.buf = bytearray(hdr.total_samples * 2)
+        self.filled = bytearray(hdr.total_samples)  # 0/1 per sample
+        self.started_at = time.time()
+
+        out_dir, rep_num, ts = self._next_rep_dir(hdr.label)
+        out_dir.mkdir(parents=True, exist_ok=False)
+        self.out_dir = out_dir
+        self.rep_num = rep_num
+        self.timestamp = ts
+
+        meta = {
+            "label": hdr.label,
+            "rep": rep_num,
+            "timestamp": ts,
+            "fs": hdr.fs,
+            "format": "int16_le_mono",
+            "pre_ms": hdr.pre_ms,
+            "lead_ms": hdr.lead_ms,
+            "post_ms": hdr.post_ms,
+            "enter_sample": hdr.enter_sample,
+            "nsamples": hdr.nsamples,
+            "total_samples": hdr.total_samples,
+            "device": {
+                "proto_ver": hdr.ver,
+                "flags": hdr.flags,
+                "clip_count": hdr.clip_count,
+                "max_abs": hdr.max_abs,
+                "reps_per_label": hdr.reps_per_label,
+                "rep_index_from_device": hdr.rep_from_device,
+            },
+        }
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        print(
+            f"CAP: label={hdr.label} rep={rep_num:03d} total={hdr.total_samples} fs={hdr.fs} "
+            f"pre/lead/post={hdr.pre_ms}/{hdr.lead_ms}/{hdr.post_ms} enter_sample={hdr.enter_sample}"
+        )
+
+    def add_da(self, offset: int, pcm: bytes):
+        if self.active is None or self.buf is None or self.filled is None:
+            return
+        hdr = self.active
+        nsamp = len(pcm) // 2
+        if offset < 0 or offset + nsamp > hdr.total_samples:
+            print(f"WARN: DA out of range offset={offset} nsamp={nsamp}", file=sys.stderr)
+            return
+
+        self.buf[offset * 2:(offset + nsamp) * 2] = pcm
+        self.filled[offset:offset + nsamp] = b"\x01" * nsamp
+
+    def maybe_finalize(self) -> bool:
+        if self.active is None or self.buf is None or self.filled is None or self.out_dir is None:
+            return False
+
+        missing = self.filled.count(0)
+        if missing != 0:
+            return False
+
+        raw_path = self.out_dir / "raw_audio_i16.raw"
+        raw_path.write_bytes(self.buf)
+
+        meta_path = self.out_dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["received_seconds"] = float(time.time() - (self.started_at or time.time()))
+        meta["written_files"] = ["raw_audio_i16.raw", "meta.json"]
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        print(f"WROTE: {self.out_dir}")
+        self.reset()
+        return True
+
+
+# -------------------------- Packet parsing --------------------------
+
+def verify_crc(payload: bytes) -> bytes:
+    """
+    Returns payload_without_crc if CRC matches; raises ValueError otherwise.
+    CRC is last 4 bytes u32le over everything before it.
+    """
+    if len(payload) < 4:
+        raise ValueError("too short for crc")
+    body = payload[:-4]
+    crc_recv = struct.unpack_from("<I", payload, len(payload) - 4)[0]
+    crc_calc = crc32_ieee(body)
+    if crc_recv != crc_calc:
+        raise ValueError(f"crc mismatch recv=0x{crc_recv:08x} calc=0x{crc_calc:08x}")
+    return body
+
+
+def parse_txt(body: bytes) -> str:
+    if len(body) < 3 + 1 + 2:
+        raise ValueError("TXT too short")
+    if body[0:3] != b"TXT":
+        raise ValueError("not TXT")
+    ver = body[3]
+    msg_len = struct.unpack_from("<H", body, 4)[0]
+    msg_start = 6
+    msg_end = msg_start + msg_len
+    if msg_end > len(body):
+        raise ValueError("TXT len out of range")
+    msg = body[msg_start:msg_end].decode("utf-8", errors="replace")
+    return f"[TXT v{ver}] {msg}"
+
+
+def parse_cap(body: bytes) -> CapHeader:
+    if len(body) < 3 + 1 + 24 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 4 + 4 + 2 + 2:
+        raise ValueError("CAP too short")
+    if body[0:3] != b"CAP":
+        raise ValueError("not CAP")
+    ver = body[3]
+    lbl_raw = body[4:28]
+    label = lbl_raw.split(b"\x00", 1)[0].decode("utf-8", errors="replace").strip().lower()
+
+    off = 28
+    rep_from_device, reps_per_label, fs = struct.unpack_from("<iiI", body, off)
+    off += 12
+    pre_ms, lead_ms, post_ms, flags = struct.unpack_from("<HHHH", body, off)
+    off += 8
+    total_samples, clip_count = struct.unpack_from("<II", body, off)
+    off += 8
+    max_abs, _rsv = struct.unpack_from("<HH", body, off)
+    off += 4
+
+    return CapHeader(
+        ver=ver,
+        label=label,
+        rep_from_device=rep_from_device,
+        reps_per_label=reps_per_label,
+        fs=fs,
+        pre_ms=pre_ms,
+        lead_ms=lead_ms,
+        post_ms=post_ms,
+        flags=flags,
+        total_samples=total_samples,
+        clip_count=clip_count,
+        max_abs=max_abs,
+    )
+
+
+def parse_da(body: bytes) -> tuple[int, bytes]:
+    if len(body) < 2 + 4 + 2:
+        raise ValueError("DA too short")
+    if body[0:2] != b"DA":
+        raise ValueError("not DA")
+    offset = struct.unpack_from("<I", body, 2)[0]
+    nsamp = struct.unpack_from("<H", body, 6)[0]
+    pcm_start = 8
+    pcm_end = pcm_start + nsamp * 2
+    if pcm_end > len(body):
+        raise ValueError("DA pcm out of range")
+    pcm = body[pcm_start:pcm_end]
+    return int(offset), pcm
+
+
+# -------------------------- Stdin sender --------------------------
+
+def stdin_sender_thread(ser: serial.Serial, txq: "queue.Queue[str]", stop_evt: threading.Event):
+    """
+    Reads stdin and pushes lines to txq.
+    Robust for multi-line paste: Python already yields line-by-line.
+    """
+    while not stop_evt.is_set():
         try:
-            cmd = input()
-            ser.write((cmd.rstrip("\r\n") + "\n").encode("ascii", errors="ignore"))
-            ser.flush()
-        except EOFError:
-            break
-        except Exception as e:
-            print("[CMD ERROR]", e)
-            break
-
-threading.Thread(target=command_thread, daemon=True).start()
-
-# ==============================
-# RECEIVE STATE
-# ==============================
-buf = bytearray()
-current = None
-proto_ver = None
-
-def new_capture(label_s, fw_rep, fw_reps, fs, pre_ms, lead_ms, post_ms, total_samples, clip_count, max_abs):
-    return {
-        "label": label_s,
-        "fw_rep": fw_rep,
-        "fw_reps_per_label": fw_reps,
-        "fs": fs,
-        "pre_ms": pre_ms,
-        "lead_ms": lead_ms,
-        "post_ms": post_ms,
-        "total_samples": total_samples,
-        "clip_count": clip_count,
-        "max_abs": max_abs,
-        "samples": bytearray(total_samples * 2),
-        "filled": bytearray(total_samples),
-        "received_samples": 0,
-    }
-
-while True:
-    b = ser.read(1)
-    if not b:
-        continue
-
-    if b == b"\x00":
-        if not buf:
-            continue
-
-        try:
-            pkt = cobs.decode(bytes(buf))
+            line = sys.stdin.readline()
+            if line == "":
+                time.sleep(0.05)
+                continue
+            line = line.rstrip("\r\n")
+            txq.put(line, timeout=0.5)
         except Exception:
-            buf.clear()
+            time.sleep(0.05)
+
+
+def tx_thread(ser: serial.Serial, txq: "queue.Queue[str]", stop_evt: threading.Event):
+    """
+    Sends queued lines to serial with '\n'.
+    """
+    while not stop_evt.is_set():
+        try:
+            line = txq.get(timeout=0.1)
+        except queue.Empty:
             continue
-        buf.clear()
+        try:
+            ser.write((line + "\n").encode("utf-8", errors="ignore"))
+            ser.flush()
+        except Exception as e:
+            print(f"WARN: TX error: {e}", file=sys.stderr)
+            time.sleep(0.2)
 
-        # ---------- TXT ----------
-        if len(pkt) >= 3 and pkt[:3] == b"TXT":
-            if len(pkt) < 3 + 1 + 2 + 4:
-                continue
-            ver = pkt[3]
-            proto_ver = ver
-            text_len = struct.unpack("<H", pkt[4:6])[0]
-            if len(pkt) < 3 + 1 + 2 + text_len + 4:
-                continue
 
-            frame_wo_crc = pkt[:-4]
-            rx_crc = struct.unpack("<I", pkt[-4:])[0]
-            if crc32(frame_wo_crc) != rx_crc:
-                continue
+# -------------------------- Main receive loop --------------------------
 
-            msg = pkt[6:6 + text_len].decode("utf-8", errors="replace")
-            print(msg)
-            continue
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", required=True, help="Serial port (e.g. COM5 or /dev/ttyUSB0)")
+    ap.add_argument("--baud", type=int, default=921600)
+    ap.add_argument("--out_root", default="captures", help="Root output dir (default: captures)")
+    ap.add_argument("--read_chunk", type=int, default=4096, help="Serial read chunk size")
+    args = ap.parse_args()
 
-        # ---------- CAP ----------
-        # "CAP"(3) + ver(1) + label(24)
-        # + rep(i32) + reps(i32) + fs(u32)
-        # + pre(u16) + lead(u16) + post(u16) + flags(u16)
-        # + total(u32) + clip(u32) + max_abs(u16) + rsv(u16) + crc(u32)
-        if len(pkt) >= 3 and pkt[:3] == b"CAP":
-            min_len = 3 + 1 + 24 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 4 + 4 + 2 + 2 + 4
-            if len(pkt) < min_len:
-                continue
+    out_root = Path(args.out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
 
-            frame_wo_crc = pkt[:-4]
-            rx_crc = struct.unpack("<I", pkt[-4:])[0]
-            if crc32(frame_wo_crc) != rx_crc:
-                print("[WARN] CAP CRC mismatch")
-                continue
+    ser = serial.Serial(args.port, args.baud, timeout=0.02)
+    ser.reset_input_buffer()
+    ser.reset_output_buffer()
 
-            ver = pkt[3]
-            proto_ver = ver
+    assembler = CaptureAssembler(out_root=out_root)
 
-            lbl_raw = pkt[4:28].decode("ascii", errors="ignore").strip("\0")
-            lbl = norm_label(lbl_raw)
+    txq: "queue.Queue[str]" = queue.Queue(maxsize=4096)
+    stop_evt = threading.Event()
 
-            fw_rep = struct.unpack("<i", pkt[28:32])[0]
-            fw_reps = struct.unpack("<i", pkt[32:36])[0]
-            fs = struct.unpack("<I", pkt[36:40])[0]
-            pre_ms = struct.unpack("<H", pkt[40:42])[0]
-            lead_ms = struct.unpack("<H", pkt[42:44])[0]
-            post_ms = struct.unpack("<H", pkt[44:46])[0]
-            total_samples = struct.unpack("<I", pkt[48:52])[0]
-            clip_count = struct.unpack("<I", pkt[52:56])[0]
-            max_abs = struct.unpack("<H", pkt[56:58])[0]
+    t_in = threading.Thread(target=stdin_sender_thread, args=(ser, txq, stop_evt), daemon=True)
+    t_tx = threading.Thread(target=tx_thread, args=(ser, txq, stop_evt), daemon=True)
+    t_in.start()
+    t_tx.start()
 
-            current = new_capture(lbl, fw_rep, fw_reps, fs, pre_ms, lead_ms, post_ms, total_samples, clip_count, max_abs)
-            continue
+    print(f"Listening on {args.port} @ {args.baud} -> {out_root}")
 
-        # ---------- DA ----------
-        # "DA"(2) + offset(u32) + nsamp(u16) + pcm + crc(u32)
-        if len(pkt) >= 2 and pkt[:2] == b"DA":
-            if current is None:
-                continue
-            if len(pkt) < 2 + 4 + 2 + 4:
-                continue
+    buf = bytearray()
 
-            frame_wo_crc = pkt[:-4]
-            rx_crc = struct.unpack("<I", pkt[-4:])[0]
-            if crc32(frame_wo_crc) != rx_crc:
-                print("[WARN] DA CRC mismatch")
-                continue
+    try:
+        while True:
+            chunk = ser.read(args.read_chunk)
+            if chunk:
+                buf.extend(chunk)
 
-            offset = struct.unpack("<I", pkt[2:6])[0]
-            nsamp = struct.unpack("<H", pkt[6:8])[0]
-            pcm = pkt[8:-4]
+                # split frames by 0x00 delimiter
+                while True:
+                    try:
+                        z = buf.index(0)
+                    except ValueError:
+                        break
+                    frame = bytes(buf[:z])
+                    del buf[:z + 1]
 
-            if len(pcm) != nsamp * 2:
-                continue
-            if offset + nsamp > current["total_samples"]:
-                continue
+                    if not frame:
+                        continue
 
-            base = offset * 2
-            current["samples"][base:base + nsamp * 2] = pcm
+                    try:
+                        decoded = cobs_decode(frame)
+                        body = verify_crc(decoded)
+                    except Exception as e:
+                        # resync strategy: just drop this frame and continue
+                        print(f"WARN: frame decode/crc error: {e}", file=sys.stderr)
+                        continue
 
-            filled = current["filled"]
-            new_count = 0
-            for i in range(offset, offset + nsamp):
-                if filled[i] == 0:
-                    filled[i] = 1
-                    new_count += 1
-            current["received_samples"] += new_count
+                    # dispatch by header
+                    if body.startswith(b"TXT"):
+                        try:
+                            print(parse_txt(body))
+                        except Exception as e:
+                            print(f"WARN: TXT parse error: {e}", file=sys.stderr)
 
-            if current["received_samples"] >= current["total_samples"]:
-                lbl = current["label"]
-                lbl_dir = os.path.join(OUT_DIR, lbl)
-                os.makedirs(lbl_dir, exist_ok=True)
+                    elif body.startswith(b"CAP"):
+                        try:
+                            hdr = parse_cap(body)
+                            assembler.begin(hdr)
+                        except Exception as e:
+                            print(f"WARN: CAP parse error: {e}", file=sys.stderr)
+                            assembler.reset()
 
-                repn = next_rep_index(lbl_dir)
-                tag = timestamp_tag()
-                folder = f"rep{repn:03d}_{tag}"
-                path = os.path.join(lbl_dir, folder)
-                os.makedirs(path, exist_ok=True)
+                    elif body.startswith(b"DA"):
+                        try:
+                            offset, pcm = parse_da(body)
+                            assembler.add_da(offset, pcm)
+                            assembler.maybe_finalize()
+                        except Exception as e:
+                            print(f"WARN: DA parse error: {e}", file=sys.stderr)
 
-                with open(os.path.join(path, "audio.raw"), "wb") as f:
-                    f.write(current["samples"])
+                    else:
+                        print(f"WARN: unknown packet type: {body[:8]!r}", file=sys.stderr)
 
-                meta = {
-                    "proto_ver": proto_ver,
-                    "label": lbl,
-                    "fw_rep": current["fw_rep"],
-                    "fw_reps_per_label": current["fw_reps_per_label"],
-                    "fs": current["fs"],
-                    "format": "int16",
-                    "channels": 1,
-                    "pre_ms": current["pre_ms"],
-                    "lead_ms": current["lead_ms"],
-                    "post_ms": current["post_ms"],
-                    "total_samples": current["total_samples"],
-                    "clip_count": current["clip_count"],
-                    "max_abs": current["max_abs"],
-                    "saved_rep_index": repn,
-                    "saved_timestamp": tag,
-                }
-                with open(os.path.join(path, "meta.json"), "w", encoding="utf-8") as f:
-                    json.dump(meta, f, indent=2)
+            else:
+                # idle
+                time.sleep(0.002)
 
-                print(f"[SAVED] {lbl}/{folder}")
-                current = None
+    except KeyboardInterrupt:
+        print("Stopping...")
+    finally:
+        stop_evt.set()
+        try:
+            ser.close()
+        except Exception:
+            pass
 
-            continue
 
-        # Unknown packet: ignore
-        continue
-
-    else:
-        buf.append(b[0])
+if __name__ == "__main__":
+    main()

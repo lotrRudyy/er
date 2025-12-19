@@ -3,28 +3,39 @@
 // =====================================================
 //
 // Commands (ASCII lines, '\n' or '\r' terminated):
-//   start <label> <reps>
+//   start <label> <reps> [clean|stress]
+//     - default mode: clean
 //     - if <label> parses as piano key (a0..a7 with optional #):
 //         chromatic auto-advance in THIS order:
 //         a0 a#0 b0 c1 c#1 d1 d#1 e1 f1 f#1 g1 g#1 a1 ... a7
 //     - else:
 //         fixed-label mode (repeat that label for <reps> then stop)
 //   stop
-//   <empty line>   (Enter trigger) => capture + stream if run_active
+//   <empty line>   (Enter trigger) => capture + stream if run_active and waiting for Enter
 //
 // Output: ALL framed (no raw Serial println):
 //   TXT: "TXT"+ver+len+msg+crc
 //   CAP: "CAP"+ver+label(24)+rep+reps+fs+pre/lead/post+flags+total+clip+maxabs+rsv+crc
 //   DA : "DA"+offset+nsamp+pcm+crc
 //
-// Capture window (locked):
+// Capture window (LOCKED):
 //   pre=300ms, lead=0ms, post=400ms @ 48kHz
 //   => full raw PCM before and after Enter trigger.
 //
-// Memory strategy:
-//   - ONLY one big buffer in DRAM: ring[TOTAL_SAMPLES]
-//   - We freeze ring writes during streaming so the capture window
-//     can't be overwritten even if UART streaming takes > window length.
+// Clean mode (optional):
+//   - At run start, capture 2 seconds of silence baseline (RMS)
+//   - Before each rep prompt, wait until RMS is below an adaptive threshold
+//   - Helps reduce overlap/ringing contamination in template recordings.
+//
+// Serial robustness:
+//   - Dedicated RX task reads Serial continuously and enqueues complete lines
+//   - Main loop pops commands when idle and executes sequentially
+//   - Pasting redo.txt (multi-line) is safe; commands won't be missed during streaming.
+//
+// Constraints:
+//   - No PSRAM
+//   - Keep RAM ring buffer for capture window
+//   - Do not stream continuously; only stream per capture (Enter trigger)
 // =====================================================
 
 #include <Arduino.h>
@@ -60,7 +71,13 @@ static volatile uint32_t ring_write = 0;
 // Freeze ring writes during streaming to prevent overwrite
 static volatile bool ring_freeze = false;
 
-// ------------------ Run state ------------------
+// ------------------ Run mode + state ------------------
+enum RunMode : uint8_t { MODE_CLEAN = 0, MODE_STRESS = 1 };
+enum RunState : uint8_t { ST_IDLE = 0, ST_BASELINE = 1, ST_WAIT_QUIET = 2, ST_WAIT_ENTER = 3, ST_CAPTURING = 4 };
+
+static volatile RunMode  run_mode  = MODE_STRESS;
+static volatile RunState run_state = ST_IDLE;
+
 static bool run_active = false;
 static bool mode_chromatic = false;
 
@@ -74,6 +91,64 @@ static const char* NOTE_SEQ[] = {"a","a#","b","c","c#","d","d#","e","f","f#","g"
 static constexpr int NOTE_COUNT = 12;
 static int note_i = 0;   // index in NOTE_SEQ
 static int octave = 0;   // piano-style octaves for your labels
+
+// ------------------ Command queue (lines) ------------------
+static constexpr int CMDQ_MAX = 64;
+static constexpr int CMD_MAX_CHARS = 128;
+
+static char cmdq[CMDQ_MAX][CMD_MAX_CHARS];
+static volatile int cmdq_head = 0;
+static volatile int cmdq_tail = 0;
+static volatile int cmdq_count = 0;
+
+static portMUX_TYPE cmdq_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static bool cmdq_push(const char* s) {
+  if (!s) return false;
+  portENTER_CRITICAL(&cmdq_mux);
+  if (cmdq_count >= CMDQ_MAX) {
+    portEXIT_CRITICAL(&cmdq_mux);
+    return false;
+  }
+  strncpy(cmdq[cmdq_tail], s, CMD_MAX_CHARS - 1);
+  cmdq[cmdq_tail][CMD_MAX_CHARS - 1] = 0;
+  cmdq_tail = (cmdq_tail + 1) % CMDQ_MAX;
+  cmdq_count++;
+  portEXIT_CRITICAL(&cmdq_mux);
+  return true;
+}
+
+static bool cmdq_pop(char* out, size_t out_sz) {
+  if (!out || out_sz == 0) return false;
+  portENTER_CRITICAL(&cmdq_mux);
+  if (cmdq_count <= 0) {
+    portEXIT_CRITICAL(&cmdq_mux);
+    return false;
+  }
+  strncpy(out, cmdq[cmdq_head], out_sz - 1);
+  out[out_sz - 1] = 0;
+  cmdq_head = (cmdq_head + 1) % CMDQ_MAX;
+  cmdq_count--;
+  portEXIT_CRITICAL(&cmdq_mux);
+  return true;
+}
+
+// ------------------ Baseline + quiet gate ------------------
+// Baseline collection in audio_task (no extra buffering)
+static volatile bool baseline_active = false;
+static volatile bool baseline_done = false;
+static volatile uint32_t baseline_remaining = 0;
+static volatile uint64_t baseline_sumsq = 0;
+
+static uint32_t baseline_target = 0;
+static uint16_t quiet_thr_rms_i16 = 0;   // RMS threshold in int16 units
+static int quiet_passes = 0;
+
+static constexpr int QUIET_WIN_MS = 100;        // RMS window for gate
+static constexpr int QUIET_CHECK_PERIOD_MS = 20;
+static constexpr int QUIET_NEED_PASSES = 5;     // require N consecutive passes
+
+static uint32_t last_quiet_check_ms = 0;
 
 // ------------------ CRC32 ------------------
 static uint32_t crc32(const uint8_t* d, size_t n) {
@@ -146,75 +221,77 @@ static void send_txtf(const char* fmt, ...) {
 
 // ------------------ Helpers ------------------
 static void to_lower_inplace(char* s) {
-  for (; *s; s++) *s = (char)tolower((unsigned char)*s);
+  for (; *s; s++) {
+    if (*s >= 'A' && *s <= 'Z') *s = (char)(*s - 'A' + 'a');
+  }
 }
 
-static bool parse_key_label(const char* s_in, int& out_note_i, int& out_oct) {
-  // Valid labels in this scheme:
-  // octave 0: a0, a#0, b0
-  // octave 1..6: a..g# (all)
-  // octave 7: a7 only
-  if (!s_in || !s_in[0]) return false;
-
-  char s[16] = {0};
-  strncpy(s, s_in, sizeof(s) - 1);
-  to_lower_inplace(s);
-
-  int idx = 0;
-  char l = s[idx++];
-  if (l < 'a' || l > 'g') return false;
-
-  char note[3] = {0,0,0};
-  note[0] = l;
-
-  if (s[idx] == '#') { note[1] = '#'; idx++; }
-
-  if (!isdigit((unsigned char)s[idx])) return false;
-  int oct = s[idx++] - '0';
-  if (s[idx] != '\0') return false;
-  if (oct < 0 || oct > 7) return false;
-
-  int ni = -1;
-  for (int i = 0; i < NOTE_COUNT; i++) {
-    if (strcmp(note, NOTE_SEQ[i]) == 0) { ni = i; break; }
+static bool streq(const char* a, const char* b) {
+  if (!a || !b) return false;
+  while (*a && *b) {
+    if (*a != *b) return false;
+    a++; b++;
   }
-  if (ni < 0) return false;
+  return *a == 0 && *b == 0;
+}
 
-  if (oct == 7 && ni != 0) return false; // only a7
-  if (oct == 0 && ni >= 3) return false; // no c0.. etc in your labeling
+// ------------------ Key parsing (a0..a7, a#0..g#7) ------------------
+static bool parse_key_label(const char* lbl, int& out_note_i, int& out_octave) {
+  // expects lowercase
+  // NOTE_SEQ order indexes: a=0, a#=1, b=2, c=3, c#=4, d=5, d#=6, e=7, f=8, f#=9, g=10, g#=11
+  if (!lbl || !lbl[0]) return false;
 
-  out_note_i = ni;
-  out_oct = oct;
+  char n0 = lbl[0];
+  if (n0 < 'a' || n0 > 'g') return false;
+
+  bool sharp = (lbl[1] == '#');
+  const char* oct_ptr = sharp ? (lbl + 2) : (lbl + 1);
+  if (!oct_ptr[0] || oct_ptr[1]) return false; // exactly one digit
+  char od = oct_ptr[0];
+  if (od < '0' || od > '7') return false;
+
+  char note_buf[3] = {0,0,0};
+  note_buf[0] = n0;
+  if (sharp) { note_buf[1] = '#'; note_buf[2] = 0; }
+  else { note_buf[1] = 0; }
+
+  int idx = -1;
+  for (int i = 0; i < NOTE_COUNT; i++) {
+    if (strcmp(note_buf, NOTE_SEQ[i]) == 0) { idx = i; break; }
+  }
+  if (idx < 0) return false;
+
+  out_note_i = idx;
+  out_octave = (od - '0');
   return true;
 }
 
 static void set_label_to_current_key() {
-  snprintf(label, sizeof(label), "%s%d", NOTE_SEQ[note_i], octave);
+  // builds label from note_i/octave in normalized format
+  char tmp[24] = {0};
+  snprintf(tmp, sizeof(tmp), "%s%d", NOTE_SEQ[note_i], octave);
+  memset(label, 0, sizeof(label));
+  strncpy(label, tmp, sizeof(label)-1);
 }
 
-// Advance in your required order:
-// - octave increments ONLY at b -> c (b0 -> c1)
-// - octave does NOT increment at g# -> a (g#1 -> a1)
 static bool next_chromatic_key() {
-  if (octave == 7 && note_i == 0) return false; // already at a7
+  // advance in NOTE_SEQ; octave increments when we roll over from g# to a
+  // End at a7 inclusive.
+  if (octave > 7) return false;
 
-  int next_note = note_i + 1;
-  int next_oct = octave;
+  int ni = note_i + 1;
+  int oc = octave;
+  if (ni >= NOTE_COUNT) { ni = 0; oc += 1; }
 
-  if (next_note >= NOTE_COUNT) {
-    next_note = 0; // g# -> a (same octave)
-  }
+  // Stop after a7 (note_i=0, octave=7). Next would be a#7, which we don't want.
+  if (oc > 7) return false;
 
-  if (note_i == 2 && next_note == 3) { // b -> c
-    next_oct = octave + 1;
-  }
+  note_i = ni;
+  octave = oc;
 
-  if (next_oct == 0 && next_note >= 3) return false;
-  if (next_oct == 7 && next_note != 0) return false;
-  if (next_oct > 7) return false;
+  // If we've advanced beyond a7? (i.e. octave==7 and note_i>0) => done.
+  if (octave == 7 && note_i > 0) return false;
 
-  note_i = next_note;
-  octave = next_oct;
   set_label_to_current_key();
   return true;
 }
@@ -223,18 +300,16 @@ static bool next_chromatic_key() {
 static void i2s_init() {
   i2s_config_t cfg = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-    .sample_rate = FS_HZ,
+    .sample_rate = (int)FS_HZ,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-#if defined(I2S_COMM_FORMAT_STAND_I2S)
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-#else
     .communication_format = I2S_COMM_FORMAT_I2S,
-#endif
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 4,
+    .dma_buf_count = 8,
     .dma_buf_len = 256,
-    .use_apll = false
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
   };
 
   i2s_pin_config_t pins = {
@@ -260,12 +335,68 @@ static void audio_task(void*) {
     for (int i = 0; i < n; i++) {
       int16_t s = (int16_t)(buf[i] >> 14);
 
+      // Baseline accumulation (no storage)
+      if (baseline_active && baseline_remaining > 0) {
+        int32_t si = (int32_t)s;
+        baseline_sumsq += (uint64_t)(si * (int64_t)si);
+        baseline_remaining--;
+        if (baseline_remaining == 0) {
+          baseline_active = false;
+          baseline_done = true;
+        }
+      }
+
       if (!ring_freeze) {
         ring[ring_write] = s;
         ring_write = (ring_write + 1) % TOTAL_SAMPLES;
       }
       // if frozen: discard samples but keep draining I2S
     }
+  }
+}
+
+// ------------------ Serial RX task ------------------
+static void serial_rx_task(void*) {
+  char line[CMD_MAX_CHARS];
+  int len = 0;
+
+  while (true) {
+    while (Serial.available()) {
+      char c = (char)Serial.read();
+
+      if (c == '\n' || c == '\r') {
+        line[len] = 0;
+
+        // trim leading/trailing spaces
+        int s = 0;
+        while (line[s] == ' ' || line[s] == '\t') s++;
+        int e = (int)strlen(line);
+        while (e > s && (line[e-1] == ' ' || line[e-1] == '\t')) e--;
+        line[e] = 0;
+
+        const char* trimmed = line + s;
+
+        // empty line => ENTER trigger token (stored as empty string)
+        if (trimmed[0] == 0) {
+          cmdq_push("");
+        } else {
+          if (!cmdq_push(trimmed)) {
+            // Queue full: drop newest (but keep going)
+            // We avoid printing raw Serial here; framed TXT is ok.
+            send_txt("warn cmdq full, dropped command");
+          }
+        }
+
+        len = 0;
+        continue;
+      }
+
+      if (len < (CMD_MAX_CHARS - 1)) {
+        line[len++] = c;
+      }
+    }
+
+    vTaskDelay(1);
   }
 }
 
@@ -358,16 +489,77 @@ static void send_capture_frames_from_ring(uint32_t cap_start, uint32_t clip_coun
 
     send_framed(da, q);
     offset += nsamp;
+
+    // allow other tasks (incl RX task) to run
     delay(0);
   }
 }
 
-// ------------------ Run flow ------------------
+// ------------------ Quiet gate helpers ------------------
+static void baseline_start_2s() {
+  baseline_done = false;
+  baseline_sumsq = 0;
+  baseline_target = FS_HZ * 2; // 2 seconds
+  baseline_remaining = baseline_target;
+  baseline_active = true;
+}
+
+static uint16_t compute_rms_i16_last_window(int win_ms) {
+  const uint32_t win_samp = (uint32_t)((FS_HZ * (uint32_t)win_ms) / 1000u);
+  if (win_samp < 8) return 0;
+
+  // snapshot head (avoid tearing)
+  uint32_t w = ring_write;
+
+  uint64_t ss = 0;
+  for (uint32_t i = 0; i < win_samp; i++) {
+    uint32_t idx = (w + TOTAL_SAMPLES - 1 - i) % TOTAL_SAMPLES;
+    int32_t s = (int32_t)ring[idx];
+    ss += (uint64_t)(s * (int64_t)s);
+  }
+
+  double mean = (double)ss / (double)win_samp;
+  double r = sqrt(mean);
+  if (r < 0) r = 0;
+  if (r > 32767.0) r = 32767.0;
+  return (uint16_t)lround(r);
+}
+
 static void prompt_next() {
   send_txtf("press %s rep %d/%d then hit enter", label, rep_idx, reps_per_label);
 }
 
-static void handle_start(const char* in_label, int reps) {
+// ------------------ Run flow ------------------
+static void begin_run_after_start() {
+  run_active = true;
+  quiet_passes = 0;
+  last_quiet_check_ms = 0;
+
+  if (run_mode == MODE_CLEAN) {
+    send_txt("baseline: stay silent for 2 seconds...");
+    baseline_start_2s();
+    run_state = ST_BASELINE;
+  } else {
+    run_state = ST_WAIT_ENTER;
+    prompt_next();
+  }
+}
+
+static void reset_run_state() {
+  run_active = false;
+  mode_chromatic = false;
+  run_state = ST_IDLE;
+  rep_idx = 1;
+  reps_per_label = 0;
+}
+
+static void handle_stop() {
+  reset_run_state();
+  send_txt("stopped");
+}
+
+// ------------------ Parse + handle start ------------------
+static void handle_start(const char* in_label, int reps, RunMode mode) {
   if (reps <= 0 || reps > 1000) {
     send_txt("err reps must be 1..1000");
     return;
@@ -379,6 +571,7 @@ static void handle_start(const char* in_label, int reps) {
 
   reps_per_label = reps;
   rep_idx = 1;
+  run_mode = mode;
 
   int ni = 0, oc = 0;
   if (parse_key_label(label, ni, oc)) {
@@ -386,24 +579,21 @@ static void handle_start(const char* in_label, int reps) {
     note_i = ni;
     octave = oc;
     set_label_to_current_key(); // normalized key label
-    send_txtf("run start %s reps/key=%d", label, reps_per_label);
+    send_txtf("run start %s reps/key=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   } else {
     mode_chromatic = false;
-    send_txtf("run start %s reps=%d", label, reps_per_label);
+    send_txtf("run start %s reps=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   }
 
-  run_active = true;
-  prompt_next();
-}
-
-static void handle_stop() {
-  run_active = false;
-  send_txt("stopped");
+  begin_run_after_start();
 }
 
 // ------------------ Enter trigger (capture + stream) ------------------
 static void handle_enter_trigger() {
   if (!run_active) return;
+  if (run_state != ST_WAIT_ENTER) return;
+
+  run_state = ST_CAPTURING;
 
   // Ensure ring is not frozen (shouldn't be), but be safe.
   ring_freeze = false;
@@ -441,20 +631,163 @@ static void handle_enter_trigger() {
 
     if (mode_chromatic) {
       if (!next_chromatic_key()) {
-        run_active = false;
+        reset_run_state();
         send_txt("done run");
         return;
       }
     } else {
-      run_active = false;
+      reset_run_state();
       send_txt("done run");
       return;
     }
   }
 
-  prompt_next();
+  // Between reps: in clean mode, gate; in stress, prompt immediately.
+  if (run_mode == MODE_CLEAN) {
+    quiet_passes = 0;
+    last_quiet_check_ms = 0;
+    send_txt("waiting for quiet...");
+    run_state = ST_WAIT_QUIET;
+  } else {
+    run_state = ST_WAIT_ENTER;
+    prompt_next();
+  }
 }
 
+// ------------------ Execute queued commands ------------------
+static void exec_command_line(const char* cmd_in) {
+  if (!cmd_in) return;
+
+  // Empty string => Enter trigger token
+  if (cmd_in[0] == 0) {
+    handle_enter_trigger();
+    return;
+  }
+
+  // work on a local mutable copy
+  char cmd[CMD_MAX_CHARS];
+  strncpy(cmd, cmd_in, sizeof(cmd) - 1);
+  cmd[sizeof(cmd) - 1] = 0;
+
+  // lowercase for parsing
+  to_lower_inplace(cmd);
+
+  // stop
+  if (streq(cmd, "stop")) {
+    handle_stop();
+    return;
+  }
+
+  // start <label> <reps> [clean|stress]
+  if (strncmp(cmd, "start ", 6) == 0) {
+    char lbl[24] = {0};
+    int reps = 0;
+    char mode_s[16] = {0};
+
+    int n = sscanf(cmd, "start %23s %d %15s", lbl, &reps, mode_s);
+    if (n < 2) {
+      send_txt("err usage: start <label> <reps> [clean|stress]");
+      return;
+    }
+
+    RunMode m = MODE_CLEAN; // default
+    if (n >= 3) {
+      if (strcmp(mode_s, "stress") == 0) m = MODE_STRESS;
+      else if (strcmp(mode_s, "clean") == 0) m = MODE_CLEAN;
+      else {
+        send_txt("err mode must be clean or stress");
+        return;
+      }
+    }
+
+    handle_start(lbl, reps, m);
+    return;
+  }
+
+  send_txt("err unknown cmd");
+}
+
+// ------------------ Clean-mode state ticks ------------------
+static void tick_baseline() {
+  if (!run_active || run_mode != MODE_CLEAN) return;
+  if (run_state != ST_BASELINE) return;
+
+  if (!baseline_done) {
+    // still collecting; yield
+    delay(2);
+    return;
+  }
+
+  // Compute baseline RMS (int16 units)
+  baseline_done = false;
+  uint64_t ss = baseline_sumsq;
+  uint32_t n = baseline_target;
+  if (n == 0) n = 1;
+
+  double mean = (double)ss / (double)n;
+  double rms = sqrt(mean);
+  if (rms < 0) rms = 0;
+
+  uint16_t rms_i16 = (uint16_t)min<double>(32767.0, rms);
+
+  // Adaptive threshold:
+  //   thr = rms * 3 + 50 counts
+  // This is intentionally simple + deterministic.
+  double thr = (double)rms_i16 * 3.0 + 50.0;
+  if (thr > 32767.0) thr = 32767.0;
+  quiet_thr_rms_i16 = (uint16_t)lround(thr);
+
+  send_txtf("baseline ok: rms_i16=%u thr_i16=%u", (unsigned)rms_i16, (unsigned)quiet_thr_rms_i16);
+
+  // Now gate before the first prompt
+  quiet_passes = 0;
+  last_quiet_check_ms = 0;
+  send_txt("waiting for quiet...");
+  run_state = ST_WAIT_QUIET;
+}
+
+static void tick_quiet_gate() {
+  if (!run_active || run_mode != MODE_CLEAN) return;
+  if (run_state != ST_WAIT_QUIET) return;
+
+  // Debounced periodic checks
+  uint32_t now = millis();
+  if (last_quiet_check_ms != 0 && (now - last_quiet_check_ms) < (uint32_t)QUIET_CHECK_PERIOD_MS) {
+    delay(2);
+    return;
+  }
+  last_quiet_check_ms = now;
+
+  uint16_t rms_i16 = compute_rms_i16_last_window(QUIET_WIN_MS);
+
+  // If threshold not set for some reason, be conservative.
+  uint16_t thr = quiet_thr_rms_i16;
+  if (thr == 0) thr = 200;
+
+  if (rms_i16 <= thr) {
+    quiet_passes++;
+  } else {
+    quiet_passes = 0;
+  }
+
+  if (quiet_passes >= QUIET_NEED_PASSES) {
+    quiet_passes = 0;
+    run_state = ST_WAIT_ENTER;
+    prompt_next();
+    return;
+  }
+
+  // occasional progress ping
+  static uint32_t last_ping = 0;
+  if (now - last_ping > 1000) {
+    last_ping = now;
+    send_txtf("quiet gate: rms_i16=%u thr_i16=%u", (unsigned)rms_i16, (unsigned)thr);
+  }
+
+  delay(2);
+}
+
+// ------------------ Setup/loop ------------------
 void setup() {
   Serial.begin(UART_BAUD);
   delay(300);
@@ -462,47 +795,41 @@ void setup() {
   i2s_init();
   xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 2, nullptr, 0);
 
+  // Serial RX task (higher priority than loop)
+  xTaskCreatePinnedToCore(serial_rx_task, "ser_rx", 4096, nullptr, 3, nullptr, 1);
+
   send_txt("ready");
 }
 
 void loop() {
-  static String line;
+  // Clean-mode state machine ticks
+  tick_baseline();
+  tick_quiet_gate();
 
-  while (Serial.available()) {
-    char c = (char)Serial.read();
+  // Execute queued commands sequentially.
+  // We still allow processing while waiting for baseline/quiet/etc.
+  // Only block command execution during CAPTURING (handle_enter_trigger will set/clear it).
+  if (run_state != ST_CAPTURING) {
+    char cmd[CMD_MAX_CHARS];
+    // Process a small batch each loop to stay responsive
+    for (int i = 0; i < 8; i++) {
+      if (!cmdq_pop(cmd, sizeof(cmd))) break;
 
-    if (c == '\n' || c == '\r') {
-      String cmd = line;
-      cmd.trim();
-      line = "";
-
-      if (cmd.length() == 0) {
-        handle_enter_trigger();
-        continue;
-      }
-
-      String cmd_l = cmd;
-      cmd_l.toLowerCase();
-
-      if (cmd_l.startsWith("start ")) {
-        char lbl[24] = {0};
-        int reps = 0;
-        if (sscanf(cmd_l.c_str(), "start %23s %d", lbl, &reps) == 2) {
-          handle_start(lbl, reps);
+      // If we are waiting for Enter, only ENTER token should trigger capture.
+      // But allow stop/start at any time.
+      if (cmd[0] == 0) {
+        // ENTER token
+        if (run_state == ST_WAIT_ENTER) {
+          exec_command_line(cmd);
         } else {
-          send_txt("err usage: start <label> <reps>");
+          // ignore stray empty lines when not prompted
         }
-        continue;
+      } else {
+        exec_command_line(cmd);
       }
 
-      if (cmd_l == "stop") {
-        handle_stop();
-        continue;
-      }
-
-      send_txt("err unknown cmd");
-    } else {
-      if (line.length() < 120) line += c;
+      // If a command caused capturing, stop this batch immediately.
+      if (run_state == ST_CAPTURING) break;
     }
   }
 

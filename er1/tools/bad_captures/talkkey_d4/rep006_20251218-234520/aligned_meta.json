@@ -1,0 +1,23 @@
+{
+  "label": "talkkey_d4",
+  "rep_dir": "rep006_20251218-234520",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 13824,
+  "onset_minus_enter_ms": -12.0,
+  "align_window_samples": [
+    12864,
+    25824
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": false,
+  "qc_flags": [
+    "onset_before_lead"
+  ],
+  "rms_pre": 0.00172128074336797,
+  "rms_post": 0.019571611657738686,
+  "peak": 0.109466552734375,
+  "snr_db": 21.11549299142624,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

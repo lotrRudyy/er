@@ -1,0 +1,21 @@
+{
+  "label": "talkkey_b1",
+  "rep_dir": "rep004_20251218-234254",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 16640,
+  "onset_minus_enter_ms": 46.666666666666664,
+  "align_window_samples": [
+    15680,
+    28640
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": true,
+  "qc_flags": [],
+  "rms_pre": 0.001347371842712164,
+  "rms_post": 0.02653765305876732,
+  "peak": 0.09930419921875,
+  "snr_db": 25.88749477611088,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

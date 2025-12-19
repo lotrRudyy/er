@@ -1,0 +1,21 @@
+{
+  "label": "c#3",
+  "rep_dir": "rep009_20251218-232744",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 14848,
+  "onset_minus_enter_ms": 9.333333333333334,
+  "align_window_samples": [
+    13888,
+    26848
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": true,
+  "qc_flags": [],
+  "rms_pre": 0.0009998537134379148,
+  "rms_post": 0.03579423949122429,
+  "peak": 0.147796630859375,
+  "snr_db": 31.07752506810058,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

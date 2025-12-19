@@ -1,0 +1,21 @@
+{
+  "label": "a3",
+  "rep_dir": "rep003_20251218-233118",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 16128,
+  "onset_minus_enter_ms": 36.0,
+  "align_window_samples": [
+    15168,
+    28128
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": true,
+  "qc_flags": [],
+  "rms_pre": 0.0008407426066696644,
+  "rms_post": 0.025703372433781624,
+  "peak": 0.11517333984375,
+  "snr_db": 29.706531049963733,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

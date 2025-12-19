@@ -1,0 +1,23 @@
+{
+  "label": "f#4",
+  "rep_dir": "rep006_20251218-233712",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": 13312,
+  "onset_minus_enter_ms": -22.666666666666668,
+  "align_window_samples": [
+    12352,
+    25312
+  ],
+  "aligned_nsamples": 12960,
+  "qc_ok": false,
+  "qc_flags": [
+    "onset_before_lead"
+  ],
+  "rms_pre": 0.0010310058714821935,
+  "rms_post": 0.015551098622381687,
+  "peak": 0.069671630859375,
+  "snr_db": 23.56999087472124,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}

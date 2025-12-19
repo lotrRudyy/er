@@ -1,0 +1,16 @@
+{
+  "label": "silence",
+  "rep_dir": "rep004_20251218-233821",
+  "fs": 48000,
+  "enter_sample": 14400,
+  "onset_sample": null,
+  "onset_minus_enter_ms": null,
+  "qc_ok": true,
+  "qc_flags": [],
+  "rms_pre": 0.0007100907969288528,
+  "rms_post": 0.0007343864417634904,
+  "peak": 0.002197265625,
+  "snr_db": 0.2922149208744439,
+  "pre_align_ms": 20,
+  "post_align_ms": 250
+}
