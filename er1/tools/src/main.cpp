@@ -4,6 +4,7 @@
 //
 // Commands (ASCII lines, '\n' or '\r' terminated):
 //   start <label> <reps> [clean|stress]
+//   start <start_key> <end_key> <reps> [clean|stress]   (keys only; stops at end_key)
 //     - default mode: clean
 //     - if <label> parses as piano key (a0..a7 with optional #):
 //         chromatic auto-advance in THIS order:
@@ -91,6 +92,11 @@ static const char* NOTE_SEQ[] = {"a","a#","b","c","c#","d","d#","e","f","f#","g"
 static constexpr int NOTE_COUNT = 12;
 static int note_i = 0;   // index in NOTE_SEQ
 static int octave = 0;   // piano-style octaves for your labels
+
+// Optional chromatic end key limit (when using start <start_key> <end_key> <reps> [mode])
+static bool chromatic_has_end = false;
+static int end_note_i = 0;
+static int end_octave = 0;
 
 // ------------------ Command queue (lines) ------------------
 static constexpr int CMDQ_MAX = 64;
@@ -264,6 +270,15 @@ static bool parse_key_label(const char* lbl, int& out_note_i, int& out_octave) {
   out_note_i = idx;
   out_octave = (od - '0');
   return true;
+}
+
+static inline int key_index(int ni, int oc) {
+  return oc * NOTE_COUNT + ni;
+}
+
+static inline bool chromatic_end_is_exact_current() {
+  if (!chromatic_has_end) return false;
+  return key_index(note_i, octave) == key_index(end_note_i, end_octave);
 }
 
 static void set_label_to_current_key() {
@@ -548,6 +563,9 @@ static void begin_run_after_start() {
 static void reset_run_state() {
   run_active = false;
   mode_chromatic = false;
+  chromatic_has_end = false;
+  end_note_i = 0;
+  end_octave = 0;
   run_state = ST_IDLE;
   rep_idx = 1;
   reps_per_label = 0;
@@ -576,12 +594,14 @@ static void handle_start(const char* in_label, int reps, RunMode mode) {
   int ni = 0, oc = 0;
   if (parse_key_label(label, ni, oc)) {
     mode_chromatic = true;
+    chromatic_has_end = false;
     note_i = ni;
     octave = oc;
     set_label_to_current_key(); // normalized key label
     send_txtf("run start %s reps/key=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   } else {
     mode_chromatic = false;
+    chromatic_has_end = false;
     send_txtf("run start %s reps=%d mode=%s", label, reps_per_label, (run_mode == MODE_CLEAN ? "clean" : "stress"));
   }
 
@@ -630,6 +650,12 @@ static void handle_enter_trigger() {
     rep_idx = 1;
 
     if (mode_chromatic) {
+      // If this chromatic run has an explicit end key, stop after completing that key.
+      if (chromatic_end_is_exact_current()) {
+        reset_run_state();
+        send_txt("done run");
+        return;
+      }
       if (!next_chromatic_key()) {
         reset_run_state();
         send_txt("done run");
@@ -678,22 +704,104 @@ static void exec_command_line(const char* cmd_in) {
     return;
   }
 
-  // start <label> <reps> [clean|stress]
+  // start command forms:
+  //   1) start <label> <reps> [clean|stress]
+  //   2) start <start_key> <end_key> <reps> [clean|stress]   (keys only; chromatic stops at end_key)
   if (strncmp(cmd, "start ", 6) == 0) {
-    char lbl[24] = {0};
-    int reps = 0;
-    char mode_s[16] = {0};
+    // Tokenize (simple whitespace split)
+    const int MAX_TOK = 6;
+    const char* tok[MAX_TOK] = {0};
+    int nt = 0;
 
-    int n = sscanf(cmd, "start %23s %d %15s", lbl, &reps, mode_s);
-    if (n < 2) {
-      send_txt("err usage: start <label> <reps> [clean|stress]");
+    char* save = nullptr;
+    char* p = strtok_r(cmd, " \t", &save);
+    while (p && nt < MAX_TOK) {
+      tok[nt++] = p;
+      p = strtok_r(nullptr, " \t", &save);
+    }
+
+    if (nt < 3) {
+      send_txt("err usage: start <label> <reps> [clean|stress]  OR  start <start_key> <end_key> <reps> [clean|stress]");
       return;
     }
 
+    auto is_int = [](const char* s) -> bool {
+      if (!s || !*s) return false;
+      if (*s == '+' || *s == '-') s++;
+      if (!*s) return false;
+      while (*s) { if (*s < '0' || *s > '9') return false; s++; }
+      return true;
+    };
+
     RunMode m = MODE_CLEAN; // default
-    if (n >= 3) {
-      if (strcmp(mode_s, "stress") == 0) m = MODE_STRESS;
-      else if (strcmp(mode_s, "clean") == 0) m = MODE_CLEAN;
+    const char* mode_tok = nullptr;
+
+    // Range form: start <start_key> <end_key> <reps> [mode]
+    if (nt >= 4 && !is_int(tok[2]) && is_int(tok[3])) {
+      const char* start_lbl = tok[1];
+      const char* end_lbl   = tok[2];
+      int reps = atoi(tok[3]);
+      if (nt >= 5) mode_tok = tok[4];
+
+      if (mode_tok) {
+        if (strcmp(mode_tok, "stress") == 0) m = MODE_STRESS;
+        else if (strcmp(mode_tok, "clean") == 0) m = MODE_CLEAN;
+        else {
+          send_txt("err mode must be clean or stress");
+          return;
+        }
+      }
+
+      int sni = 0, soc = 0, eni = 0, eoc = 0;
+      if (!parse_key_label(start_lbl, sni, soc)) {
+        send_txt("err range start must be key like a0..g#7");
+        return;
+      }
+      if (!parse_key_label(end_lbl, eni, eoc)) {
+        send_txt("err range end must be key like a0..g#7");
+        return;
+      }
+
+      int sidx = key_index(sni, soc);
+      int eidx = key_index(eni, eoc);
+      int a7idx = key_index(0, 7); // a7
+      if (sidx < 0 || eidx < 0 || sidx > a7idx || eidx > a7idx) {
+        send_txt("err key range must be within a0..a7");
+        return;
+      }
+      if (eidx < sidx) {
+        send_txt("err end_key must be >= start_key");
+        return;
+      }
+
+      // Set explicit end key for this chromatic run.
+      chromatic_has_end = true;
+      end_note_i = eni;
+      end_octave = eoc;
+
+      // Start from the requested start label (handle_start normalizes + starts run).
+      handle_start(start_lbl, reps, m);
+
+      // handle_start() clears chromatic_has_end in key mode; restore it.
+      chromatic_has_end = true;
+      end_note_i = eni;
+      end_octave = eoc;
+      return;
+    }
+
+    // Old form: start <label> <reps> [mode]
+    if (!is_int(tok[2])) {
+      send_txt("err usage: start <label> <reps> [clean|stress]  OR  start <start_key> <end_key> <reps> [clean|stress]");
+      return;
+    }
+
+    const char* lbl = tok[1];
+    int reps = atoi(tok[2]);
+    if (nt >= 4) mode_tok = tok[3];
+
+    if (mode_tok) {
+      if (strcmp(mode_tok, "stress") == 0) m = MODE_STRESS;
+      else if (strcmp(mode_tok, "clean") == 0) m = MODE_CLEAN;
       else {
         send_txt("err mode must be clean or stress");
         return;

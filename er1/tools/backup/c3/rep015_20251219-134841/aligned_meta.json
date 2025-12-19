@@ -1,0 +1,30 @@
+{
+  "aligned": {
+    "onset_sample": 15120,
+    "onset_ms": 315.0,
+    "pre_align_ms": 0,
+    "post_align_ms": 300,
+    "slice_start_sample": 15120,
+    "slice_end_sample": 29520,
+    "nsamples": 14400
+  },
+  "qc": {
+    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures\\c3\\rep015_20251219-134841",
+    "label": "c3",
+    "fs": 48000,
+    "pre_ms": 300,
+    "lead_ms": 0,
+    "post_ms": 400,
+    "peak": 0.150390625,
+    "clip": 0,
+    "rms_pre": 0.0004964122199453413,
+    "rms_post": 0.053231943398714066,
+    "snr_proxy_db": 40.6065798250767,
+    "onset_sample": 15120,
+    "onset_ms_est": 315.0,
+    "onset_minus_enter_ms": 15.0,
+    "flags": [],
+    "is_bad": false,
+    "status": "ok"
+  }
+}

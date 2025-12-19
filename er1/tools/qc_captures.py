@@ -1,54 +1,3 @@
-#!/usr/bin/env python3
-"""
-qc_captures.py
-
-QC + aligned exports + redo generation for ESP32 piano captures.
-
-Inputs:
-  captures/<label>/repNNN_YYYYMMDD-HHMMSS/
-    raw_audio_i16.raw   (int16 LE mono)
-    meta.json           (fs, pre_ms, lead_ms, post_ms, enter_sample, etc.)
-
-Outputs:
-  - optionally writes aligned export per rep (NON-silence only):
-      aligned_i16.raw
-      aligned_meta.json
-  - optionally moves bad reps to:
-      bad_captures/<label>/repNNN_YYYYMMDD-HHMMSS/
-  - writes redo.txt with:
-      start <label> 1
-    repeated per bad rep
-
-Hard rules implemented:
-  - Never delete anything
-  - Only move the rep folder (never a whole label folder)
-  - Only classification is OK vs BAD
-
-Label policy:
-  silence:
-    - 'too_quiet' does NOT apply
-    - fail if not silent enough (RMS too high)
-    - onset is NOT computed and NOT required
-    - aligned exports are NOT written for silence
-
-  template keys: labels like c4, f#3, a0, a#0
-    - require quiet pre (noisy_pre disallowed)
-    - require onset found
-    - require SNR proxy above threshold
-    - bad if onset occurs before Enter (onset_minus_enter_ms < -lead_ms). With lead usually 0, this is onset < enter.
-
-  stress: talk, talkkey_*
-    - allow noisy pre
-    - require onset found (as requested)
-    - looser SNR thresholds
-
-Onset detection:
-  - Uses short-time RMS over hop samples (default hop=256), window=hop
-  - Pre statistics computed from frames strictly before enter_sample
-  - Threshold: thr = pre_mean + K * pre_std, with fallback multiplier when std tiny
-  - Onset is first frame after (enter_sample - search_back_ms) crossing thr for NEED_CONSEC frames
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -57,478 +6,534 @@ import math
 import re
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 
-KEY_RE = re.compile(r"^[a-g](#)?[0-7]$")  # lowercase only
-TALKKEY_RE = re.compile(r"^talkkey_.+$")
+# ------------------------------
+# Label classification
+# ------------------------------
+KEY_RE = re.compile(r"^[a-g](#?)[0-7]$")          # a0..a7, c#4 etc (lowercase)
+TALKKEY_RE = re.compile(r"^talkkey_.+$")         # talkkey_c4, talkkey_a0, etc
+REP_DIR_RE = re.compile(r"^rep\d{3}_\d{8}-\d{6}$", re.IGNORECASE)
 
 
-def is_key_label(lbl: str) -> bool:
-    return bool(KEY_RE.match(lbl))
-
-
-def is_silence(lbl: str) -> bool:
-    return lbl == "silence"
-
-
-def is_stress(lbl: str) -> bool:
-    return lbl == "talk" or bool(TALKKEY_RE.match(lbl))
-
-
-def ensure_lower(s: str) -> str:
+def norm_label(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def is_key_label(lbl: str) -> bool:
+    return KEY_RE.match(lbl) is not None
+
+
+def is_talkkey_label(lbl: str) -> bool:
+    return TALKKEY_RE.match(lbl) is not None
+
+
+def should_qc_label(lbl: str, include_talkkey: bool) -> bool:
+    if is_key_label(lbl):
+        return True
+    if include_talkkey and is_talkkey_label(lbl):
+        return True
+    return False
+
+
+# ------------------------------
+# QC thresholds
+# ------------------------------
 @dataclass
-class QCResult:
-    ok: bool
-    flags: List[str]
-    onset_sample: Optional[int]
-    onset_minus_enter_ms: Optional[float]
-    rms_pre: float
-    rms_post: float
-    peak: float
-    snr_db: Optional[float]
+class QcCfg:
+    # strict (template keys)
+    min_peak: float = 0.03
+    min_snr_db: float = 20.0
+    max_rms_pre: float = 0.005
+
+    # relaxed for talkkey_* (stress)
+    talkkey_min_peak: float = 0.03
+    talkkey_min_snr_db: float = 16.0
+    talkkey_max_rms_pre: float = 0.012
+
+    # onset acceptance vs enter
+    reject_onset_before_lead: bool = True
+    reject_onset_after_post: bool = True
+
+    # onset detector parameters
+    onset_f_lo: float = 80.0
+    onset_f_hi: float = 3500.0
+    onset_frame_ms: float = 10.0
+    onset_hop_ms: float = 5.0
+    onset_consec: int = 2
+    onset_k_sigma: float = 6.0
+
+    # aligned export window (ms) relative to detected onset
+    pre_align_ms: int = 0
+    post_align_ms: int = 300
 
 
-def read_rep(rep_dir: Path) -> Tuple[np.ndarray, Dict]:
-    meta_path = rep_dir / "meta.json"
-    raw_path = rep_dir / "raw_audio_i16.raw"
-    if not meta_path.exists() or not raw_path.exists():
-        raise FileNotFoundError("missing meta.json or raw_audio_i16.raw")
-
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    fs = int(meta["fs"])
-    nsamples = int(meta.get("nsamples", meta.get("total_samples")))
-    pcm = np.fromfile(raw_path, dtype="<i2")
-    if pcm.size != nsamples:
-        # tolerate mismatch but flag later (if you want, add a flag here)
-        pass
-    return pcm.astype(np.int16, copy=False), meta
-
+# ------------------------------
+# Utilities
+# ------------------------------
 
 def rms(x: np.ndarray) -> float:
     if x.size == 0:
         return 0.0
-    xf = x.astype(np.float32) / 32768.0
-    return float(np.sqrt(np.mean(xf * xf) + 1e-12))
+    return float(np.sqrt(np.mean(x * x)))
 
 
-def peak_abs(x: np.ndarray) -> float:
-    if x.size == 0:
-        return 0.0
-    return float(np.max(np.abs(x.astype(np.float32) / 32768.0)))
+def safe_log10(x: float) -> float:
+    return math.log10(max(1e-12, x))
 
 
-def frame_rms_series(x: np.ndarray, hop: int) -> np.ndarray:
-    # window = hop, stride = hop (deterministic)
-    n = x.size
-    nframes = n // hop
-    if nframes <= 0:
-        return np.zeros((0,), dtype=np.float32)
-    x = x[: nframes * hop].astype(np.float32) / 32768.0
-    x = x.reshape(nframes, hop)
-    return np.sqrt(np.mean(x * x, axis=1) + 1e-12)
+def read_capture(rep_folder: Path) -> Tuple[np.ndarray, Dict[str, Any]]:
+    meta_path = rep_folder / "meta.json"
+    raw_path = rep_folder / "raw_audio_i16.raw"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Missing meta.json: {meta_path}")
+    if not raw_path.exists():
+        raise FileNotFoundError(f"Missing raw_audio_i16.raw: {raw_path}")
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    pcm = np.fromfile(str(raw_path), dtype=np.int16)
+    x = pcm.astype(np.float32) / 32768.0
+    return x, meta
 
 
-def detect_onset(
+def move_rep_to_bad(rep_folder: Path, bad_dir: Path) -> Path:
+    """Move captures/<label>/<rep...>/ -> bad_captures/<label>/<rep...>/"""
+    rep_folder = rep_folder.resolve()
+    label = rep_folder.parent.name.lower()
+    rep_name = rep_folder.name
+
+    dest = bad_dir.resolve() / label / rep_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest.exists():
+        suffix = datetime.now().strftime("%H%M%S")
+        dest = bad_dir.resolve() / label / f"{rep_name}_dup{suffix}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+    shutil.move(str(rep_folder), str(dest))
+    return dest
+
+
+# ------------------------------
+# Onset detector (spectral flux)
+# ------------------------------
+
+def spectral_flux_onset(
     x: np.ndarray,
     fs: int,
     enter_sample: int,
-    hop: int,
-    search_back_ms: int = 50,
-    k_rms: float = 3.0,
-    need_consec: int = 2,
+    search_pre_ms: int,
+    search_post_ms: int,
+    frame_ms: float,
+    hop_ms: float,
+    f_lo: float,
+    f_hi: float,
+    consec: int,
+    k_sigma: float,
 ) -> Optional[int]:
-    """
-    Returns onset sample index (in samples), or None if not found.
-    Onset is detected in RMS frame domain.
-    """
-    if x.size < hop * 4:
+    n = x.size
+    if n < 128:
         return None
 
-    fr = frame_rms_series(x, hop)
-    if fr.size == 0:
+    hop = max(1, int(round(fs * hop_ms / 1000.0)))
+    win = max(64, int(round(fs * frame_ms / 1000.0)))
+    nfft = 1
+    while nfft < win:
+        nfft <<= 1
+
+    s0 = max(0, enter_sample - int(round(fs * search_pre_ms / 1000.0)))
+    s1 = min(n, enter_sample + int(round(fs * search_post_ms / 1000.0)))
+    if s1 - s0 < win:
         return None
 
-    enter_frame = max(0, min(fr.size - 1, enter_sample // hop))
-    # Use all frames strictly before enter_frame for baseline
-    pre_end = max(1, enter_frame)
-    pre = fr[:pre_end]
+    b1 = max(0, min(n, enter_sample))
+    b0 = max(0, b1 - int(round(fs * 60 / 1000.0)))
 
-    pre_mean = float(np.mean(pre))
-    pre_std = float(np.std(pre))
+    start = min(b0, s0)
+    stop = max(b1, s1)
 
-    thr = pre_mean + k_rms * pre_std
-    if pre_std < 1e-6:
-        thr = max(thr, pre_mean * 3.0)
+    freqs = np.fft.rfftfreq(nfft, d=1.0 / fs)
+    k0 = int(np.searchsorted(freqs, f_lo, side="left"))
+    k1 = int(np.searchsorted(freqs, f_hi, side="right"))
+    k0 = max(1, k0)
+    k1 = min(freqs.size - 1, k1)
 
-    # allow search to start slightly before enter to catch early attack
-    back_frames = int(round((fs * (search_back_ms / 1000.0)) / hop))
-    start_frame = max(0, enter_frame - back_frames)
+    w = np.hanning(win).astype(np.float32)
 
-    consec = 0
-    for fi in range(start_frame, fr.size):
-        if fr[fi] >= thr:
-            consec += 1
-            if consec >= need_consec:
-                onset_frame = fi - need_consec + 1
-                return int(onset_frame * hop)
+    mags_prev = None
+    flux_vals: List[float] = []
+    frame_starts: List[int] = []
+
+    for st in range(start, stop - win + 1, hop):
+        seg = x[st:st + win] * w
+        spec = np.fft.rfft(seg, n=nfft)
+        mags = np.abs(spec).astype(np.float32)[k0:k1]
+
+        if mags_prev is None:
+            flux = 0.0
         else:
-            consec = 0
+            diff = mags - mags_prev
+            diff[diff < 0] = 0
+            flux = float(np.sum(diff))
+        mags_prev = mags
+
+        flux_vals.append(flux)
+        frame_starts.append(st)
+
+    flux_vals_np = np.asarray(flux_vals, dtype=np.float32)
+    frame_starts_np = np.asarray(frame_starts, dtype=np.int32)
+
+    base_mask = (frame_starts_np >= b0) & (frame_starts_np < b1)
+    base = flux_vals_np[base_mask]
+    if base.size < 8:
+        mu = float(np.mean(flux_vals_np))
+        sd = float(np.std(flux_vals_np))
+    else:
+        mu = float(np.mean(base))
+        sd = float(np.std(base))
+
+    thr = mu + k_sigma * sd if sd > 1e-9 else (mu * 10.0 + 1e-9)
+
+    search_mask = (frame_starts_np >= s0) & (frame_starts_np < s1)
+    idxs = np.where(search_mask)[0]
+    if idxs.size == 0:
+        return None
+
+    hit = 0
+    for i in idxs:
+        if flux_vals_np[i] > thr:
+            hit += 1
+            if hit >= consec:
+                onset_i = i - (consec - 1)
+                return int(frame_starts_np[onset_i])
+        else:
+            hit = 0
 
     return None
 
 
-def qc_one(
-    label: str,
-    x: np.ndarray,
-    meta: Dict,
-    hop: int,
-    # thresholds (float in [-1,1] domain)
-    peak_min: float = 0.02,
-    # silence: must be below this RMS
-    silence_rms_max: float = 0.0020,
-    # template: noisy pre threshold
-    template_rms_pre_max: float = 0.0030,
-    # snr thresholds (dB)
-    template_snr_min_db: float = 14.0,
-    stress_snr_min_db: float = 8.0,
-) -> QCResult:
-    fs = int(meta["fs"])
-    enter_sample = int(
-        meta.get(
-            "enter_sample",
-            int(round(fs * (int(meta["pre_ms"]) + int(meta["lead_ms"])) / 1000.0)),
-        )
+def write_aligned_exports(rep_folder: Path, x: np.ndarray, fs: int, onset_sample: int, cfg: QcCfg, qc_result: Dict[str, Any]) -> None:
+    pre = int(round(fs * (cfg.pre_align_ms / 1000.0)))
+    post = int(round(fs * (cfg.post_align_ms / 1000.0)))
+    a0 = max(0, onset_sample - pre)
+    a1 = min(x.size, onset_sample + post)
+
+    aligned_i16 = np.clip(x[a0:a1] * 32768.0, -32768, 32767).astype(np.int16)
+
+    out_raw = rep_folder / "aligned_i16.raw"
+    out_meta = rep_folder / "aligned_meta.json"
+
+    out_raw.write_bytes(aligned_i16.tobytes())
+
+    meta_out = {
+        "aligned": {
+            "onset_sample": int(onset_sample),
+            "onset_ms": float(1000.0 * onset_sample / fs),
+            "pre_align_ms": int(cfg.pre_align_ms),
+            "post_align_ms": int(cfg.post_align_ms),
+            "slice_start_sample": int(a0),
+            "slice_end_sample": int(a1),
+            "nsamples": int(a1 - a0),
+        },
+        "qc": qc_result,
+    }
+    out_meta.write_text(json.dumps(meta_out, indent=2), encoding="utf-8")
+
+
+# ------------------------------
+# Core QC: one rep
+# ------------------------------
+
+def qc_one_rep(
+    rep_folder: Path,
+    cfg: QcCfg,
+    include_talkkey: bool,
+    move_bad: bool,
+    bad_dir: Path,
+    write_aligned: bool,
+) -> Dict[str, Any]:
+    rep_folder = rep_folder.resolve()
+
+    try:
+        x, meta = read_capture(rep_folder)
+    except Exception as e:
+        return {
+            "rep_folder": str(rep_folder),
+            "status": "error",
+            "error": str(e),
+            "is_bad": True,
+            "flags": ["read_error"],
+        }
+
+    lbl = norm_label(meta.get("label", rep_folder.parent.name))
+    fs = int(meta.get("fs", 48000))
+    pre_ms = int(meta.get("pre_ms", 0))
+    lead_ms = int(meta.get("lead_ms", 0))
+    post_ms = int(meta.get("post_ms", 0))
+
+    if not should_qc_label(lbl, include_talkkey=include_talkkey):
+        return {
+            "rep_folder": str(rep_folder),
+            "status": "skipped",
+            "label": lbl,
+            "reason": "label_not_qc",
+            "is_bad": False,
+            "flags": [],
+        }
+
+    enter_ms = pre_ms + lead_ms
+    enter_sample = int(round(fs * enter_ms / 1000.0))
+
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    pcm_i16 = np.clip(x * 32768.0, -32768, 32767).astype(np.int16, copy=False)
+    clip = int(np.sum((pcm_i16 == 32767) | (pcm_i16 == -32768)))
+
+    pre_n = int(round(fs * pre_ms / 1000.0))
+    prelead_n = int(round(fs * (pre_ms + lead_ms) / 1000.0))
+    x_pre = x[:pre_n]
+    x_post = x[prelead_n:] if prelead_n < x.size else np.array([], dtype=np.float32)
+
+    rms_pre = rms(x_pre)
+    rms_post = rms(x_post)
+    snr_proxy_db = 20.0 * safe_log10((rms_post + 1e-9) / (rms_pre + 1e-9))
+
+    search_pre_ms = int(max(50, lead_ms + 80))
+    search_post_ms = 150
+
+    onset_sample = spectral_flux_onset(
+        x=x,
+        fs=fs,
+        enter_sample=enter_sample,
+        search_pre_ms=search_pre_ms,
+        search_post_ms=search_post_ms,
+        frame_ms=cfg.onset_frame_ms,
+        hop_ms=cfg.onset_hop_ms,
+        f_lo=cfg.onset_f_lo,
+        f_hi=cfg.onset_f_hi,
+        consec=cfg.onset_consec,
+        k_sigma=cfg.onset_k_sigma,
     )
-    lead_ms = int(meta["lead_ms"])
-    post_ms = int(meta["post_ms"])
 
-    # windows
-    pre_end = max(0, min(x.size, enter_sample))
-    post_start = pre_end
-    post_end = min(x.size, post_start + int(round(fs * (post_ms / 1000.0))))
+    onset_ms = (1000.0 * onset_sample / fs) if onset_sample is not None else None
+    onset_minus_enter_ms = (onset_ms - enter_ms) if onset_ms is not None else None
 
-    x_pre = x[:pre_end]
-    x_post = x[post_start:post_end] if post_end > post_start else x[post_start:]
-
-    r_pre = rms(x_pre)
-    r_post = rms(x_post)
-    pk = peak_abs(x)
+    if is_talkkey_label(lbl):
+        min_peak = cfg.talkkey_min_peak
+        min_snr_db = cfg.talkkey_min_snr_db
+        max_rms_pre = cfg.talkkey_max_rms_pre
+    else:
+        min_peak = cfg.min_peak
+        min_snr_db = cfg.min_snr_db
+        max_rms_pre = cfg.max_rms_pre
 
     flags: List[str] = []
 
-    # label type
-    lbl = ensure_lower(label)
-
-    # ---------------- Silence policy ----------------
-    # IMPORTANT: silence has no onset. Do NOT attempt onset detection and do NOT align it.
-    if is_silence(lbl):
-        onset_samp = None
-        onset_minus_enter_ms = None
-
-        snr_db: Optional[float] = None
-        if r_pre > 1e-9:
-            snr_db = 20.0 * math.log10((r_post + 1e-9) / (r_pre + 1e-9))
-
-        # don't apply too_quiet; instead enforce "is actually silent"
-        if r_post > silence_rms_max or r_pre > silence_rms_max:
-            flags.append("not_silent")
-
-        ok = len(flags) == 0
-        return QCResult(
-            ok=ok,
-            flags=flags,
-            onset_sample=onset_samp,
-            onset_minus_enter_ms=onset_minus_enter_ms,
-            rms_pre=r_pre,
-            rms_post=r_post,
-            peak=pk,
-            snr_db=snr_db,
-        )
-
-    # ---------------- Onset detection (non-silence only) ----------------
-    onset_samp = detect_onset(x, fs=fs, enter_sample=enter_sample, hop=hop)
-    onset_minus_enter_ms: Optional[float] = None
-    if onset_samp is not None:
-        onset_minus_enter_ms = 1000.0 * (onset_samp - enter_sample) / float(fs)
-
-    snr_db: Optional[float] = None
-    if r_pre > 1e-9:
-        snr_db = 20.0 * math.log10((r_post + 1e-9) / (r_pre + 1e-9))
-
-    # ---------------- Common: too_quiet (non-silence only) ----------------
-    if pk < peak_min:
+    if clip > 0:
+        flags.append("clipped")
+    if peak < min_peak:
         flags.append("too_quiet")
+    if rms_pre > max_rms_pre:
+        flags.append("noisy_pre")
+    if snr_proxy_db < min_snr_db:
+        flags.append("low_snr")
 
-    # ---------------- Template keys (clean) ----------------
-    if is_key_label(lbl):
-        if r_pre > template_rms_pre_max:
-            flags.append("noisy_pre")
+    if onset_sample is None:
+        flags.append("no_onset_found")
+    else:
+        if cfg.reject_onset_before_lead and onset_minus_enter_ms is not None and onset_minus_enter_ms < -lead_ms:
+            flags.append("onset_before_lead")
+        if cfg.reject_onset_after_post and onset_minus_enter_ms is not None and onset_minus_enter_ms > post_ms:
+            flags.append("onset_after_post")
 
-        if onset_samp is None:
-            flags.append("no_onset")
-        else:
-            # onset_before_lead: onset_minus_enter_ms < -lead_ms
-            if onset_minus_enter_ms is not None and onset_minus_enter_ms < -float(lead_ms):
-                flags.append("onset_before_lead")
+    is_bad = (len(flags) > 0)
 
-        if snr_db is None or snr_db < template_snr_min_db:
-            flags.append("low_snr")
-
-        ok = len(flags) == 0
-        return QCResult(
-            ok=ok,
-            flags=flags,
-            onset_sample=onset_samp,
-            onset_minus_enter_ms=onset_minus_enter_ms,
-            rms_pre=r_pre,
-            rms_post=r_post,
-            peak=pk,
-            snr_db=snr_db,
-        )
-
-    # ---------------- Stress labels ----------------
-    if is_stress(lbl):
-        if onset_samp is None:
-            flags.append("no_onset")
-        else:
-            if onset_minus_enter_ms is not None and onset_minus_enter_ms < -float(lead_ms):
-                flags.append("onset_before_lead")
-
-        if snr_db is None or snr_db < stress_snr_min_db:
-            flags.append("low_snr")
-
-        ok = len(flags) == 0
-        return QCResult(
-            ok=ok,
-            flags=flags,
-            onset_sample=onset_samp,
-            onset_minus_enter_ms=onset_minus_enter_ms,
-            rms_pre=r_pre,
-            rms_post=r_post,
-            peak=pk,
-            snr_db=snr_db,
-        )
-
-    # ---------------- Default policy for unknown labels ----------------
-    # Be conservative: require onset + non-trivial amplitude
-    if onset_samp is None:
-        flags.append("no_onset")
-    ok = len(flags) == 0
-    return QCResult(
-        ok=ok,
-        flags=flags,
-        onset_sample=onset_samp,
-        onset_minus_enter_ms=onset_minus_enter_ms,
-        rms_pre=r_pre,
-        rms_post=r_post,
-        peak=pk,
-        snr_db=snr_db,
-    )
-
-
-def safe_move_rep(rep_dir: Path, bad_root: Path) -> Path:
-    """
-    Move rep_dir to bad_root/<label>/<repdir_name>, avoiding collisions.
-    Returns destination path.
-    """
-    label = rep_dir.parent.name
-    dst_parent = bad_root / label
-    dst_parent.mkdir(parents=True, exist_ok=True)
-    dst = dst_parent / rep_dir.name
-
-    if not dst.exists():
-        shutil.move(str(rep_dir), str(dst))
-        return dst
-
-    # collision: add suffix
-    k = 2
-    while True:
-        dst2 = dst_parent / f"{rep_dir.name}_dup{k}"
-        if not dst2.exists():
-            shutil.move(str(rep_dir), str(dst2))
-            return dst2
-        k += 1
-
-
-def write_aligned(rep_dir: Path, x: np.ndarray, meta: Dict, qc: QCResult,
-                  pre_align_ms: int, post_align_ms: int):
-    """
-    Write onset-aligned export for NON-silence labels only.
-
-    Caller must ensure label != 'silence'. If onset is missing, we still write
-    aligned_meta.json (so downstream can see QC + "no onset" explicitly), but we
-    DO NOT write aligned_i16.raw.
-    """
-    fs = int(meta["fs"])
-    enter_sample = int(meta.get("enter_sample", int(round(fs * (int(meta["pre_ms"]) + int(meta["lead_ms"])) / 1000.0))))
-    label = ensure_lower(meta.get("label", rep_dir.parent.name))
-
-    if label == "silence":
-        # Safety: never align silence
-        return
-
-    if qc.onset_sample is None:
-        # cannot align; write meta anyway (non-silence)
-        aligned_meta = {
-            "label": label,
-            "rep_dir": rep_dir.name,
-            "fs": fs,
-            "enter_sample": enter_sample,
-            "onset_sample": None,
-            "onset_minus_enter_ms": None,
-            "qc_ok": qc.ok,
-            "qc_flags": qc.flags,
-            "rms_pre": qc.rms_pre,
-            "rms_post": qc.rms_post,
-            "peak": qc.peak,
-            "snr_db": qc.snr_db,
-            "pre_align_ms": pre_align_ms,
-            "post_align_ms": post_align_ms,
-        }
-        (rep_dir / "aligned_meta.json").write_text(json.dumps(aligned_meta, indent=2), encoding="utf-8")
-        return
-
-    onset = int(qc.onset_sample)
-    pre_samp = int(round(fs * (pre_align_ms / 1000.0)))
-    post_samp = int(round(fs * (post_align_ms / 1000.0)))
-
-    a0 = max(0, onset - pre_samp)
-    a1 = min(x.size, onset + post_samp)
-
-    aligned = x[a0:a1].astype(np.int16, copy=False)
-    (rep_dir / "aligned_i16.raw").write_bytes(aligned.tobytes(order="C"))
-
-    aligned_meta = {
-        "label": label,
-        "rep_dir": rep_dir.name,
+    result: Dict[str, Any] = {
+        "rep_folder": str(rep_folder),
+        "label": lbl,
         "fs": fs,
-        "enter_sample": enter_sample,
-        "onset_sample": onset,
-        "onset_minus_enter_ms": qc.onset_minus_enter_ms,
-        "align_window_samples": [int(a0), int(a1)],
-        "aligned_nsamples": int(aligned.size),
-        "qc_ok": qc.ok,
-        "qc_flags": qc.flags,
-        "rms_pre": qc.rms_pre,
-        "rms_post": qc.rms_post,
-        "peak": qc.peak,
-        "snr_db": qc.snr_db,
-        "pre_align_ms": pre_align_ms,
-        "post_align_ms": post_align_ms,
+        "pre_ms": pre_ms,
+        "lead_ms": lead_ms,
+        "post_ms": post_ms,
+        "peak": peak,
+        "clip": clip,
+        "rms_pre": rms_pre,
+        "rms_post": rms_post,
+        "snr_proxy_db": snr_proxy_db,
+        "onset_sample": onset_sample,
+        "onset_ms_est": onset_ms,
+        "onset_minus_enter_ms": onset_minus_enter_ms,
+        "flags": flags,
+        "is_bad": is_bad,
+        "status": "ok" if not is_bad else "bad",
     }
-    (rep_dir / "aligned_meta.json").write_text(json.dumps(aligned_meta, indent=2), encoding="utf-8")
+
+    if is_bad and move_bad:
+        try:
+            moved_to = move_rep_to_bad(rep_folder, bad_dir=bad_dir)
+            result["moved_to"] = str(moved_to)
+        except Exception as e:
+            result["move_error"] = str(e)
+
+    if write_aligned and (not is_bad) and (onset_sample is not None):
+        try:
+            write_aligned_exports(rep_folder, x=x, fs=fs, onset_sample=int(onset_sample), cfg=cfg, qc_result=result)
+            result["aligned_written"] = True
+        except Exception as e:
+            result["aligned_written"] = False
+            result["aligned_error"] = str(e)
+
+    return result
 
 
-def main():
+# ------------------------------
+# Batch mode
+# ------------------------------
+
+def iter_rep_folders(captures_dir: Path) -> List[Path]:
+    out: List[Path] = []
+    if not captures_dir.exists():
+        return out
+    for label_dir in sorted(p for p in captures_dir.iterdir() if p.is_dir()):
+        for rep_dir in sorted(p for p in label_dir.iterdir() if p.is_dir()):
+            if REP_DIR_RE.match(rep_dir.name):
+                out.append(rep_dir)
+    return out
+
+
+def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--captures_root", default="captures")
-    ap.add_argument("--bad_root", default="bad_captures")
-    ap.add_argument("--hop", type=int, default=256, choices=[128, 256, 512])
+    ap.add_argument("--captures_dir", default="captures")
+    ap.add_argument("--bad_dir", default="bad_captures")
+    ap.add_argument("--out_csv", default="qc_report.csv")
+    ap.add_argument("--redo_txt", default="redo.txt")
+
+    ap.add_argument("--rep_dir", default=None, help="QC a single rep folder (overrides batch walk)")
+
     ap.add_argument("--move_bad", action="store_true", help="Move bad reps to bad_captures/")
-    ap.add_argument("--write_aligned", action="store_true", help="Write aligned_i16.raw + aligned_meta.json (non-silence only)")
-    ap.add_argument("--pre_align_ms", type=int, default=20)
-    ap.add_argument("--post_align_ms", type=int, default=120)
+    ap.add_argument("--write_aligned", action="store_true", help="Write aligned exports for good reps")
+    ap.add_argument("--pre_align_ms", type=int, default=0)
+    ap.add_argument("--post_align_ms", type=int, default=300)
 
-    # thresholds
-    ap.add_argument("--peak_min", type=float, default=0.02)
-    ap.add_argument("--silence_rms_max", type=float, default=0.0020)
-    ap.add_argument("--template_rms_pre_max", type=float, default=0.0030)
-    ap.add_argument("--template_snr_min_db", type=float, default=14.0)
-    ap.add_argument("--stress_snr_min_db", type=float, default=8.0)
+    ap.add_argument("--include_talkkey", action="store_true", help="QC talkkey_* (default: on)")
+    ap.add_argument("--no_talkkey", action="store_true", help="Disable QC for talkkey_* labels")
 
-    ap.add_argument("--redo_path", default="redo.txt")
+    ap.add_argument("--min_peak", type=float, default=0.03)
+    ap.add_argument("--min_snr_db", type=float, default=20.0)
+    ap.add_argument("--max_rms_pre", type=float, default=0.005)
+
+    ap.add_argument("--talkkey_min_peak", type=float, default=0.03)
+    ap.add_argument("--talkkey_min_snr_db", type=float, default=16.0)
+    ap.add_argument("--talkkey_max_rms_pre", type=float, default=0.012)
+
     args = ap.parse_args()
 
-    captures_root = Path(args.captures_root)
-    bad_root = Path(args.bad_root)
+    include_talkkey = True
+    if args.no_talkkey:
+        include_talkkey = False
+    if args.include_talkkey:
+        include_talkkey = True
 
-    if not captures_root.exists():
-        raise SystemExit(f"captures_root not found: {captures_root}")
+    cfg = QcCfg(
+        min_peak=args.min_peak,
+        min_snr_db=args.min_snr_db,
+        max_rms_pre=args.max_rms_pre,
+        talkkey_min_peak=args.talkkey_min_peak,
+        talkkey_min_snr_db=args.talkkey_min_snr_db,
+        talkkey_max_rms_pre=args.talkkey_max_rms_pre,
+        pre_align_ms=args.pre_align_ms,
+        post_align_ms=args.post_align_ms,
+    )
 
-    redo_lines: List[str] = []
+    captures_dir = Path(args.captures_dir)
+    bad_dir = Path(args.bad_dir)
 
-    rep_dirs: List[Path] = []
-    for label_dir in sorted(p for p in captures_root.iterdir() if p.is_dir()):
-        for rep_dir in sorted(p for p in label_dir.iterdir() if p.is_dir() and p.name.startswith("rep")):
-            rep_dirs.append(rep_dir)
+    if args.rep_dir:
+        rep = Path(args.rep_dir)
+        res = qc_one_rep(
+            rep_folder=rep,
+            cfg=cfg,
+            include_talkkey=include_talkkey,
+            move_bad=args.move_bad,
+            bad_dir=bad_dir,
+            write_aligned=args.write_aligned,
+        )
+        print(json.dumps(res, indent=2))
+        return
 
-    total = 0
-    bad = 0
+    rows: List[Dict[str, Any]] = []
+    redo_cmds: List[str] = []
+    skipped = 0
+    moved = 0
+    errored = 0
 
-    for rep_dir in rep_dirs:
-        total += 1
-        label = ensure_lower(rep_dir.parent.name)
-
-        try:
-            x, meta = read_rep(rep_dir)
-        except Exception as e:
-            print(f"[BAD] {rep_dir} read error: {e}")
-            bad += 1
-            redo_lines.append(f"start {label} 1")
-            if args.move_bad:
-                try:
-                    dst = safe_move_rep(rep_dir, bad_root)
-                    rep_dir = dst
-                except Exception as me:
-                    print(f"  WARN move failed: {me}")
-            continue
-
-        # QC
-        qc = qc_one(
-            label=label,
-            x=x,
-            meta=meta,
-            hop=args.hop,
-            peak_min=args.peak_min,
-            silence_rms_max=args.silence_rms_max,
-            template_rms_pre_max=args.template_rms_pre_max,
-            template_snr_min_db=args.template_snr_min_db,
-            stress_snr_min_db=args.stress_snr_min_db,
+    for rep_folder in iter_rep_folders(captures_dir):
+        res = qc_one_rep(
+            rep_folder=rep_folder,
+            cfg=cfg,
+            include_talkkey=include_talkkey,
+            move_bad=args.move_bad,
+            bad_dir=bad_dir,
+            write_aligned=args.write_aligned,
         )
 
-        if args.write_aligned:
-            # IMPORTANT: never align silence
-            if label != "silence":
-                try:
-                    write_aligned(rep_dir, x, meta, qc, args.pre_align_ms, args.post_align_ms)
-                except Exception as ae:
-                    print(f"  WARN aligned write failed: {ae}")
+        status = res.get("status", "")
+        if status == "skipped":
+            skipped += 1
+            continue
+        if status == "error":
+            errored += 1
 
-        if qc.ok:
-            print(f"[OK ] {rep_dir} rms_pre={qc.rms_pre:.6f} rms_post={qc.rms_post:.6f} "
-                  f"peak={qc.peak:.4f} snr_db={qc.snr_db if qc.snr_db is not None else None} "
-                  f"onset_ms={qc.onset_minus_enter_ms}")
-        else:
-            bad += 1
-            print(f"[BAD] {rep_dir} flags={qc.flags} "
-                  f"rms_pre={qc.rms_pre:.6f} rms_post={qc.rms_post:.6f} peak={qc.peak:.4f} "
-                  f"snr_db={qc.snr_db if qc.snr_db is not None else None} "
-                  f"onset_ms={qc.onset_minus_enter_ms}")
+        folder_rel = ""
+        try:
+            folder_rel = str(Path(res.get("rep_folder", "")).resolve().relative_to(captures_dir.resolve()))
+        except Exception:
+            folder_rel = res.get("rep_folder", "")
 
-            redo_lines.append(f"start {label} 1")
+        row = {
+            "label": res.get("label", ""),
+            "folder": folder_rel,
+            "fs": res.get("fs", ""),
+            "pre_ms": res.get("pre_ms", ""),
+            "lead_ms": res.get("lead_ms", ""),
+            "post_ms": res.get("post_ms", ""),
+            "peak": res.get("peak", ""),
+            "clip": res.get("clip", ""),
+            "rms_pre": res.get("rms_pre", ""),
+            "rms_post": res.get("rms_post", ""),
+            "snr_proxy_db": res.get("snr_proxy_db", ""),
+            "onset_sample": res.get("onset_sample", ""),
+            "onset_ms_est": res.get("onset_ms_est", ""),
+            "onset_minus_enter_ms": res.get("onset_minus_enter_ms", ""),
+            "flags": ",".join(res.get("flags", []) or []),
+            "moved_to": res.get("moved_to", ""),
+        }
+        rows.append(row)
 
-            if args.move_bad:
-                try:
-                    dst = safe_move_rep(rep_dir, bad_root)
-                    rep_dir = dst
-                except Exception as me:
-                    print(f"  WARN move failed: {me}")
+        if res.get("is_bad", False):
+            redo_cmds.append(f"start {res.get('label','').lower()} 1")
+            if args.move_bad and res.get("moved_to"):
+                moved += 1
 
-    # write redo.txt
-    redo_path = Path(args.redo_path)
-    redo_path.write_text("\n".join(redo_lines) + ("\n" if redo_lines else ""), encoding="utf-8")
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["label", "folder"])
+    df.to_csv(args.out_csv, index=False)
 
-    print(f"\nSummary: total={total} bad={bad} ok={total - bad}")
-    print(f"redo.txt: {redo_path} ({len(redo_lines)} lines)")
+    Path(args.redo_txt).write_text("\n".join(redo_cmds) + ("\n" if redo_cmds else ""), encoding="utf-8")
+
+    print(f"Wrote {args.out_csv} ({len(df)} qc-checked reps)")
+    print(f"Wrote {args.redo_txt} ({len(redo_cmds)} commands)")
+    print(f"Skipped {skipped} non-qc labels")
     if args.move_bad:
-        print(f"bad moved under: {bad_root.resolve()}")
+        print(f"Moved {moved} bad reps -> {args.bad_dir}/")
+    if errored:
+        print(f"Errors: {errored} reps had read/move issues")
 
 
 if __name__ == "__main__":

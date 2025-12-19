@@ -1,0 +1,42 @@
+{
+  "seed": 123,
+  "Ns": [
+    1,
+    2,
+    3,
+    5,
+    7,
+    10
+  ],
+  "K": 100,
+  "labels_used": [
+    "a0",
+    "a1",
+    "a3",
+    "c1",
+    "c3",
+    "c4",
+    "c5",
+    "d#3",
+    "e4",
+    "f#3",
+    "f1",
+    "g4"
+  ],
+  "feat_cfg": {
+    "fs": 48000,
+    "seg_ms": 200,
+    "fft_n": 4096,
+    "hop": 512,
+    "fmin_hz": 80.0,
+    "fmax_hz": 8000.0,
+    "smooth_bins": 3,
+    "eps": 1e-08
+  },
+  "thresholds": {
+    "t_abs": null,
+    "t_margin": null
+  },
+  "sweep_thresholds": false,
+  "target_acc": 0.95
+}
