@@ -1,16 +1,18 @@
 {
   "aligned": {
-    "onset_sample": 16320,
-    "onset_ms": 340.0,
-    "pre_align_ms": 0,
-    "post_align_ms": 300,
-    "slice_start_sample": 16320,
-    "slice_end_sample": 30720,
-    "nsamples": 14400
+    "onset_sample": 15840,
+    "onset_ms": 330.0,
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 6240,
+    "slice_end_sample": 25440,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
   },
   "qc": {
-    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures\\a1\\rep009_20251219-134711",
+    "rep_folder": "C:\\Users\\rudol\\Documents\\Escape Room\\er\\er1\\tools\\captures\\a1\\rep009_20251219-134711",
     "label": "a1",
+    "mode": "clean",
     "fs": 48000,
     "pre_ms": 300,
     "lead_ms": 0,
@@ -20,9 +22,9 @@
     "rms_pre": 0.0007777747814543545,
     "rms_post": 0.020233305171132088,
     "snr_proxy_db": 28.30424874936377,
-    "onset_sample": 16320,
-    "onset_ms_est": 340.0,
-    "onset_minus_enter_ms": 40.0,
+    "onset_sample": 15840,
+    "onset_ms_est": 330.0,
+    "onset_minus_enter_ms": 30.0,
     "flags": [],
     "is_bad": false,
     "status": "ok"

@@ -1,0 +1,87 @@
+{
+  "seed": 123,
+  "Ns": [
+    1,
+    2,
+    3,
+    5,
+    7,
+    9,
+    12,
+    15
+  ],
+  "K": 50,
+  "mode": "two_root",
+  "captures_root": "captures_stress",
+  "templates_root": "captures",
+  "labels_used": [
+    "a0",
+    "a1",
+    "a3",
+    "c1",
+    "c3",
+    "c4",
+    "c5",
+    "d#3",
+    "e4",
+    "f#3",
+    "f1",
+    "g4"
+  ],
+  "counts": {
+    "templates_per_label": {
+      "a0": 24,
+      "a1": 23,
+      "a3": 23,
+      "c1": 25,
+      "c3": 24,
+      "c4": 25,
+      "c5": 24,
+      "d#3": 22,
+      "e4": 22,
+      "f#3": 19,
+      "f1": 23,
+      "g4": 22
+    },
+    "queries_per_label": {
+      "a0": 4,
+      "a1": 4,
+      "a3": 4,
+      "c1": 1,
+      "c3": 5,
+      "c4": 5,
+      "c5": 5,
+      "d#3": 4,
+      "e4": 2,
+      "f#3": 4,
+      "f1": 2,
+      "g4": 4
+    }
+  },
+  "filters": {
+    "min_templates_per_label": 3,
+    "min_queries_per_label": 1,
+    "min_test_per_label": 2,
+    "maxN": 15
+  },
+  "feat_cfg": {
+    "fs": 48000,
+    "feature": "delta",
+    "seg_ms": 200,
+    "pre_ms": 200,
+    "post_ms": 200,
+    "fft_n": 4096,
+    "hop": 512,
+    "fmin_hz": 80.0,
+    "fmax_hz": 8000.0,
+    "smooth_bins": 3,
+    "eps": 1e-07
+  },
+  "thresholds": {
+    "t_abs": null,
+    "t_margin": null
+  },
+  "sweep_thresholds": false,
+  "sweep_min_cov": 0.3,
+  "target_acc": 0.95
+}

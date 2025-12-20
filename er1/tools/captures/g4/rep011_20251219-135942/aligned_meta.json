@@ -2,15 +2,17 @@
   "aligned": {
     "onset_sample": 17040,
     "onset_ms": 355.0,
-    "pre_align_ms": 0,
-    "post_align_ms": 300,
-    "slice_start_sample": 17040,
-    "slice_end_sample": 31440,
-    "nsamples": 14400
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 7440,
+    "slice_end_sample": 26640,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
   },
   "qc": {
-    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures\\g4\\rep011_20251219-135942",
+    "rep_folder": "C:\\Users\\rudol\\Documents\\Escape Room\\er\\er1\\tools\\captures\\g4\\rep011_20251219-135942",
     "label": "g4",
+    "mode": "clean",
     "fs": 48000,
     "pre_ms": 300,
     "lead_ms": 0,

@@ -2,14 +2,15 @@
   "aligned": {
     "onset_sample": 15840,
     "onset_ms": 330.0,
-    "pre_align_ms": -200,
-    "post_align_ms": 300,
-    "slice_start_sample": 25440,
-    "slice_end_sample": 30240,
-    "nsamples": 4800
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 6240,
+    "slice_end_sample": 25440,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
   },
   "qc": {
-    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures_stress\\c#2\\rep001_20251219-232254",
+    "rep_folder": "C:\\Users\\rudol\\Documents\\Escape Room\\er\\er1\\tools\\captures_stress\\c#2\\rep001_20251219-232254",
     "label": "c#2",
     "mode": "stress",
     "fs": 48000,

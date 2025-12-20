@@ -4,11 +4,16 @@ template_curve_eval.py
 
 Evaluates deterministic set-of-exemplars matcher performance vs number of exemplars per key.
 
+This version is adapted for the ALIGNED-ONLY matcher:
+  - matcher.load_feature_for_rep(rep_dir, cfg) may RAISE if aligned outputs are missing
+    or if aligned audio doesn't contain enough context for the requested feature.
+  - We therefore fail fast during dataset load with a clear message.
+
 Dataset layout (for each root):
   <root>/<label>/repNNN_YYYYMMDD-HHMMSS/
     meta.json
-    raw_audio_i16.raw
-    (optional) aligned_i16.raw + aligned_meta.json
+    aligned_i16.raw
+    aligned_meta.json
 
 Modes:
   1) Single-root (default):
@@ -22,12 +27,10 @@ Modes:
        and test on ALL query reps for that label from captures_root
 
 Filtering:
-  A label is usable if it meets:
-    templates_count >= N
+  A label is usable if it meets (kept consistent across all N):
+    templates_count >= max(min_templates_per_label, maxN)
     queries_count   >= min_queries_per_label
-
-  In single-root mode, queries_count is the same dataset, and additionally
-  we require total_count >= N + min_test_per_label to ensure at least some test.
+  In single-root mode, also require total_count >= maxN + min_test_per_label.
 
 Outputs:
   out_dir/curve.csv
@@ -40,7 +43,6 @@ Outputs:
   out_dir/confusion_bestN_<N>_accepted.csv + .png (if thresholded)
   out_dir/config.json
   out_dir/threshold_sweep.json (if --sweep_thresholds)
-
 """
 
 from __future__ import annotations
@@ -59,6 +61,8 @@ import numpy as np
 
 from matcher import FeatConfig, ExemplarMatcher, load_feature_for_rep
 
+
+# ------------------------- data structures -------------------------
 
 @dataclass
 class EvalStats:
@@ -89,6 +93,8 @@ class EvalStats:
         return self.accepted_correct / self.accepted_total if self.accepted_total else 0.0
 
 
+# ------------------------- helpers -------------------------
+
 def find_rep_dirs(root: Path) -> List[Path]:
     rep_dirs: List[Path] = []
     if not root.exists():
@@ -112,18 +118,46 @@ def percentile_ci(values: List[float], alpha: float = 0.05) -> Tuple[float, floa
     return float(vs[lo_i]), float(vs[hi_i])
 
 
-def load_all_features_by_label(root: Path, cfg: FeatConfig) -> Dict[str, List[np.ndarray]]:
+def _fail_with_context(root: Path, rep_dir: Path, err: Exception) -> None:
+    msg = (
+        "\nERROR while loading features (aligned-only pipeline)\n"
+        f"Root:     {root}\n"
+        f"Rep dir:  {rep_dir}\n"
+        f"Error:    {type(err).__name__}: {err}\n\n"
+        "What to do:\n"
+        "  - Run QC on this dataset root to generate aligned_i16.raw + aligned_meta.json\n"
+        "  - If QC already ran: this rep likely lacks >= required pre/post context -> redo capture\n"
+        "  - Ensure your qc_captures.py is configured to export >=200ms pre and >=200ms post.\n"
+    )
+    raise SystemExit(msg) from err
+
+
+def load_all_features_by_label_strict(root: Path, cfg: FeatConfig) -> Dict[str, List[np.ndarray]]:
     """
-    Loads usable features under root, keyed by label.
+    Loads features under root, keyed by label.
+
+    STRICT mode:
+      - load_feature_for_rep may raise if aligned files are missing/insufficient.
+      - we fail fast with a helpful message, because the whole pipeline assumes aligned-only.
     """
     out: Dict[str, List[np.ndarray]] = {}
-    for rep_dir in find_rep_dirs(root):
-        f, lbl = load_feature_for_rep(rep_dir, cfg)
-        if f is None or lbl is None:
-            continue
+    rep_dirs = find_rep_dirs(root)
+    if not rep_dirs:
+        raise SystemExit(f"No rep folders found under {root}")
+
+    for rep_dir in rep_dirs:
+        try:
+            f, lbl = load_feature_for_rep(rep_dir, cfg)  # aligned-only matcher may raise
+        except Exception as e:
+            _fail_with_context(root, rep_dir, e)
+
+        # In aligned-only matcher, f/lbl should always exist if no exception
         out.setdefault(lbl, []).append(f)
+
     return out
 
+
+# ------------------------- main -------------------------
 
 def main():
     ap = argparse.ArgumentParser()
@@ -154,7 +188,7 @@ def main():
         help="single-root mode only: require at least this many test reps per label (total >= N + min_test)",
     )
 
-    # best-N selection (used for bestN.json + confusion matrix outputs)
+    # best-N selection
     ap.add_argument(
         "--target_acc",
         type=float,
@@ -180,7 +214,7 @@ def main():
         "--t_abs",
         type=float,
         default=None,
-        help="absolute similarity threshold (cosine-ish). If set, compute accepted_acc/coverage.",
+        help="absolute similarity threshold. If set, compute accepted_acc/coverage.",
     )
     ap.add_argument(
         "--t_margin",
@@ -232,9 +266,9 @@ def main():
     template_root = Path(args.templates_root) if args.templates_root else query_root
     two_root = (args.templates_root is not None)
 
-    # Load features for templates and queries
-    tmpl_by_label_all = load_all_features_by_label(template_root, cfg)
-    qry_by_label_all = load_all_features_by_label(query_root, cfg)
+    # STRICT loading (aligned-only)
+    tmpl_by_label_all = load_all_features_by_label_strict(template_root, cfg)
+    qry_by_label_all = load_all_features_by_label_strict(query_root, cfg)
 
     # Determine usable label set (keep consistent across all N)
     usable_labels: List[str] = []
@@ -257,11 +291,9 @@ def main():
 
     labels = usable_labels
 
-    # Prepare filtered arrays
     tmpl_feats: Dict[str, List[np.ndarray]] = {lbl: tmpl_by_label_all[lbl] for lbl in labels}
     qry_feats: Dict[str, List[np.ndarray]] = {lbl: qry_by_label_all[lbl] for lbl in labels}
 
-    # optional threshold sweep space
     sweep_abs = [float(x.strip()) for x in args.sweep_abs.split(",") if x.strip()]
     sweep_margin = [float(x.strip()) for x in args.sweep_margin.split(",") if x.strip()]
 

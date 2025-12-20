@@ -1,0 +1,98 @@
+{
+  "bestN": 1,
+  "selection": {
+    "target_acc": 0.95,
+    "picked_smallest_meeting_target": true
+  },
+  "top1": {
+    "acc_mean": 0.975909090909091,
+    "acc_ci_lo": 0.9318181818181818,
+    "acc_ci_hi": 1.0
+  },
+  "labels_used": [
+    "a0",
+    "a1",
+    "a3",
+    "c1",
+    "c3",
+    "c4",
+    "c5",
+    "d#3",
+    "e4",
+    "f#3",
+    "f1",
+    "g4"
+  ],
+  "per_label": {
+    "a0": {
+      "acc": 0.845,
+      "total": 200
+    },
+    "a1": {
+      "acc": 1.0,
+      "total": 200
+    },
+    "a3": {
+      "acc": 1.0,
+      "total": 200
+    },
+    "c1": {
+      "acc": 0.62,
+      "total": 50
+    },
+    "c3": {
+      "acc": 1.0,
+      "total": 250
+    },
+    "c4": {
+      "acc": 0.996,
+      "total": 250
+    },
+    "c5": {
+      "acc": 1.0,
+      "total": 250
+    },
+    "d#3": {
+      "acc": 1.0,
+      "total": 200
+    },
+    "e4": {
+      "acc": 1.0,
+      "total": 100
+    },
+    "f#3": {
+      "acc": 1.0,
+      "total": 200
+    },
+    "f1": {
+      "acc": 0.98,
+      "total": 100
+    },
+    "g4": {
+      "acc": 1.0,
+      "total": 200
+    }
+  },
+  "thresholds": {
+    "t_abs": null,
+    "t_margin": null
+  },
+  "feat_cfg": {
+    "fs": 48000,
+    "feature": "delta",
+    "seg_ms": 200,
+    "pre_ms": 200,
+    "post_ms": 200,
+    "fft_n": 4096,
+    "hop": 512,
+    "fmin_hz": 80.0,
+    "fmax_hz": 8000.0,
+    "smooth_bins": 3,
+    "eps": 1e-07
+  },
+  "K": 50,
+  "seed": 123,
+  "mode": "two_root",
+  "captures_root": "captures_stress",
+  "templates_root": "captures"
+}

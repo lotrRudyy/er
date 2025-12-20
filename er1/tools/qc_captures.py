@@ -109,7 +109,7 @@ class QcCfg:
     onset_search_post_ms_stress: int = 260  # wider window helps low keys / messy reps
 
     # aligned export window (ms) relative to detected onset
-    pre_align_ms: int = 0
+    pre_align_ms: int = 200
     post_align_ms: int = 300
 
 
@@ -303,6 +303,7 @@ def write_aligned_exports(rep_folder: Path, x: np.ndarray, fs: int, onset_sample
             "slice_start_sample": int(a0),
             "slice_end_sample": int(a1),
             "nsamples": int(a1 - a0),
+            "onset_in_aligned_sample": int(onset_sample - a0),
         },
         "qc": qc_result,
     }
@@ -429,6 +430,20 @@ def qc_one_rep(
         if cfg.reject_onset_after_post and onset_minus_enter_ms is not None and onset_minus_enter_ms > post_ms:
             flags.append("onset_after_post")
 
+        # Require at least 200ms of real audio before and after the detected onset.
+        # This prevents feature extraction from silently using padded zeros, which can
+        # collapse features and cause degenerate classification (e.g., always predicting
+        # the first label).
+        req_pre_ms = 200
+        req_post_ms = 200
+        req_pre = int(round(fs * req_pre_ms / 1000.0))
+        req_post = int(round(fs * req_post_ms / 1000.0))
+
+        if onset_sample - req_pre < 0:
+            flags.append("insufficient_pre_context")
+        if onset_sample + req_post > x.size:
+            flags.append("insufficient_post_context")
+
     is_bad = (len(flags) > 0)
 
     result: Dict[str, Any] = {
@@ -459,7 +474,8 @@ def qc_one_rep(
         except Exception as e:
             result["move_error"] = str(e)
 
-    if write_aligned and (not is_bad) and (onset_sample is not None):
+    # Always write aligned exports for good reps (fixed 200ms pre + 200ms post)
+    if (not is_bad) and (onset_sample is not None):
         try:
             write_aligned_exports(rep_folder, x=x, fs=fs, onset_sample=int(onset_sample), cfg=cfg, qc_result=result)
             result["aligned_written"] = True
@@ -496,8 +512,8 @@ def main() -> None:
 
     ap.add_argument("--move_bad", action="store_true", help="Move bad reps to bad_captures/")
     ap.add_argument("--write_aligned", action="store_true", help="Write aligned exports for good reps")
-    ap.add_argument("--pre_align_ms", type=int, default=0)
-    ap.add_argument("--post_align_ms", type=int, default=300)
+    ap.add_argument("--pre_align_ms", type=int, default=200)
+    ap.add_argument("--post_align_ms", type=int, default=200)
 
     ap.add_argument("--include_talkkey", action="store_true", help="QC talkkey_* (default: on)")
     ap.add_argument("--no_talkkey", action="store_true", help="Disable QC for talkkey_* labels")
@@ -540,6 +556,10 @@ def main() -> None:
         pre_align_ms=args.pre_align_ms,
         post_align_ms=args.post_align_ms,
     )
+
+    # Enforce fixed aligned window for downstream consistency
+    cfg.pre_align_ms = 200
+    cfg.post_align_ms = 200
 
     captures_dir = Path(args.captures_dir)
     bad_dir = Path(args.bad_dir)
