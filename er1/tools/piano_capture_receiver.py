@@ -102,21 +102,6 @@ def verify_crc(payload: bytes) -> bytes:
     return body
 
 
-def parse_txt(body: bytes) -> str:
-    if len(body) < 3 + 1 + 2:
-        raise ValueError("TXT too short")
-    if body[0:3] != b"TXT":
-        raise ValueError("not TXT")
-    ver = body[3]
-    msg_len = struct.unpack_from("<H", body, 4)[0]
-    msg_start = 6
-    msg_end = msg_start + msg_len
-    if msg_end > len(body):
-        raise ValueError("TXT len out of range")
-    msg = body[msg_start:msg_end].decode("utf-8", errors="replace")
-    return f"[TXT v{ver}] {msg}"
-
-
 def parse_txt_raw(body: bytes) -> Tuple[int, str]:
     """Return (ver, msg) for TXT packets."""
     if len(body) < 3 + 1 + 2:
@@ -330,13 +315,17 @@ class CaptureAssembler:
 
 # -------------------------- Command gating / stdin --------------------------
 
+# Parse TXT line: "run start <label> reps/key=... mode=<mode>"
+RUN_START_RE = re.compile(r"^run start\s+(?P<label>\S+).*?\bmode=(?P<mode>\w+)\b", re.IGNORECASE)
+
+
 class RunGate:
     """Gate 'start ...' commands so a pasted multi-line plan executes sequentially.
 
     - 'start ...' lines are queued while a run is active.
     - When TXT includes 'done run', the next queued start is sent.
-    - Non-start lines (e.g., stop) are forwarded immediately.
-    - Empty line (ENTER token) is forwarded immediately (sends a bare '\\n').
+    - Auto-redo is inserted with PRIORITY so it runs before the rest of the plan.
+    - Keeps track of last observed run mode from TXT: "run start ... mode=XYZ".
     """
 
     def __init__(self, txq: "queue.Queue[str]"):
@@ -345,7 +334,15 @@ class RunGate:
         self._busy = False
         self._pending_starts: "deque[str]" = deque()
 
-    def enqueue_start(self, line: str):
+        # Track what the ESP32 says the current run is
+        self.last_run_label: Optional[str] = None
+        self.last_run_mode: Optional[str] = None
+
+    def enqueue_start(self, line: str, *, priority: bool = False):
+        """
+        Queue a start line.
+        If priority=True, it will be executed next after 'done run' (prepended).
+        """
         line = line.strip()
         if not line:
             return
@@ -354,7 +351,10 @@ class RunGate:
                 self._busy = True
                 self._safe_put(line)
             else:
-                self._pending_starts.append(line)
+                if priority:
+                    self._pending_starts.appendleft(line)
+                else:
+                    self._pending_starts.append(line)
 
     def send_immediate(self, line: str):
         # IMPORTANT: allow empty line to pass through as ENTER token
@@ -362,14 +362,21 @@ class RunGate:
         self._safe_put(line)
 
     def on_txt_msg(self, msg: str):
-        msg_l = (msg or "").strip().lower()
-        if not msg_l:
+        msg_s = (msg or "").strip()
+        if not msg_s:
             return
 
-        with self._lock:
-            if msg_l.startswith("run start"):
+        # Learn run label/mode from the device
+        m = RUN_START_RE.match(msg_s)
+        if m:
+            self.last_run_label = (m.group("label") or "").strip().lower()
+            self.last_run_mode = (m.group("mode") or "").strip().lower()
+            with self._lock:
                 self._busy = True
+            return
 
+        msg_l = msg_s.lower()
+        with self._lock:
             if "done run" in msg_l:
                 self._busy = False
                 if self._pending_starts:
@@ -524,13 +531,25 @@ def main():
     ap.set_defaults(qc_write_aligned=True)
     ap.add_argument("--qc_include_talkkey", action="store_true", help="QC talkkey_* (default: enabled)")
     ap.add_argument("--qc_no_talkkey", action="store_true", help="Disable QC talkkey_* labels")
+
+    # IMPORTANT:
+    # These are the values passed through to qc_captures.py.
+    # Keep them consistent with your delta windows.
     ap.add_argument("--qc_pre_align_ms", type=int, default=-200)
     ap.add_argument("--qc_post_align_ms", type=int, default=300)
 
     # Auto redo
     ap.add_argument("--no_auto_redo", dest="auto_redo", action="store_false", help="Disable auto redo on QC failure")
     ap.set_defaults(auto_redo=True)
-    ap.add_argument("--redo_fmt", default="start {label} 1", help="Format for redo line to send")
+
+    # CRITICAL: your firmware uses "start <start_label> <end_label> <reps> <mode>"
+    # If you omit end_label, the device interprets it as a range and will keep running.
+    # So redo_fmt MUST include BOTH labels.
+    ap.add_argument(
+        "--redo_fmt",
+        default="start {label} {label} 1 {mode}",
+        help="Format for redo line to send (supports {label}, {mode}). MUST include end label.",
+    )
 
     args = ap.parse_args()
 
@@ -597,7 +616,7 @@ def main():
         status = res.get("status")
         is_bad = bool(res.get("is_bad", False))
         flags = res.get("flags", [])
-        label = res.get("label", "")
+        label = (res.get("label", "") or "").strip().lower()
 
         if status == "error":
             print(f"QC ERROR: {res.get('error','(unknown)')}", file=sys.stderr)
@@ -608,9 +627,15 @@ def main():
         if is_bad:
             print(f"QC: BAD label={label} flags={flags}")
             if args.auto_redo and label:
-                line = args.redo_fmt.format(label=str(label).lower())
+                # Use last known device-reported run mode if available; otherwise default to stress
+                mode = (gate.last_run_mode or "stress").lower()
+
+                # MUST include end label, or firmware may interpret as a range and keep running.
+                line = args.redo_fmt.format(label=label, mode=mode)
+
                 print(f"AUTO-REDO -> {line}")
-                gate.enqueue_start(line)
+                # Priority ensures redo executes before the rest of any pasted plan.
+                gate.enqueue_start(line, priority=True)
         else:
             print(f"QC: OK label={label}")
 

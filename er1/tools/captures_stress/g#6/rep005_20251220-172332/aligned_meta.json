@@ -1,0 +1,32 @@
+{
+  "aligned": {
+    "onset_sample": 15120,
+    "onset_ms": 315.0,
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 5520,
+    "slice_end_sample": 24720,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
+  },
+  "qc": {
+    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures_stress\\g#6\\rep005_20251220-172332",
+    "label": "g#6",
+    "mode": "stress",
+    "fs": 48000,
+    "pre_ms": 300,
+    "lead_ms": 0,
+    "post_ms": 400,
+    "peak": 0.119903564453125,
+    "clip": 0,
+    "rms_pre": 0.003420585300773382,
+    "rms_post": 0.032329902052879333,
+    "snr_proxy_db": 19.5100770046436,
+    "onset_sample": 15120,
+    "onset_ms_est": 315.0,
+    "onset_minus_enter_ms": 15.0,
+    "flags": [],
+    "is_bad": false,
+    "status": "ok"
+  }
+}

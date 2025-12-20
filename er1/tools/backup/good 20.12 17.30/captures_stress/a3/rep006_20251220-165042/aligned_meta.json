@@ -1,0 +1,32 @@
+{
+  "aligned": {
+    "onset_sample": 15840,
+    "onset_ms": 330.0,
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 6240,
+    "slice_end_sample": 25440,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
+  },
+  "qc": {
+    "rep_folder": "C:\\Users\\Rudy\\Documents\\er\\er1\\tools\\captures_stress\\a3\\rep006_20251220-165042",
+    "label": "a3",
+    "mode": "stress",
+    "fs": 48000,
+    "pre_ms": 300,
+    "lead_ms": 0,
+    "post_ms": 400,
+    "peak": 0.129180908203125,
+    "clip": 0,
+    "rms_pre": 0.005389324855059385,
+    "rms_post": 0.03585236519575119,
+    "snr_proxy_db": 16.45966760992648,
+    "onset_sample": 15840,
+    "onset_ms_est": 330.0,
+    "onset_minus_enter_ms": 30.0,
+    "flags": [],
+    "is_bad": false,
+    "status": "ok"
+  }
+}

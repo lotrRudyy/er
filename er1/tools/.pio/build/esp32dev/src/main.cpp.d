@@ -149,4 +149,6 @@
  C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/hal/include/hal/i2s_types.h \
  C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/driver/include/driver/periph_ctrl.h \
  C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/driver/include/driver/adc.h \
- C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/hal/include/hal/adc_types.h
+ C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/hal/include/hal/adc_types.h \
+ .pio/libdeps/esp32dev/arduinoFFT/src/ArduinoFFT.h \
+ .pio/libdeps/esp32dev/arduinoFFT/src/enumsFFT.h src/template.h

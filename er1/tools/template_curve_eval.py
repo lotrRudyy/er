@@ -162,7 +162,7 @@ def load_all_features_by_label_strict(root: Path, cfg: FeatConfig) -> Dict[str, 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--captures_root", default="captures", help="Query root (and template root in single-root mode)")
-    ap.add_argument("--templates_root", default=None, help="Optional separate template root (e.g. clean captures)")
+    ap.add_argument("--templates_root", default="captures_gold", help="Optional separate template root (e.g. clean captures)")
     ap.add_argument("--out_dir", default="template_curve_out")
     ap.add_argument("--seed", type=int, default=123)
     ap.add_argument("--Ns", default="1,2,3,5,7,10", help="comma-separated list of exemplar counts")
@@ -197,7 +197,7 @@ def main():
     )
 
     # feature config (must match matcher)
-    ap.add_argument("--feature", default="post", choices=["post", "delta"], help="feature type")
+    ap.add_argument("--feature", default="delta", choices=["post", "delta"], help="feature type")
     ap.add_argument("--seg_ms", type=int, default=200, help="post-only window (ms)")
     ap.add_argument("--pre_ms", type=int, default=200, help="delta pre window (ms)")
     ap.add_argument("--post_ms", type=int, default=200, help="delta post window (ms)")
@@ -205,7 +205,7 @@ def main():
 
     ap.add_argument("--fft_n", type=int, default=4096)
     ap.add_argument("--hop", type=int, default=512)
-    ap.add_argument("--fmin", type=float, default=80.0)
+    ap.add_argument("--fmin", type=float, default=50.0)
     ap.add_argument("--fmax", type=float, default=8000.0)
     ap.add_argument("--smooth_bins", type=int, default=3)
 

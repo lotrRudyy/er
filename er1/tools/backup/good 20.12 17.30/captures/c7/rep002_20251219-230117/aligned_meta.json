@@ -1,0 +1,32 @@
+{
+  "aligned": {
+    "onset_sample": 15360,
+    "onset_ms": 320.0,
+    "pre_align_ms": 200,
+    "post_align_ms": 200,
+    "slice_start_sample": 5760,
+    "slice_end_sample": 24960,
+    "nsamples": 19200,
+    "onset_in_aligned_sample": 9600
+  },
+  "qc": {
+    "rep_folder": "C:\\Users\\rudol\\Documents\\Escape Room\\er\\er1\\tools\\captures\\c7\\rep002_20251219-230117",
+    "label": "c7",
+    "mode": "clean",
+    "fs": 48000,
+    "pre_ms": 300,
+    "lead_ms": 0,
+    "post_ms": 400,
+    "peak": 0.077972412109375,
+    "clip": 0,
+    "rms_pre": 0.00032876827754080296,
+    "rms_post": 0.014835278503596783,
+    "snr_proxy_db": 33.088090114715975,
+    "onset_sample": 15360,
+    "onset_ms_est": 320.0,
+    "onset_minus_enter_ms": 20.0,
+    "flags": [],
+    "is_bad": false,
+    "status": "ok"
+  }
+}

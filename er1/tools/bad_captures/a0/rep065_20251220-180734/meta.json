@@ -1,0 +1,26 @@
+{
+  "label": "a0",
+  "rep": 65,
+  "timestamp": "20251220-180734",
+  "fs": 48000,
+  "format": "int16_le_mono",
+  "pre_ms": 300,
+  "lead_ms": 0,
+  "post_ms": 400,
+  "enter_sample": 14400,
+  "nsamples": 33600,
+  "total_samples": 33600,
+  "device": {
+    "proto_ver": 1,
+    "flags": 0,
+    "clip_count": 0,
+    "max_abs": 5228,
+    "reps_per_label": 1000,
+    "rep_index_from_device": 65
+  },
+  "received_seconds": 0.760836124420166,
+  "written_files": [
+    "raw_audio_i16.raw",
+    "meta.json"
+  ]
+}

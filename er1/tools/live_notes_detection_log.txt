@@ -1,0 +1,639 @@
+(venv) PS C:\Users\Rudy\Documents\er\er1\tools> python live_post_tester.py --captures_root captures_live --templates_npz templates_post_fmin50.npz                                                      
+[live_post_tester] watching: C:\Users\Rudy\Documents\er\er1\tools\captures_live
+[live_post_tester] templates: C:\Users\Rudy\Documents\er\er1\tools\templates_post_fmin50.npz labels=85
+[live_post_tester] feat_cfg: FeatConfig(fs=48000, feature='post', seg_ms=200, pre_ms=200, post_ms=200, fft_n=4096, hop=512, fmin_hz=50.0, fmax_hz=8000.0, smooth_bins=3, eps=1e-07)
+Press Ctrl+C to stop.
+
+====================================================================================================
+REP: a0/rep001_20251220-175956
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1329 clip=0 rms_pre=0.000335 rms_post=0.028651 snr=38.64dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a0  s1=0.9944  s2=0.9779  margin=0.0165  accepted=True
+TOP10: a0:0.994  c#2:0.978  b0:0.977  a1:0.977  d2:0.976  a#0:0.976  f1:0.976  b1:0.976  e1:0.975  g#1:0.974
+====================================================================================================
+REP: a0/rep002_20251220-180004
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1072 clip=0 rms_pre=0.000336 rms_post=0.026251 snr=37.86dB onset-enter=40.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a0  s1=0.9960  s2=0.9794  margin=0.0166  accepted=True
+TOP10: a0:0.996  f1:0.979  b0:0.977  a1:0.976  c#2:0.976  a#0:0.976  e1:0.974  g#1:0.974  d#1:0.974  b1:0.973
+====================================================================================================
+REP: a0/rep003_20251220-180258
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1013 clip=0 rms_pre=0.000410 rms_post=0.037088 snr=39.13dB onset-enter=35.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c3  s1=0.9826  s2=0.9548  margin=0.0279  accepted=True
+TOP10: c3:0.983  f#1:0.955  c2:0.954  f1:0.954  b0:0.954  b1:0.951  g1:0.951  g#1:0.951  c#2:0.951  a#1:0.951
+====================================================================================================
+REP: a0/rep004_20251220-180317
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1294 clip=0 rms_pre=0.000343 rms_post=0.030019 snr=38.85dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a0  s1=0.9953  s2=0.9775  margin=0.0179  accepted=True
+TOP10: a0:0.995  c#2:0.977  f1:0.977  a#0:0.976  a1:0.975  e1:0.974  b0:0.973  b1:0.973  d2:0.973  g#1:0.973
+====================================================================================================
+REP: a0/rep005_20251220-180320
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0849 clip=0 rms_pre=0.000388 rms_post=0.021594 snr=34.91dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#0  s1=0.9902  s2=0.9810  margin=0.0092  accepted=True
+TOP10: a#0:0.990  b0:0.981  c1:0.980  a0:0.978  c#1:0.977  f#1:0.975  g#1:0.974  d1:0.971  g1:0.971  a1:0.971
+====================================================================================================
+REP: a0/rep006_20251220-180322
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0675 clip=0 rms_pre=0.000583 rms_post=0.018973 snr=30.25dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b0  s1=0.9870  s2=0.9707  margin=0.0162  accepted=True
+TOP10: b0:0.987  c#1:0.971  d1:0.967  g#1:0.964  g1:0.963  d#1:0.961  c1:0.961  a#1:0.960  b1:0.957  a0:0.954
+====================================================================================================
+REP: a0/rep007_20251220-180324
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0810 clip=0 rms_pre=0.000513 rms_post=0.021035 snr=32.26dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c1  s1=0.9925  s2=0.9801  margin=0.0124  accepted=True
+TOP10: c1:0.992  c#1:0.980  b0:0.979  g#1:0.972  a#0:0.971  g1:0.969  d1:0.968  f#1:0.968  b1:0.967  a#1:0.965
+====================================================================================================
+REP: a0/rep008_20251220-180327
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1077 clip=0 rms_pre=0.000399 rms_post=0.025216 snr=36.00dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#1  s1=0.9958  s2=0.9794  margin=0.0164  accepted=True
+TOP10: c#1:0.996  c1:0.979  d1:0.977  b0:0.976  d#1:0.974  g#1:0.973  b1:0.968  g1:0.968  a#0:0.964  a#1:0.963
+====================================================================================================
+REP: a0/rep009_20251220-180330
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0854 clip=0 rms_pre=0.000415 rms_post=0.020942 snr=34.05dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d1  s1=0.9949  s2=0.9849  margin=0.0100  accepted=True
+TOP10: d1:0.995  d#1:0.985  c#1:0.982  e1:0.979  b0:0.976  g#1:0.975  b1:0.974  g1:0.973  a0:0.970  c2:0.968
+====================================================================================================
+REP: a0/rep010_20251220-180332
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0777 clip=0 rms_pre=0.000417 rms_post=0.021151 snr=34.11dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#1  s1=0.9946  s2=0.9866  margin=0.0080  accepted=True
+TOP10: d#1:0.995  d1:0.987  c#1:0.980  e1:0.977  b1:0.969  b0:0.969  g#1:0.968  g1:0.966  a#1:0.965  c2:0.964
+====================================================================================================
+REP: a0/rep011_20251220-180336
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0686 clip=0 rms_pre=0.000409 rms_post=0.016322 snr=32.01dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e1  s1=0.9904  s2=0.9827  margin=0.0076  accepted=True
+TOP10: e1:0.990  d#1:0.983  d1:0.980  b1:0.967  a0:0.966  c#1:0.963  b0:0.962  a#1:0.961  c2:0.959  g#1:0.959
+====================================================================================================
+REP: a0/rep012_20251220-180338
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep012_20251220-180435
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep012_20251220-180439
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0640 clip=0 rms_pre=0.001339 rms_post=0.016411 snr=21.77dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e1  s1=0.9891  s2=0.9824  margin=0.0067  accepted=True
+TOP10: e1:0.989  d#1:0.982  d1:0.979  b1:0.966  c#1:0.965  a0:0.965  a#1:0.962  b0:0.962  g#1:0.959  c2:0.959
+====================================================================================================
+REP: a0/rep013_20251220-180446
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0719 clip=0 rms_pre=0.000530 rms_post=0.018556 snr=30.89dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f1  s1=0.9910  s2=0.9770  margin=0.0140  accepted=True
+TOP10: f1:0.991  a0:0.977  a#1:0.970  b0:0.969  d1:0.968  f#1:0.968  e1:0.966  c1:0.965  c#1:0.965  d#1:0.965
+====================================================================================================
+REP: a0/rep014_20251220-180449
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0821 clip=0 rms_pre=0.000536 rms_post=0.018997 snr=30.99dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#1  s1=0.9890  s2=0.9769  margin=0.0121  accepted=True
+TOP10: f#1:0.989  b0:0.977  g#1:0.975  c1:0.975  g1:0.974  f1:0.973  d1:0.971  c#1:0.970  a#0:0.967  a#1:0.967
+====================================================================================================
+REP: a0/rep015_20251220-180452
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1277 clip=0 rms_pre=0.002110 rms_post=0.031374 snr=23.45dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g1  s1=0.9961  s2=0.9857  margin=0.0104  accepted=True
+TOP10: g1:0.996  g#1:0.986  b0:0.978  c2:0.977  d1:0.976  f#1:0.973  c#1:0.972  d#1:0.971  b1:0.971  c1:0.969
+====================================================================================================
+REP: a0/rep016_20251220-180454
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0964 clip=0 rms_pre=0.001221 rms_post=0.021638 snr=24.97dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#1  s1=0.9926  s2=0.9829  margin=0.0097  accepted=True
+TOP10: g#1:0.993  g1:0.983  c#1:0.978  b0:0.977  d1:0.974  d#1:0.969  c1:0.966  c2:0.965  f#1:0.962  b1:0.961
+====================================================================================================
+REP: a0/rep017_20251220-180456
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0889 clip=0 rms_pre=0.000847 rms_post=0.020041 snr=27.48dB onset-enter=35.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a1  s1=0.9934  s2=0.9914  margin=0.0020  accepted=True
+TOP10: a1:0.993  g#1:0.991  b0:0.975  a0:0.973  a#1:0.971  d#1:0.971  c#1:0.969  b1:0.968  c#2:0.968  c1:0.968
+====================================================================================================
+REP: a0/rep018_20251220-180459
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1177 clip=0 rms_pre=0.000479 rms_post=0.031509 snr=36.36dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#1  s1=0.9947  s2=0.9783  margin=0.0164  accepted=True
+TOP10: a#1:0.995  b1:0.978  d#2:0.973  c#1:0.969  b0:0.966  d1:0.965  d2:0.963  c1:0.962  a1:0.962  d#1:0.961
+====================================================================================================
+REP: a0/rep019_20251220-180501
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0878 clip=0 rms_pre=0.000670 rms_post=0.025747 snr=31.70dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b1  s1=0.9898  s2=0.9812  margin=0.0085  accepted=True
+TOP10: b1:0.990  a#1:0.981  d1:0.974  d#2:0.972  c#1:0.972  c2:0.971  d#1:0.971  b0:0.970  e1:0.966  a0:0.965
+====================================================================================================
+REP: a0/rep020_20251220-180504
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1087 clip=0 rms_pre=0.000768 rms_post=0.028730 snr=31.46dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c2  s1=0.9925  s2=0.9791  margin=0.0134  accepted=True
+TOP10: c2:0.992  b1:0.979  g1:0.977  d1:0.975  d#1:0.975  g#1:0.974  a#1:0.972  a0:0.971  e1:0.971  d#2:0.970
+====================================================================================================
+REP: a0/rep021_20251220-180506
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1113 clip=0 rms_pre=0.000431 rms_post=0.025930 snr=35.58dB onset-enter=35.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#2  s1=0.9873  s2=0.9791  margin=0.0082  accepted=True
+TOP10: c#2:0.987  b0:0.979  g#1:0.975  a0:0.974  c#1:0.974  g1:0.972  d1:0.972  d#1:0.972  c2:0.972  e1:0.972
+====================================================================================================
+REP: a0/rep022_20251220-180509
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1531 clip=0 rms_pre=0.000467 rms_post=0.037250 snr=38.04dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d2  s1=0.9953  s2=0.9791  margin=0.0162  accepted=True
+TOP10: d2:0.995  c#2:0.979  a#1:0.976  a0:0.975  d#1:0.974  e1:0.971  a1:0.971  b1:0.971  c#1:0.969  c1:0.969
+====================================================================================================
+REP: a0/rep023_20251220-180511
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1621 clip=0 rms_pre=0.000584 rms_post=0.053451 snr=39.23dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#2  s1=0.9971  s2=0.9790  margin=0.0182  accepted=True
+TOP10: d#2:0.997  b1:0.979  c2:0.975  a#1:0.973  a0:0.971  d#1:0.970  f#2:0.969  d2:0.968  b0:0.967  e1:0.967
+====================================================================================================
+REP: a0/rep024_20251220-180513
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0997 clip=0 rms_pre=0.000897 rms_post=0.026388 snr=29.37dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e2  s1=0.9934  s2=0.9699  margin=0.0235  accepted=True
+TOP10: e2:0.993  b1:0.970  a#1:0.970  c2:0.969  c#2:0.968  a0:0.967  b0:0.966  d#2:0.965  g1:0.965  g#1:0.965
+====================================================================================================
+REP: a0/rep025_20251220-180516
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1208 clip=0 rms_pre=0.000697 rms_post=0.028368 snr=32.19dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f2  s1=0.9960  s2=0.9687  margin=0.0273  accepted=True
+TOP10: f2:0.996  e2:0.969  c#2:0.968  g#2:0.968  d2:0.967  f#2:0.966  f#1:0.965  g2:0.965  b1:0.964  c3:0.964
+====================================================================================================
+REP: a0/rep026_20251220-180518
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1394 clip=0 rms_pre=0.000426 rms_post=0.038859 snr=39.19dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#2  s1=0.9963  s2=0.9660  margin=0.0303  accepted=True
+TOP10: f#2:0.996  d2:0.966  f2:0.966  g2:0.966  a#0:0.965  d#2:0.965  b1:0.965  c2:0.962  c#1:0.961  g1:0.961
+====================================================================================================
+REP: a0/rep027_20251220-180520
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1611 clip=0 rms_pre=0.000509 rms_post=0.043493 snr=38.64dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g2  s1=0.9939  s2=0.9665  margin=0.0274  accepted=True
+TOP10: g2:0.994  c#2:0.966  e2:0.965  f#2:0.963  f2:0.962  b2:0.962  d2:0.961  c2:0.961  g#2:0.961  b1:0.960
+====================================================================================================
+REP: a0/rep028_20251220-180522
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1473 clip=0 rms_pre=0.001306 rms_post=0.042468 snr=30.24dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#2  s1=0.9952  s2=0.9675  margin=0.0277  accepted=True
+TOP10: g#2:0.995  f2:0.967  c#2:0.959  g2:0.956  d2:0.954  c2:0.950  b2:0.949  e2:0.949  c3:0.948  b1:0.948
+====================================================================================================
+REP: a0/rep029_20251220-180524
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1342 clip=0 rms_pre=0.000787 rms_post=0.029664 snr=31.52dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a2  s1=0.9949  s2=0.9642  margin=0.0307  accepted=True
+TOP10: a2:0.995  a#2:0.964  d#2:0.958  c#2:0.954  d2:0.953  f2:0.948  e2:0.947  f#1:0.947  g2:0.945  f#2:0.944
+====================================================================================================
+REP: a0/rep030_20251220-180526
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1437 clip=0 rms_pre=0.000676 rms_post=0.036252 snr=34.58dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#2  s1=0.9940  s2=0.9620  margin=0.0320  accepted=True
+TOP10: a#2:0.994  a2:0.962  d#2:0.959  b2:0.956  c#2:0.955  a#0:0.955  f#1:0.953  f#2:0.952  e2:0.951  g2:0.949
+====================================================================================================
+REP: a0/rep031_20251220-180529
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1476 clip=0 rms_pre=0.000647 rms_post=0.035401 snr=34.76dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b2  s1=0.9931  s2=0.9590  margin=0.0341  accepted=True
+TOP10: b2:0.993  a#2:0.959  c3:0.958  g2:0.957  e2:0.956  d#2:0.954  c#2:0.953  c2:0.951  f#2:0.950  f2:0.947
+====================================================================================================
+REP: a0/rep032_20251220-180531
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1400 clip=0 rms_pre=0.000540 rms_post=0.052982 snr=39.84dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c3  s1=0.9905  s2=0.9554  margin=0.0351  accepted=True
+TOP10: c3:0.991  c#2:0.955  f2:0.955  f#1:0.953  e2:0.952  d2:0.952  f1:0.951  c2:0.949  g#2:0.948  a0:0.948
+====================================================================================================
+REP: a0/rep033_20251220-180533
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1477 clip=0 rms_pre=0.000644 rms_post=0.038985 snr=35.64dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#3  s1=0.9952  s2=0.9557  margin=0.0394  accepted=True
+TOP10: c#3:0.995  d2:0.956  f#1:0.953  c#1:0.950  c#2:0.949  c1:0.949  f2:0.949  d#1:0.947  a0:0.946  f1:0.946
+====================================================================================================
+REP: a0/rep034_20251220-180535
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1701 clip=0 rms_pre=0.000386 rms_post=0.049036 snr=42.08dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d3  s1=0.9948  s2=0.9431  margin=0.0517  accepted=True
+TOP10: d3:0.995  g2:0.943  d2:0.942  c#2:0.941  f#2:0.940  f2:0.938  d#2:0.936  g#2:0.936  c2:0.935  a#2:0.935
+====================================================================================================
+REP: a0/rep035_20251220-180537
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1065 clip=0 rms_pre=0.000593 rms_post=0.029310 snr=33.88dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#3  s1=0.9949  s2=0.9598  margin=0.0350  accepted=True
+TOP10: d#3:0.995  e2:0.960  b1:0.954  a0:0.953  a1:0.953  c#2:0.953  g#1:0.953  d2:0.952  g2:0.951  d#1:0.951
+====================================================================================================
+REP: a0/rep036_20251220-180540
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1447 clip=0 rms_pre=0.000479 rms_post=0.052033 snr=40.72dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e3  s1=0.9926  s2=0.9444  margin=0.0482  accepted=True
+TOP10: e3:0.993  f2:0.944  e2:0.938  d2:0.938  c#2:0.936  f#2:0.936  b1:0.934  a#0:0.934  c3:0.934  a#1:0.934
+====================================================================================================
+REP: a0/rep037_20251220-180542
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1980 clip=0 rms_pre=0.000479 rms_post=0.056226 snr=41.38dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f3  s1=0.9945  s2=0.9326  margin=0.0619  accepted=True
+TOP10: f3:0.995  b1:0.933  f#2:0.930  g2:0.929  d#2:0.928  f2:0.928  c2:0.926  e2:0.924  a#2:0.922  a2:0.921
+====================================================================================================
+REP: a0/rep038_20251220-180544
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep038_20251220-180547
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1342 clip=0 rms_pre=0.000542 rms_post=0.032060 snr=35.44dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g3  s1=0.9954  s2=0.9321  margin=0.0633  accepted=True
+TOP10: g3:0.995  g2:0.932  f2:0.930  b1:0.929  f#2:0.928  d2:0.928  f#1:0.926  c#2:0.924  g4:0.923  e2:0.923
+====================================================================================================
+REP: a0/rep039_20251220-180551
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1757 clip=0 rms_pre=0.001537 rms_post=0.048040 snr=29.90dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#3  s1=0.9938  s2=0.9316  margin=0.0622  accepted=True
+TOP10: f#3:0.994  f#2:0.932  b1:0.931  b0:0.930  a#1:0.929  d#2:0.926  g2:0.925  e2:0.925  d#1:0.923  c2:0.922
+====================================================================================================
+REP: a0/rep040_20251220-180554
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep040_20251220-180602
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1222 clip=0 rms_pre=0.000753 rms_post=0.026908 snr=31.06dB onset-enter=40.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g3  s1=0.9917  s2=0.9361  margin=0.0555  accepted=True
+TOP10: g3:0.992  b1:0.936  g2:0.932  a#1:0.931  d2:0.931  g4:0.930  f#1:0.930  f#2:0.929  f2:0.928  c#2:0.928
+====================================================================================================
+REP: a0/rep041_20251220-180606
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep041_20251220-180609
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0757 clip=0 rms_pre=0.000969 rms_post=0.023239 snr=27.60dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#3  s1=0.9798  s2=0.9352  margin=0.0446  accepted=True
+TOP10: g#3:0.980  d1:0.935  d#1:0.933  f1:0.931  b0:0.930  c#1:0.929  b1:0.928  g#1:0.927  g1:0.926  c2:0.925
+====================================================================================================
+REP: a0/rep042_20251220-180615
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1283 clip=0 rms_pre=0.000493 rms_post=0.034277 snr=36.84dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a3  s1=0.9946  s2=0.9222  margin=0.0724  accepted=True
+TOP10: a3:0.995  a1:0.922  g#1:0.921  g6:0.921  d#2:0.921  f#1:0.921  c#2:0.919  g1:0.918  b2:0.918  g2:0.918
+====================================================================================================
+REP: a0/rep043_20251220-180618
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep043_20251220-180623
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1287 clip=0 rms_pre=0.000372 rms_post=0.029301 snr=37.94dB onset-enter=40.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#3  s1=0.9846  s2=0.9490  margin=0.0356  accepted=True
+TOP10: a#3:0.985  g6:0.949  e2:0.944  f2:0.943  b1:0.941  g#2:0.940  a0:0.938  d#2:0.938  c#2:0.938  f1:0.937
+====================================================================================================
+REP: a0/rep044_20251220-180626
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1073 clip=0 rms_pre=0.000814 rms_post=0.027875 snr=30.69dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b3  s1=0.9932  s2=0.8939  margin=0.0993  accepted=True
+TOP10: b3:0.993  e2:0.894  g#2:0.889  b4:0.884  b1:0.884  f2:0.883  g#1:0.883  b2:0.883  f#1:0.881  c#2:0.880
+====================================================================================================
+REP: a0/rep045_20251220-180628
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1371 clip=0 rms_pre=0.000762 rms_post=0.039004 snr=34.18dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c4  s1=0.9936  s2=0.9390  margin=0.0546  accepted=True
+TOP10: c4:0.994  f2:0.939  f#2:0.929  a2:0.923  e2:0.922  d2:0.922  g2:0.922  c2:0.920  b1:0.919  a0:0.918
+====================================================================================================
+REP: a0/rep046_20251220-180632
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1584 clip=0 rms_pre=0.000405 rms_post=0.033994 snr=38.48dB onset-enter=35.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#4  s1=0.9872  s2=0.9406  margin=0.0466  accepted=True
+TOP10: c#4:0.987  f2:0.941  g2:0.938  a#0:0.937  e2:0.935  f#2:0.935  a0:0.930  b2:0.929  a#2:0.928  b0:0.927
+====================================================================================================
+REP: a0/rep047_20251220-180634
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1197 clip=0 rms_pre=0.000389 rms_post=0.019660 snr=34.08dB onset-enter=70.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d4  s1=0.9935  s2=0.9196  margin=0.0739  accepted=True
+TOP10: d4:0.993  f2:0.920  g2:0.919  a#2:0.912  b2:0.910  e2:0.909  c#2:0.908  d#2:0.908  d2:0.905  b1:0.905
+====================================================================================================
+REP: a0/rep048_20251220-180637
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1641 clip=0 rms_pre=0.000970 rms_post=0.043812 snr=33.10dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#4  s1=0.9942  s2=0.8960  margin=0.0982  accepted=True
+TOP10: d#4:0.994  g2:0.896  c3:0.893  f2:0.892  b2:0.892  f#2:0.887  g#2:0.886  c#3:0.886  f#1:0.884  d#2:0.884
+====================================================================================================
+REP: a0/rep049_20251220-180639
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1437 clip=0 rms_pre=0.000651 rms_post=0.022928 snr=30.93dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d4  s1=0.9930  s2=0.9000  margin=0.0930  accepted=True
+TOP10: d4:0.993  f2:0.900  g2:0.899  a#2:0.893  e2:0.889  d#2:0.888  b2:0.887  c#2:0.885  f#2:0.885  d2:0.884
+====================================================================================================
+REP: a0/rep050_20251220-180641
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1426 clip=0 rms_pre=0.000744 rms_post=0.029213 snr=31.88dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e4  s1=0.9909  s2=0.9292  margin=0.0617  accepted=True
+TOP10: e4:0.991  c#1:0.929  b0:0.929  g#2:0.928  d2:0.927  c2:0.927  a#1:0.927  d#2:0.926  c#2:0.926  f#1:0.925
+====================================================================================================
+REP: a0/rep051_20251220-180644
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1036 clip=0 rms_pre=0.000543 rms_post=0.028404 snr=34.38dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f4  s1=0.9945  s2=0.9066  margin=0.0879  accepted=True
+TOP10: f4:0.994  c#2:0.907  f2:0.905  e2:0.901  g2:0.896  d#3:0.896  g#2:0.895  d2:0.892  b1:0.891  a#2:0.890
+====================================================================================================
+REP: a0/rep052_20251220-180647
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1035 clip=0 rms_pre=0.000384 rms_post=0.021826 snr=35.08dB onset-enter=45.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#4  s1=0.9871  s2=0.9233  margin=0.0638  accepted=True
+TOP10: f#4:0.987  g#2:0.923  d2:0.921  f2:0.919  c#2:0.917  f#2:0.914  g2:0.914  b2:0.914  d#2:0.913  a#2:0.912
+====================================================================================================
+REP: a0/rep053_20251220-180650
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep053_20251220-180653
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1136 clip=0 rms_pre=0.000353 rms_post=0.023034 snr=36.29dB onset-enter=45.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#4  s1=0.9859  s2=0.9444  margin=0.0414  accepted=True
+TOP10: g#4:0.986  e2:0.944  f#1:0.932  g1:0.932  b1:0.932  a0:0.930  f2:0.929  d#3:0.927  a#0:0.927  c2:0.926
+====================================================================================================
+REP: a0/rep054_20251220-180655
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0789 clip=0 rms_pre=0.000664 rms_post=0.014294 snr=26.66dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a4  s1=0.9837  s2=0.9302  margin=0.0535  accepted=True
+TOP10: a4:0.984  g#1:0.930  c2:0.929  c#1:0.927  g1:0.927  a3:0.923  f2:0.922  b1:0.919  f#2:0.919  b0:0.918
+====================================================================================================
+REP: a0/rep055_20251220-180658
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1242 clip=0 rms_pre=0.000368 rms_post=0.022804 snr=35.85dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#4  s1=0.9829  s2=0.9472  margin=0.0357  accepted=True
+TOP10: g#4:0.983  e2:0.947  g1:0.933  f#1:0.933  b1:0.933  a0:0.932  g#3:0.932  f2:0.931  d#3:0.930  a#0:0.929
+====================================================================================================
+REP: a0/rep056_20251220-180701
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1029 clip=0 rms_pre=0.000589 rms_post=0.018717 snr=30.05dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a4  s1=0.9920  s2=0.9211  margin=0.0709  accepted=True
+TOP10: a4:0.992  f2:0.921  c2:0.916  f#2:0.916  g#1:0.915  g1:0.915  c#1:0.912  a3:0.912  b2:0.911  g#2:0.909
+====================================================================================================
+REP: a0/rep057_20251220-180703
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1049 clip=0 rms_pre=0.000576 rms_post=0.020360 snr=30.96dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#4  s1=0.9935  s2=0.9139  margin=0.0795  accepted=True
+TOP10: a#4:0.993  c#2:0.914  a1:0.910  b2:0.908  c3:0.907  g#1:0.906  g2:0.906  e1:0.904  d#1:0.904  f2:0.904
+====================================================================================================
+REP: a0/rep058_20251220-180706
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1716 clip=0 rms_pre=0.000365 rms_post=0.032861 snr=39.09dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b4  s1=0.9937  s2=0.9141  margin=0.0796  accepted=True
+TOP10: b4:0.994  a#1:0.914  e2:0.908  d2:0.907  b5:0.907  f#6:0.906  b1:0.906  f1:0.905  f2:0.901  a0:0.900
+====================================================================================================
+REP: a0/rep059_20251220-180708
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1004 clip=0 rms_pre=0.000627 rms_post=0.019975 snr=30.06dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#4  s1=0.9942  s2=0.9146  margin=0.0796  accepted=True
+TOP10: a#4:0.994  c#2:0.915  a1:0.913  g2:0.912  c3:0.910  b2:0.910  g#2:0.909  f2:0.909  g#1:0.908  d#1:0.905
+====================================================================================================
+REP: a0/rep060_20251220-180710
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep060_20251220-180713
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0876 clip=0 rms_pre=0.000368 rms_post=0.017377 snr=33.48dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#4  s1=0.9928  s2=0.9170  margin=0.0759  accepted=True
+TOP10: a#4:0.993  c#2:0.917  a1:0.915  g#1:0.912  d#1:0.908  c3:0.907  g2:0.906  e1:0.906  b2:0.903  f2:0.903
+====================================================================================================
+REP: a0/rep061_20251220-180719
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0755 clip=0 rms_pre=0.000363 rms_post=0.014023 snr=31.74dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#4  s1=0.9872  s2=0.9455  margin=0.0417  accepted=True
+TOP10: a#4:0.987  a1:0.945  c#2:0.944  g#1:0.943  d#1:0.940  e1:0.938  a0:0.935  g1:0.934  d1:0.934  c3:0.933
+====================================================================================================
+REP: a0/rep062_20251220-180722
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0874 clip=0 rms_pre=0.000362 rms_post=0.022984 snr=36.05dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c5  s1=0.9854  s2=0.9135  margin=0.0719  accepted=True
+TOP10: c5:0.985  f2:0.914  c4:0.912  b1:0.910  g#2:0.905  c6:0.903  f#1:0.902  g2:0.899  g1:0.898  a#1:0.898
+====================================================================================================
+REP: a0/rep063_20251220-180724
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep063_20251220-180728
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1538 clip=0 rms_pre=0.000798 rms_post=0.037347 snr=33.41dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#5  s1=0.9929  s2=0.9031  margin=0.0898  accepted=True
+TOP10: c#5:0.993  c#6:0.903  b1:0.901  f2:0.901  c2:0.899  g2:0.897  b2:0.896  f#2:0.896  g#6:0.895  d#2:0.895
+====================================================================================================
+REP: a0/rep064_20251220-180730
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1484 clip=0 rms_pre=0.000649 rms_post=0.038816 snr=35.54dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d5  s1=0.9912  s2=0.9104  margin=0.0808  accepted=True
+TOP10: d5:0.991  c2:0.910  a6:0.907  a1:0.903  e2:0.899  f2:0.898  a0:0.896  g#1:0.895  d6:0.894  b1:0.894
+====================================================================================================
+REP: a0/rep065_20251220-180734
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep065_20251220-180741
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1121 clip=0 rms_pre=0.000354 rms_post=0.031391 snr=38.96dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#5  s1=0.9901  s2=0.9217  margin=0.0683  accepted=True
+TOP10: c#5:0.990  f2:0.922  b2:0.921  b1:0.919  c2:0.918  g2:0.917  d#2:0.917  f#2:0.913  g#2:0.913  e2:0.911
+====================================================================================================
+REP: a0/rep066_20251220-180744
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0812 clip=0 rms_pre=0.000364 rms_post=0.018193 snr=33.98dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#5  s1=0.9834  s2=0.9516  margin=0.0317  accepted=True
+TOP10: d#5:0.983  c1:0.952  a#0:0.949  f2:0.942  c#1:0.938  f#2:0.937  e2:0.934  a#1:0.930  a1:0.929  g#1:0.928
+====================================================================================================
+REP: a0/rep067_20251220-180746
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0819 clip=0 rms_pre=0.000482 rms_post=0.015332 snr=30.04dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e5  s1=0.9891  s2=0.9071  margin=0.0820  accepted=True
+TOP10: e5:0.989  b1:0.907  f#2:0.907  d#2:0.904  a#1:0.903  c#1:0.898  b0:0.895  f2:0.890  d2:0.888  g2:0.887
+====================================================================================================
+REP: a0/rep068_20251220-180749
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1405 clip=0 rms_pre=0.000385 rms_post=0.035979 snr=39.42dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f5  s1=0.9878  s2=0.9269  margin=0.0609  accepted=True
+TOP10: f5:0.988  d#2:0.927  e1:0.921  g2:0.920  c2:0.919  e2:0.917  c#2:0.916  b1:0.915  f6:0.913  d#1:0.912
+====================================================================================================
+REP: a0/rep069_20251220-180753
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep069_20251220-180800
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1606 clip=0 rms_pre=0.000440 rms_post=0.029484 snr=36.53dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#5  s1=0.9930  s2=0.9214  margin=0.0716  accepted=True
+TOP10: g#5:0.993  g#6:0.921  g#1:0.915  a0:0.912  g1:0.909  f#2:0.907  f2:0.905  b1:0.905  c2:0.904  e1:0.903
+====================================================================================================
+REP: a0/rep070_20251220-180804
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep070_20251220-180807
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1396 clip=0 rms_pre=0.001051 rms_post=0.023348 snr=26.93dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a5  s1=0.9908  s2=0.9379  margin=0.0529  accepted=True
+TOP10: a5:0.991  a6:0.938  b0:0.927  a1:0.926  c1:0.923  b1:0.923  g#1:0.922  g1:0.921  c#1:0.919  f#2:0.918
+====================================================================================================
+REP: a0/rep071_20251220-180813
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1549 clip=0 rms_pre=0.001362 rms_post=0.033123 snr=27.72dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#5  s1=0.9915  s2=0.9163  margin=0.0753  accepted=True
+TOP10: a#5:0.992  a#6:0.916  g2:0.909  a1:0.909  b1:0.908  e2:0.907  c1:0.907  a#1:0.907  g#1:0.905  c#1:0.903
+====================================================================================================
+REP: a0/rep072_20251220-180816
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep072_20251220-180819
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1261 clip=0 rms_pre=0.000503 rms_post=0.023494 snr=33.39dB onset-enter=10.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a5  s1=0.9933  s2=0.9349  margin=0.0584  accepted=True
+TOP10: a5:0.993  a6:0.935  c1:0.925  b0:0.924  g1:0.920  c#1:0.919  a1:0.919  g#1:0.919  b1:0.918  a#0:0.910
+====================================================================================================
+REP: a0/rep073_20251220-180824
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep073_20251220-180827
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1096 clip=0 rms_pre=0.000433 rms_post=0.020693 snr=33.58dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b5  s1=0.9892  s2=0.9278  margin=0.0614  accepted=True
+TOP10: b5:0.989  a#1:0.928  b1:0.919  d2:0.914  f2:0.908  g#2:0.906  b6:0.906  d#2:0.904  c2:0.904  f#2:0.902
+====================================================================================================
+REP: a0/rep074_20251220-180833
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0866 clip=0 rms_pre=0.000385 rms_post=0.016491 snr=32.64dB onset-enter=40.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b5  s1=0.9913  s2=0.9368  margin=0.0545  accepted=True
+TOP10: b5:0.991  a#1:0.937  b1:0.927  d2:0.923  d#2:0.912  f2:0.912  g#2:0.912  c2:0.911  c#1:0.908  e2:0.908
+====================================================================================================
+REP: a0/rep075_20251220-180836
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0953 clip=0 rms_pre=0.000450 rms_post=0.018223 snr=32.14dB onset-enter=50.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c6  s1=0.9898  s2=0.9428  margin=0.0470  accepted=True
+TOP10: c6:0.990  b1:0.943  c#2:0.935  a#1:0.933  e1:0.932  c2:0.931  d#2:0.930  d#1:0.930  d2:0.929  d1:0.928
+====================================================================================================
+REP: a0/rep076_20251220-180839
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1353 clip=0 rms_pre=0.000370 rms_post=0.026002 snr=36.94dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#6  s1=0.9882  s2=0.9275  margin=0.0606  accepted=True
+TOP10: c#6:0.988  d#2:0.928  d6:0.925  c#2:0.924  a0:0.924  c1:0.923  c#7:0.923  b0:0.920  a#0:0.919  g#1:0.919
+====================================================================================================
+REP: a0/rep077_20251220-180842
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0925 clip=0 rms_pre=0.000366 rms_post=0.018331 snr=34.00dB onset-enter=35.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d6  s1=0.9834  s2=0.9302  margin=0.0531  accepted=True
+TOP10: d6:0.983  d7:0.930  f1:0.928  e2:0.927  a0:0.927  f#1:0.926  d#2:0.925  b0:0.921  c2:0.921  c#2:0.918
+====================================================================================================
+REP: a0/rep078_20251220-180844
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0804 clip=0 rms_pre=0.000366 rms_post=0.014070 snr=31.69dB onset-enter=45.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#6  s1=0.9911  s2=0.9524  margin=0.0387  accepted=True
+TOP10: d#6:0.991  a#0:0.952  c1:0.948  f#1:0.947  e2:0.945  f#2:0.943  c#1:0.940  a0:0.938  b0:0.938  c#2:0.936
+====================================================================================================
+REP: a0/rep079_20251220-180846
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0932 clip=0 rms_pre=0.000370 rms_post=0.019282 snr=34.34dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e6  s1=0.9936  s2=0.9400  margin=0.0535  accepted=True
+TOP10: e6:0.994  b0:0.940  c#1:0.938  f6:0.935  e7:0.934  d1:0.934  g#1:0.932  d#1:0.932  f#1:0.931  b1:0.930
+====================================================================================================
+REP: a0/rep080_20251220-180849
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0718 clip=0 rms_pre=0.000372 rms_post=0.010609 snr=29.09dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f6  s1=0.9905  s2=0.9445  margin=0.0459  accepted=True
+TOP10: f6:0.990  a0:0.945  c#2:0.944  g2:0.940  e1:0.939  e6:0.931  d1:0.929  b1:0.928  d2:0.927  f1:0.925
+====================================================================================================
+REP: a0/rep081_20251220-180851
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0781 clip=0 rms_pre=0.000883 rms_post=0.014567 snr=24.35dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#6  s1=0.9912  s2=0.9511  margin=0.0401  accepted=True
+TOP10: f#6:0.991  f1:0.951  a0:0.949  f#1:0.944  g6:0.944  c#2:0.942  d2:0.941  a#0:0.941  g#1:0.935  a1:0.935
+====================================================================================================
+REP: a0/rep082_20251220-180853
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0764 clip=0 rms_pre=0.000391 rms_post=0.014342 snr=31.29dB onset-enter=40.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g6  s1=0.9914  s2=0.9475  margin=0.0439  accepted=True
+TOP10: g6:0.991  f1:0.947  f#1:0.946  g5:0.936  b1:0.936  a#0:0.934  a0:0.933  g#6:0.928  f2:0.927  f#6:0.927
+====================================================================================================
+REP: a0/rep083_20251220-180856
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1400 clip=0 rms_pre=0.000456 rms_post=0.035392 snr=37.80dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#6  s1=0.9947  s2=0.9321  margin=0.0625  accepted=True
+TOP10: g#6:0.995  g1:0.932  a0:0.931  g6:0.929  c2:0.927  a#0:0.927  b1:0.927  d#1:0.926  f1:0.926  f#2:0.924
+====================================================================================================
+REP: a0/rep084_20251220-180858
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0616 clip=0 rms_pre=0.000443 rms_post=0.011537 snr=28.31dB onset-enter=50.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a6  s1=0.9932  s2=0.9410  margin=0.0522  accepted=True
+TOP10: a6:0.993  b1:0.941  a#6:0.941  a1:0.938  g#1:0.938  a5:0.935  c2:0.934  a0:0.934  c#2:0.933  d#1:0.933
+====================================================================================================
+REP: a0/rep085_20251220-180900
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1316 clip=0 rms_pre=0.000361 rms_post=0.030625 snr=38.56dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a#6  s1=0.9856  s2=0.9360  margin=0.0496  accepted=True
+TOP10: a#6:0.986  c1:0.936  a1:0.936  f2:0.933  a0:0.933  b1:0.932  f#2:0.932  a#0:0.931  d2:0.931  g#1:0.929
+====================================================================================================
+REP: a0/rep086_20251220-180903
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0957 clip=0 rms_pre=0.000356 rms_post=0.019938 snr=34.96dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: b6  s1=0.9918  s2=0.9297  margin=0.0622  accepted=True
+TOP10: b6:0.992  a#6:0.930  c7:0.929  d2:0.928  f#2:0.928  f2:0.924  c3:0.921  b1:0.921  a#1:0.916  g2:0.915
+====================================================================================================
+REP: a0/rep087_20251220-180905
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.1045 clip=0 rms_pre=0.000351 rms_post=0.019501 snr=34.89dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c7  s1=0.9914  s2=0.9365  margin=0.0549  accepted=True
+TOP10: c7:0.991  a2:0.936  c2:0.923  d2:0.923  d#2:0.922  c3:0.919  g2:0.919  c#2:0.915  a#2:0.914  f2:0.914
+====================================================================================================
+REP: a0/rep088_20251220-180907
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0816 clip=0 rms_pre=0.000354 rms_post=0.013105 snr=31.38dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: c#7  s1=0.9905  s2=0.9292  margin=0.0612  accepted=True
+TOP10: c#7:0.990  a2:0.929  a#2:0.926  d#2:0.922  c#2:0.915  c3:0.913  d7:0.908  b2:0.908  e2:0.908  c7:0.906
+====================================================================================================
+REP: a0/rep089_20251220-180910
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0757 clip=0 rms_pre=0.000854 rms_post=0.011098 snr=22.28dB onset-enter=0.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d7  s1=0.9921  s2=0.9364  margin=0.0556  accepted=True
+TOP10: d7:0.992  d6:0.936  f#1:0.934  c#2:0.925  d#3:0.922  d2:0.921  a#2:0.920  e2:0.920  f1:0.919  d#2:0.919
+====================================================================================================
+REP: a0/rep090_20251220-180913
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0877 clip=0 rms_pre=0.000356 rms_post=0.014800 snr=32.39dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: d#7  s1=0.9936  s2=0.9218  margin=0.0718  accepted=True
+TOP10: d#7:0.994  f#2:0.922  a#0:0.920  d2:0.915  f#1:0.913  d#6:0.913  c#2:0.912  e3:0.911  d7:0.909  a#2:0.909
+====================================================================================================
+REP: a0/rep091_20251220-180916
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0397 clip=0 rms_pre=0.000363 rms_post=0.006897 snr=25.59dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: e7  s1=0.9931  s2=0.9520  margin=0.0412  accepted=True
+TOP10: e7:0.993  b0:0.952  g1:0.952  d#1:0.946  g#1:0.945  e6:0.944  a#0:0.944  d2:0.943  d#2:0.943  a1:0.943
+====================================================================================================
+REP: a0/rep092_20251220-180918
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep092_20251220-180923
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0739 clip=0 rms_pre=0.000350 rms_post=0.011570 snr=30.38dB onset-enter=30.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f7  s1=0.9941  s2=0.9347  margin=0.0595  accepted=True
+TOP10: f7:0.994  g2:0.935  f#7:0.923  e7:0.922  c#2:0.921  d#2:0.921  e2:0.920  a0:0.919  d2:0.919  c3:0.917
+====================================================================================================
+REP: a0/rep093_20251220-180928
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0840 clip=0 rms_pre=0.001128 rms_post=0.013030 snr=21.25dB onset-enter=5.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: f#7  s1=0.9922  s2=0.9255  margin=0.0667  accepted=True
+TOP10: f#7:0.992  g#7:0.926  f7:0.918  f#6:0.916  g7:0.916  g6:0.913  d2:0.911  c3:0.908  c#2:0.907  g#3:0.907
+====================================================================================================
+REP: a0/rep094_20251220-180931
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep094_20251220-180937
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0445 clip=0 rms_pre=0.000364 rms_post=0.007221 snr=25.96dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g7  s1=0.9927  s2=0.9713  margin=0.0214  accepted=True
+TOP10: g7:0.993  g#7:0.971  e3:0.913  a7:0.910  g6:0.909  g#6:0.908  f#7:0.906  f2:0.906  g#3:0.906  a2:0.906
+====================================================================================================
+REP: a0/rep095_20251220-180940
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0706 clip=0 rms_pre=0.000837 rms_post=0.011959 snr=23.10dB onset-enter=15.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#7  s1=0.9939  s2=0.9773  margin=0.0166  accepted=True
+TOP10: g#7:0.994  g7:0.977  a7:0.925  f#7:0.920  g6:0.912  e3:0.910  g#3:0.909  a#2:0.903  g#6:0.900  f2:0.899
+====================================================================================================
+REP: a0/rep096_20251220-180944
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0939 clip=0 rms_pre=0.000425 rms_post=0.015106 snr=31.02dB onset-enter=20.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: g#7  s1=0.9931  s2=0.9726  margin=0.0205  accepted=True
+TOP10: g#7:0.993  g7:0.973  a7:0.924  f#7:0.915  e3:0.908  g6:0.907  g#3:0.906  a#2:0.902  c4:0.898  f2:0.898
+====================================================================================================
+REP: a0/rep097_20251220-180947
+QC: timed out waiting for aligned outputs (aligned_i16.raw / aligned_meta.json)
+====================================================================================================
+REP: a0/rep097_20251220-180951
+TRUE(label from meta): a0
+QC: fs=48000 peak=0.0563 clip=0 rms_pre=0.000440 rms_post=0.008823 snr=26.05dB onset-enter=25.0ms onset_in_aligned=9600 pre_align_ms=200 post_align_ms=200
+PRED: a7  s1=0.9901  s2=0.9338  margin=0.0564  accepted=True
+TOP10: a7:0.990  g#7:0.934  g7:0.919  a#2:0.893  a2:0.889  g2:0.889  e2:0.888  c4:0.887  e3:0.886  b2:0.885
