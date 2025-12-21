@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec /usr/bin/python3 /home/rudyy/er1/scripts/ota_verify.py "$@"

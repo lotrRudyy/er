@@ -3,7 +3,6 @@ Set-StrictMode -Version Latest
 
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
-$er1Cmd = "/home/rudyy/er1/er1"
 $er1RemoteLogDir = "/home/rudyy/er1/logs"
 $er1TodayLog = "$er1RemoteLogDir/er1-" + (Get-Date -Format "dd.MM.yyyy") + ".log"
 
@@ -143,7 +142,7 @@ function Invoke-Er1Push {
 }
 
 # =========================================================
-# LOGGING (remote tail helpers)
+# STATUS / DOCTOR / MQTT
 # =========================================================
 
 function Invoke-Er1Status {
@@ -174,12 +173,13 @@ function Invoke-Er1Status {
     Write-Host "$prefix SSH: OK ($er1Pi)" -ForegroundColor Green
 
     Write-Host "`n=== SERVICES ===" -ForegroundColor Cyan
-    ssh $er1Pi "systemctl is-active er1-mqtt-log.service"
+    ssh $er1Pi "systemctl is-active mosquitto.service"
+    ssh $er1Pi "systemctl is-active mqtt-log.service"
     ssh $er1Pi "systemctl is-active ota-http.service"
     ssh $er1Pi "systemctl is-active ota-verify.service"
 
-    Write-Host "`n=== MQTT ===" -ForegroundColor Cyan
-    ssh $er1Pi "$er1Cmd status_mqtt"
+    Write-Host "`n=== MQTT (BROKER) ===" -ForegroundColor Cyan
+    ssh $er1Pi "mosquitto_sub -h 127.0.0.1 -t '\$SYS/broker/version' -C 1 2>/dev/null || true"
 
     Write-Host "`n=== LAST ERR LOGS (today, last 20) ===" -ForegroundColor Cyan
     ssh $er1Pi "grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 20 || true"
@@ -210,13 +210,14 @@ function Invoke-Er1Doctor {
         "echo '--- uptime ---'; uptime",
         "echo '--- ip ---'; hostname -I || true",
         "echo '--- df ---'; df -h",
-        "echo '--- svc er1-mqtt-log ---'; systemctl --no-pager --full status er1-mqtt-log.service || true",
+        "echo '--- svc mosquitto ---'; systemctl --no-pager --full status mosquitto.service || true",
+        "echo '--- svc mqtt-log ---'; systemctl --no-pager --full status mqtt-log.service || true",
         "echo '--- svc ota-http ---'; systemctl --no-pager --full status ota-http.service || true",
         "echo '--- svc ota-verify ---'; systemctl --no-pager --full status ota-verify.service || true",
-        "echo '--- journal mqtt-log (200) ---'; journalctl -u er1-mqtt-log.service -n 200 --no-pager || true",
+        "echo '--- journal mosquitto (200) ---'; journalctl -u mosquitto.service -n 200 --no-pager || true",
+        "echo '--- journal mqtt-log (200) ---'; journalctl -u mqtt-log.service -n 200 --no-pager || true",
         "echo '--- journal ota-http (200) ---'; journalctl -u ota-http.service -n 200 --no-pager || true",
         "echo '--- journal ota-verify (200) ---'; journalctl -u ota-verify.service -n 200 --no-pager || true",
-        "echo '--- status_mqtt ---'; $er1Cmd status_mqtt || true",
         "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
         "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"
     )
@@ -236,11 +237,26 @@ function Invoke-Er1Mqtt {
     )
 
     switch ($Action) {
-        "status"  { ssh $er1Pi "$er1Cmd status_mqtt"; return }
-        "restart" { ssh $er1Pi "$er1Cmd restart_mqtt"; return }
-        "logs"    { ssh $er1Pi "journalctl -u er1-mqtt-log.service -n 200 -f"; return }
+        "status"  {
+            ssh $er1Pi "systemctl is-active mosquitto.service"
+            ssh $er1Pi "systemctl is-active mqtt-log.service"
+            ssh $er1Pi "mosquitto_sub -h 127.0.0.1 -t '\$SYS/broker/version' -C 1 2>/dev/null || true"
+            return
+        }
+        "restart" {
+            ssh -t $er1Pi "sudo systemctl restart mosquitto.service; sudo systemctl restart mqtt-log.service"
+            return
+        }
+        "logs"    {
+            ssh $er1Pi "journalctl -u mqtt-log.service -n 200 -f"
+            return
+        }
     }
 }
+
+# =========================================================
+# LOG TAGS + EXTRACTION
+# =========================================================
 
 function Invoke-Er1LogTag {
     param(
@@ -289,10 +305,10 @@ function Get-Er1LogTagFromLine {
 
 function Invoke-Er1LogExtract {
     param(
-        [string[]]$Args
+        [string[]]$ExtractArgs
     )
 
-    if (-not $Args -or $Args.Count -eq 0) {
+    if (-not $ExtractArgs -or $ExtractArgs.Count -eq 0) {
         throw "Usage: er1 log extract --from <tagA> --to <tagB> [--date YYYY-MM-DD] [--open|--no-open] OR er1 log extract --tag <name> [--date YYYY-MM-DD] [--open|--no-open]"
     }
 
@@ -302,28 +318,28 @@ function Invoke-Er1LogExtract {
     $dateInput = $null
     $openExplorer = $true
 
-    for ($i = 0; $i -lt $Args.Count; $i++) {
-        $arg = $Args[$i]
+    for ($i = 0; $i -lt $ExtractArgs.Count; $i++) {
+        $arg = $ExtractArgs[$i]
         switch ($arg) {
             "--from" {
-                if ($i + 1 -ge $Args.Count) { throw "Missing value for --from" }
-                $fromTag = $Args[$i + 1]; $i++; continue
+                if ($i + 1 -ge $ExtractArgs.Count) { throw "Missing value for --from" }
+                $fromTag = $ExtractArgs[$i + 1]; $i++; continue
             }
             "--to" {
-                if ($i + 1 -ge $Args.Count) { throw "Missing value for --to" }
-                $toTag = $Args[$i + 1]; $i++; continue
+                if ($i + 1 -ge $ExtractArgs.Count) { throw "Missing value for --to" }
+                $toTag = $ExtractArgs[$i + 1]; $i++; continue
             }
             "--tag" {
-                if ($i + 1 -ge $Args.Count) { throw "Missing value for --tag" }
-                $baseTag = $Args[$i + 1]
+                if ($i + 1 -ge $ExtractArgs.Count) { throw "Missing value for --tag" }
+                $baseTag = $ExtractArgs[$i + 1]
                 $fromTag = "$baseTag-start"
                 $toTag = "$baseTag-end"
                 $i++
                 continue
             }
             "--date" {
-                if ($i + 1 -ge $Args.Count) { throw "Missing value for --date" }
-                $dateInput = $Args[$i + 1]; $i++; continue
+                if ($i + 1 -ge $ExtractArgs.Count) { throw "Missing value for --date" }
+                $dateInput = $ExtractArgs[$i + 1]; $i++; continue
             }
             "--open" {
                 $openExplorer = $true
@@ -401,22 +417,22 @@ function Invoke-Er1LogExtract {
         $tag = Get-Er1LogTagFromLine -Line $lines[$i]
         if (-not $tag) { continue }
 
-        if ($startIdx -eq $null -and $tag -eq $fromTag) {
+        if ($null -eq $startIdx -and $tag -eq $fromTag) {
             $startIdx = $i
             continue
         }
 
-        if ($startIdx -ne $null -and $tag -eq $toTag) {
+        if ($null -ne $startIdx -and $tag -eq $toTag) {
             $endIdx = $i
             break
         }
     }
 
-    if ($startIdx -eq $null) {
+    if ($null -eq $startIdx) {
         Write-Error "[er1 log extract] Tag '$fromTag' not found in $remoteFile."
         return
     }
-    if ($endIdx -eq $null -or $endIdx -lt $startIdx) {
+    if ($null -eq $endIdx -or $endIdx -lt $startIdx) {
         Write-Error "[er1 log extract] Tag '$toTag' not found after '$fromTag' in $remoteFile."
         return
     }
@@ -530,17 +546,24 @@ function er1 {
                 throw "Usage: er1 lock <id> open|close OR er1 lock all open|close"
             }
 
+            $toAction = {
+                param([string]$a)
+                if ($a -eq "open") { return "OPEN" }
+                if ($a -eq "close") { return "CLOSE" }
+                throw "Usage: er1 lock <id> open|close OR er1 lock all open|close"
+            }
+
             if ($cmdArgs[0] -eq "all") {
-                $action = $cmdArgs[1]
-                if ($action -notin @("open","close")) { throw "Usage: er1 lock all open|close" }
-                ssh -t $er1Pi "$er1Cmd lock $action all"
+                $action = & $toAction $cmdArgs[1]
+                foreach ($id in $er1LockIds) {
+                    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/$id/cmd' -m '$action'"
+                }
                 return
             }
 
             $id = $cmdArgs[0]
-            $action2 = $cmdArgs[1]
-            if ($action2 -notin @("open","close")) { throw "Usage: er1 lock <id> open|close" }
-            ssh -t $er1Pi "$er1Cmd lock $action2 $id"
+            $action2 = & $toAction $cmdArgs[1]
+            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/$id/cmd' -m '$action2'"
             return
         }
 
@@ -555,9 +578,9 @@ function er1 {
                     return
                 }
                 elseif ($sub -eq "extract") {
-                    $extractArgs = @()
-                    if ($cmdArgs.Count -gt 1) { $extractArgs = $cmdArgs[1..($cmdArgs.Count - 1)] }
-                    Invoke-Er1LogExtract -Args $extractArgs
+                    $extractArgsLocal = @()
+                    if ($cmdArgs.Count -gt 1) { $extractArgsLocal = $cmdArgs[1..($cmdArgs.Count - 1)] }
+                    Invoke-Er1LogExtract -ExtractArgs $extractArgsLocal
                     return
                 }
             }
@@ -592,29 +615,48 @@ function er1 {
 
             $todayFile = $er1TodayLog
 
+            $localSaveDir = Join-Path $erRepoRoot "er1\data\logs"
+            if ($saveRequested) {
+                New-Item -ItemType Directory -Force $localSaveDir | Out-Null
+            }
+
             if ($live) {
                 if ($useAll) {
-                    ssh -t $er1Pi "$er1Cmd logs live"
+                    ssh -t $er1Pi "tail -f $todayFile"
                 } else {
-                    ssh -t $er1Pi "$er1Cmd logs live | grep -E '$regex'"
+                    ssh -t $er1Pi "tail -f $todayFile | grep -E '$regex'"
                 }
                 return
             }
+
+            $remoteCmd = $null
 
             if ($errors) {
                 if ($useAll) {
-                    ssh $er1Pi "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
+                    $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
                 } else {
-                    ssh $er1Pi "cd ~/er1; grep -E '$regex' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
                 }
+            } else {
+                if ($useAll) {
+                    $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
+                } else {
+                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | tail -n $localN"
+                }
+            }
+
+            if (-not $saveRequested) {
+                ssh $er1Pi $remoteCmd
                 return
             }
 
-            if ($useAll) {
-                ssh $er1Pi "cd ~/er1; tail -n $localN $todayFile"
-            } else {
-                ssh $er1Pi "cd ~/er1; grep -E '$regex' $todayFile | tail -n $localN"
-            }
+            $outLines = ssh $er1Pi $remoteCmd
+            $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+            $label = if ($useAll) { "all" } else { ($patterns -join "_") }
+            foreach ($c in [IO.Path]::GetInvalidFileNameChars()) { $label = $label -replace ([Regex]::Escape($c)), "_" }
+            $outPath = Join-Path $localSaveDir ("log_{0}_{1}.txt" -f $label, $ts)
+            $outLines | Set-Content -Path $outPath -Encoding utf8
+            Write-Host "[er1 log] Saved -> $outPath" -ForegroundColor Green
             return
         }
 

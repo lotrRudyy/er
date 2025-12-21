@@ -1,0 +1,17 @@
+[Unit]
+Description=ER1 OTA verification watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rudyy
+Group=rudyy
+WorkingDirectory=/home/rudyy/er1
+Environment=LOCAL_BROKER=127.0.0.1
+ExecStart=/usr/bin/env python3 /home/rudyy/er1/scripts/ota_verify.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

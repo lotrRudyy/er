@@ -15,7 +15,7 @@ struct OtaConfig {
   uint16_t port = 80;
   const char* path = nullptr;
   const char* allowedHost = nullptr;
-  const char* allowedPathPrefix = "/firmware/";
+  const char* allowedPathPrefix = "/node_firmware/";
   const char* targetId = nullptr;
   const char* infoLevel = "INF";
   const char* errLevel = "ERR";

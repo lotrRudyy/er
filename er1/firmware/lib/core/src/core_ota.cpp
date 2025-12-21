@@ -20,7 +20,7 @@ constexpr size_t kMaxPathLen = 127;
 constexpr size_t kMaxVersionLen = 47;
 constexpr size_t kMaxIdLen = 47;
 constexpr size_t kMaxTargetLen = 47;
-constexpr const char* kDefaultPathPrefix = "/firmware/";
+constexpr const char* kDefaultPathPrefix = "/node_firmware/";
 constexpr uint32_t kPendingMagic = 0xC05A4E2A;
 
 struct CommandFields {
