@@ -112,6 +112,8 @@ NodeCore::NodeCore() : ctx_(*this) {}
 
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
+  // Ensure local time formatting matches Europe/Rome (CET/CEST), not UTC.
+  core_time_init_tz();
   buildIdBuf_[0] = '\0';
   if (!core_format_build_ts(buildIdBuf_, sizeof(buildIdBuf_))) {
     buildIdBuf_[0] = '\0';

@@ -6,6 +6,8 @@
 #include "core_log.h"
 #include "core_mqtt.h"
 #include "core_ota.h"
+#include "core_time.h"
+
 
 namespace Core {
 
@@ -173,7 +175,7 @@ private:
   uint32_t lastHeartbeatMs_ = 0;
   uint32_t heartbeatIntervalMs_ = 0;
   bool heartbeatImmediate_ = false;
-  char buildIdBuf_[24] = {0};
+  char buildIdBuf_[CORE_TS_LEN] = {0};
 
   // Time sync state
   bool timeValidFirstSet_ = false;

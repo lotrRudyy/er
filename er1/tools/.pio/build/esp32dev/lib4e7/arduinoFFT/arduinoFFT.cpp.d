@@ -1,5 +1,5 @@
 .pio/build/esp32dev/lib4e7/arduinoFFT/arduinoFFT.cpp.o: \
- .pio/libdeps/esp32dev/arduinoFFT/src/ArduinoFFT.cpp \
+ .pio/libdeps/esp32dev/arduinoFFT/src/arduinoFFT.cpp \
  .pio/libdeps/esp32dev/arduinoFFT/src/arduinoFFT.h \
  C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
  C:/Users/Rudy/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp_arduino_version.h \

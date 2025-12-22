@@ -162,13 +162,6 @@ function Get-FirmwareBuild {
     # Use a deterministic build id that the firmware can also expose (we use compile timestamp),
     # but on PC tooling we can just use git commit count (deterministic) or timestamp fallback.
 
-    try {
-        $gitCount = & git rev-list --count HEAD 2>$null
-        if ($LASTEXITCODE -eq 0 -and $gitCount) {
-            return [string]$gitCount
-        }
-    } catch {}
-
     return (Get-Date -Format "yyyy.MM.dd-HH.mm.ss")
 }
 

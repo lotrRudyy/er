@@ -2,7 +2,7 @@
 """
 Minimal HTTP server for OTA firmware artifacts.
 
-Serves /firmware/<name>.bin from /home/rudyy/firmware.
+Serves /node_firmware/<name>.bin from /home/rudyy/er1/node_firmware.
 """
 
 from __future__ import annotations
@@ -11,12 +11,12 @@ import functools
 import http.server
 from pathlib import Path
 
-DOC_ROOT = Path("/home/rudyy/firmware")
-URL_PREFIX = "/firmware"
+DOC_ROOT = Path("/home/rudyy/er1/node_firmware")
+URL_PREFIX = "/node_firmware"
 
 
-class FirmwareRequestHandler(http.server.SimpleHTTPRequestHandler):
-    """Serve firmware files while accepting the /firmware URL prefix."""
+class firmwareRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """Serve firmware files while accepting the /node_firmware URL prefix."""
 
     def translate_path(self, path: str) -> str:
         normalized = self._strip_prefix(path or "/")

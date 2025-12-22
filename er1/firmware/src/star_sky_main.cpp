@@ -27,8 +27,8 @@ static String TOPIC_CANDLES_EVENT = Core::topic("candles", "evt");
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/star_sky.bin";
-static const char* OTA_PATH_PREFIX = "/firmware/";
+static const char* OTA_PATH = "/node_firmware/star_sky.bin";
+static const char* OTA_PATH_PREFIX = "/node_firmware/";
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= CORE + MODULE =======================

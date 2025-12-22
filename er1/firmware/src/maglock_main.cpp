@@ -8,7 +8,7 @@
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* FW_VERSION = "1.6";
+static const char* FW_VERSION = "1.6.xd";
 static const char* FW_DESC = "maglock_ctrl 1.6 - OTA JSON command, PSK removed";
 
 // ======================= NETWORK CONFIG ======================
@@ -28,8 +28,8 @@ static const char* TOPIC_LOCK_CMD = "maglock/lock/+/cmd";
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/firmware/maglock.bin";
-static const char* OTA_PATH_PREFIX = "/firmware/";
+static const char* OTA_PATH = "/node_firmware/maglock.bin";
+static const char* OTA_PATH_PREFIX = "/node_firmware/";
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= CORE + MODULE =======================

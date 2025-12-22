@@ -1,3 +1,4 @@
+// core_time.cpp
 #include "core_time.h"
 
 #include <Arduino.h>
@@ -7,24 +8,29 @@
 
 #if defined(ESP32)
 #include <sys/time.h>
+#include <stdlib.h>  // setenv
 #endif
 
 namespace {
-constexpr size_t kTimestampMinLen = 24;  // "YYYY.MM.DD HH:MM:SS.mmm" + null
+// "HH:MM:SS.mmm - YYYY.MM.DD" (25 chars) + null
+constexpr size_t kTimestampMinLen = CORE_TS_LEN;
 
 bool wallClockValid(time_t t) {
   // Anything before ~2023 is "not set" in practice.
-  return t >= 1672531200; // 2023-01-01 00:00:00 UTC
+  return t >= 1672531200;  // 2023-01-01 00:00:00 UTC
 }
 
 bool formatTimestamp(const struct tm& tmLocal, int ms, char* out, size_t outLen) {
   if (!out || outLen < kTimestampMinLen) return false;
   out[0] = '\0';
 
-  char base[20];  // YYYY.MM.DD HH:MM:SS
-  if (strftime(base, sizeof(base), "%Y.%m.%d %H:%M:%S", &tmLocal) == 0) return false;
+  char timePart[9];   // "HH:MM:SS"
+  char datePart[11];  // "YYYY.MM.DD"
 
-  std::snprintf(out, outLen, "%s.%03d", base, ms);
+  if (strftime(timePart, sizeof(timePart), "%H:%M:%S", &tmLocal) == 0) return false;
+  if (strftime(datePart, sizeof(datePart), "%Y.%m.%d", &tmLocal) == 0) return false;
+
+  std::snprintf(out, outLen, "%s.%03d - %s", timePart, ms, datePart);
   return true;
 }
 
@@ -62,6 +68,16 @@ bool parseCompileTime(const char* timeStr, int& hour, int& minute, int& second) 
   second = s;
   return true;
 }
+}  // namespace
+
+void core_time_init_tz() {
+#if defined(ESP32)
+  // Europe/Rome (CET/CEST) POSIX TZ string:
+  // CET is UTC+1, CEST is UTC+2
+  // DST starts last Sunday of March at 02:00, ends last Sunday of October at 03:00
+  setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+  tzset();
+#endif
 }
 
 int64_t core_epoch_seconds() {
@@ -76,6 +92,9 @@ bool core_format_ts(char* out, size_t outLen) {
 
   time_t now = ::time(nullptr);
   if (!wallClockValid(now)) return false;
+
+  // Ensure localtime_r uses the intended timezone (not default UTC).
+  core_time_init_tz();
 
   struct tm tmLocal;
 #if defined(ESP32)
@@ -101,6 +120,9 @@ bool core_format_build_ts(char* out, size_t outLen) {
   if (!out || outLen < kTimestampMinLen) return false;
   out[0] = '\0';
 
+  // Ensure compile-time "local" formatting matches Rome too.
+  core_time_init_tz();
+
   int year = 0, month = 0, day = 0;
   int hour = 0, minute = 0, second = 0;
   if (!parseCompileDate(__DATE__, year, month, day)) return false;
@@ -108,14 +130,15 @@ bool core_format_build_ts(char* out, size_t outLen) {
 
   struct tm tmBuild {};
   tmBuild.tm_year = year - 1900;
-  tmBuild.tm_mon = month - 1;
+  tmBuild.tm_mon  = month - 1;
   tmBuild.tm_mday = day;
   tmBuild.tm_hour = hour;
-  tmBuild.tm_min = minute;
-  tmBuild.tm_sec = second;
+  tmBuild.tm_min  = minute;
+  tmBuild.tm_sec  = second;
 
   return formatTimestamp(tmBuild, 0, out, outLen);
 }
+
 bool core_set_time(int64_t epochSeconds) {
   if (epochSeconds < kMinValidEpoch) {
     return false;
@@ -125,10 +148,14 @@ bool core_set_time(int64_t epochSeconds) {
   struct timeval tv;
   tv.tv_sec = static_cast<time_t>(epochSeconds);
   tv.tv_usec = 0;
-  return settimeofday(&tv, nullptr) == 0;
+
+  if (settimeofday(&tv, nullptr) != 0) return false;
+
+  // Make sure subsequent localtime_r() calls produce Europe/Rome time.
+  core_time_init_tz();
+  return true;
 #else
   // For non-ESP32, this may not be available or may require different handling
-  // For now, return false to indicate unsupported
   (void)epochSeconds;
   return false;
 #endif

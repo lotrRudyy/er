@@ -3,12 +3,14 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 
+#include "core_time.h"
+
 namespace Core {
 
 struct TimestampFields {
   int64_t epoch = 0;
   bool timeValid = false;
-  char ts[24] = {0};
+  char ts[CORE_TS_LEN] = {0};
 };
 
 class TimestampSource {

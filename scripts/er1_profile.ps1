@@ -176,7 +176,6 @@ function Invoke-Er1Status {
     ssh $er1Pi "systemctl is-active mosquitto.service"
     ssh $er1Pi "systemctl is-active mqtt-log.service"
     ssh $er1Pi "systemctl is-active ota-http.service"
-    ssh $er1Pi "systemctl is-active ota-verify.service"
 
     Write-Host "`n=== MQTT (BROKER) ===" -ForegroundColor Cyan
     ssh $er1Pi "mosquitto_sub -h 127.0.0.1 -t '\$SYS/broker/version' -C 1 2>/dev/null || true"
@@ -213,11 +212,9 @@ function Invoke-Er1Doctor {
         "echo '--- svc mosquitto ---'; systemctl --no-pager --full status mosquitto.service || true",
         "echo '--- svc mqtt-log ---'; systemctl --no-pager --full status mqtt-log.service || true",
         "echo '--- svc ota-http ---'; systemctl --no-pager --full status ota-http.service || true",
-        "echo '--- svc ota-verify ---'; systemctl --no-pager --full status ota-verify.service || true",
         "echo '--- journal mosquitto (200) ---'; journalctl -u mosquitto.service -n 200 --no-pager || true",
         "echo '--- journal mqtt-log (200) ---'; journalctl -u mqtt-log.service -n 200 --no-pager || true",
         "echo '--- journal ota-http (200) ---'; journalctl -u ota-http.service -n 200 --no-pager || true",
-        "echo '--- journal ota-verify (200) ---'; journalctl -u ota-verify.service -n 200 --no-pager || true",
         "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
         "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"
     )
@@ -536,9 +533,143 @@ function er1 {
         "ota" {
             $target = if ($cmdArgs -and $cmdArgs.Count -ge 1) { $cmdArgs[0] } else { $null }
             if (-not $target) { throw "Usage: er1 ota <device>" }
+
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
-            pwsh -File $otaScript -Target $target
-            return
+
+            # Run ota.ps1 once, CAPTURE output so we can parse version/build + print it.
+            $otaOut = & pwsh -File $otaScript -Target $target 2>&1
+            $otaText = ($otaOut | Out-String)
+            Write-Host $otaText
+
+            if ($LASTEXITCODE -ne 0) { throw "ota.ps1 failed (exit $LASTEXITCODE)." }
+
+            # Parse from ota.ps1 output:
+            # Firmware : /home/rudyy/er1/node_firmware/<target>.bin
+            # Version  : <ver>
+            # Build    : <build>
+            $fwPath = ([regex]::Match($otaText, '^\s*Firmware\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
+            $verStr = ([regex]::Match($otaText, '^\s*Version\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
+            $bldStr = ([regex]::Match($otaText, '^\s*Build\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
+
+            if (-not $fwPath) { throw "Verifier: could not parse firmware path from ota.ps1 output." }
+            if (-not $verStr) { throw "Verifier: could not parse Version from ota.ps1 output." }
+            if (-not $bldStr) { throw "Verifier: could not parse Build from ota.ps1 output." }
+
+            # Compute SHA256 + size on the PC for the locally built .bin
+            $localBin = Join-Path $erRepoRoot ("er1\firmware\.pio\build\{0}\firmware.bin" -f $target)
+            Write-Host "== LocalBin: $localBin =="
+            if (-not (Test-Path $localBin)) {
+                throw "Verifier: local firmware.bin not found at $localBin"
+            }
+
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $localBin).Hash.ToLowerInvariant()
+            $size = (Get-Item $localBin).Length
+            if ($size -le 0) { throw "Verifier: local firmware.bin size invalid: $size" }
+
+            # URL served by Pi (ota-http)
+            $httpHost = "192.168.0.10"
+            $url = "http://$httpHost/node_firmware/$target.bin"
+
+            # Publish UPDATE via mosquitto_pub on the Pi (no Pi python scripts)
+            $otaId = ([guid]::NewGuid().ToString("N"))
+            $payloadObj = [ordered]@{
+                id      = $otaId
+                version = $verStr
+                build   = $bldStr
+                target  = $target
+                url     = $url
+                sha256  = $hash
+                size    = $size
+            }
+            $payloadJson = ($payloadObj | ConvertTo-Json -Compress)
+            $cmdTopic = "$target/cmd"
+            $payloadLine = "UPDATE $target $payloadJson"
+
+            # Escape single quotes for remote bash single-quoted string
+            $payloadEsc = $payloadLine -replace "'", "'\''"
+
+            Write-Host "== Publishing OTA command on $cmdTopic =="
+            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m '$payloadEsc'"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to publish OTA command via mosquitto_pub (exit $LASTEXITCODE)." }
+
+
+	            # PC-side verify (10s max): ONLY check that
+	            #   1) the OTA id we just published is observed on '$target/ota'
+	            #   2) the ESP rebooted AFTER that (offline or uptime reset)
+	            # This avoids false fails while the node is still running the old build during OTA.
+	            $hbTimeoutSec = 10
+	            Write-Host "== Verifier(PC): expect id=$otaId; watching '$target/ota' + '$target/hb' (up to ${hbTimeoutSec}s) =="
+
+	            # -v prints "topic payload" so we can parse which stream the line came from.
+	            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/ota' -t '$target/hb' 2>/dev/null || true"
+	            $lines = ssh $er1Pi $subCmd
+
+	            # We ONLY accept OTA_FLASHED with matching d.id as "finished".
+	            $seenOtaFlashedId = $false
+	            $rebooted = $false
+	            $prevUp = $null
+	            $lastLine = $null
+
+	            foreach ($raw in $lines) {
+	                if (-not $raw) { continue }
+	                $lastLine = $raw
+
+	                $sp = $raw.IndexOf(' ')
+	                if ($sp -lt 0) { continue }
+	                $topic = $raw.Substring(0, $sp).Trim()
+	                $payload = $raw.Substring($sp + 1).Trim()
+
+	                if ($topic -eq "$target/ota") {
+	                    try { $msg = $payload | ConvertFrom-Json } catch { continue }
+	                    $st = [string]$msg.st
+	                    $d = $msg.d
+	                    if ($null -eq $d) { continue }
+	                    $idSeen = [string]$d.id
+	                    if ($idSeen -and $idSeen -eq $otaId -and $st -eq "OTA_FLASHED") {
+	                        $seenOtaFlashedId = $true
+	                        $seenOtaStage = $st
+	                    }
+	                    continue
+	                }
+
+	                if ($topic -eq "$target/hb") {
+	                    if ($payload.ToLowerInvariant() -eq "offline") {
+	                        if ($seenOtaFlashedId) {
+	                            $rebooted = $true
+	                            break
+	                        }
+	                        continue
+	                    }
+
+	                    try { $hb = $payload | ConvertFrom-Json } catch { continue }
+	                    $upVal = $hb.up
+	                    try {
+	                        $upInt = [int]$upVal
+	                        if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
+	                            if ($seenOtaFlashedId) {
+	                                $rebooted = $true
+	                                break
+	                            }
+	                        }
+	                        $prevUp = $upInt
+	                    } catch {
+	                        # ignore
+	                    }
+	                    continue
+	                }
+	            }
+
+	            if (-not $seenOtaFlashedId) {
+	                $reason = if (-not $lastLine) { "no messages received" } else { "no matching OTA_FLASHED id observed" }
+	                throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
+	            }
+
+	            if (-not $rebooted) {
+	                throw "== OTA VERIFY: FAIL (OTA_FLASHED id seen but no reboot detected) within ${hbTimeoutSec}s =="
+	            }
+
+	            Write-Host "== OTA VERIFY: OK (OTA_FLASHED id seen + reboot detected) ==" -ForegroundColor Green
+	            return
         }
 
         "lock" {

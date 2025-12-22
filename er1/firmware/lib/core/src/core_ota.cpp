@@ -175,7 +175,19 @@ bool parseSize(const JsonVariantConst& var, size_t& out) {
 
 bool parseJsonCommand(const char* payload, CommandFields& out) {
   if (!payload || payload[0] == '\0') return false;
-  StaticJsonDocument<512> doc;
+  // Be tolerant to callers accidentally passing the full command line,
+  // e.g. "UPDATE {...}" instead of only the JSON argument.
+  while (*payload == ' ' || *payload == '\t' || *payload == '\r' || *payload == '\n') {
+    payload++;
+  }
+  if (std::strncmp(payload, "UPDATE", 6) == 0) {
+    const char* brace = std::strchr(payload, '{');
+    if (brace) payload = brace;
+  }
+
+  // ArduinoJson needs enough headroom for long strings (URL + sha256).
+  // 512 is often too tight across builds, so use a safer capacity.
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) return false;
   JsonObjectConst obj = doc.as<JsonObjectConst>();
