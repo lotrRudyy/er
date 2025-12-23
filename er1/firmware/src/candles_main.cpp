@@ -11,6 +11,7 @@ using namespace Core;
 static const char* NODE_ID = "candles";
 static const char* FW_VERSION = "1.4";
 static const char* FW_DESC = "candles 1.4 - OTA JSON command, PSK removed";
+static const char* FW_BUILD_ID = "IC0C5PXTFS6QFR9XDHTY";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
@@ -79,6 +80,7 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+  cfg.buildId = FW_BUILD_ID;
   cfg.startEnabled = true;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));

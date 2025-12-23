@@ -15,6 +15,7 @@ static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
 static const char* FW_VERSION = "1.19";
 static const char* FW_DESC = "Single firmware with two logical MQTT nodes; OTA JSON, no PSK";
+static const char* FW_BUILD_ID = "ZFX663XD7DXFSQG26ZAF";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -135,6 +136,7 @@ void setup() {
   cfg.nodeId = NODE_IDENTITY;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+  cfg.buildId = FW_BUILD_ID;
   cfg.startEnabled = true;
   cfg.prefsNamespace = NODE_IDENTITY;
 

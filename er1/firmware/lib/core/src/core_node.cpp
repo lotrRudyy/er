@@ -122,7 +122,10 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   if (!cfg_.nodeId || cfg_.nodeId[0] == '\0') {
     cfg_.nodeId = cfg_.net.clientId;
   }
-  cfg_.buildId = buildIdBuf_;
+  // Respect module-provided buildId (used as OTA verifier id). Fallback to compile timestamp.
+  if (!cfg_.buildId || cfg_.buildId[0] == '\0') {
+    cfg_.buildId = buildIdBuf_;
+  }
   cfg_.topics = makeTopicConfig(cfg_.nodeId, cfg.topics);
   if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
     cfg_.ota.targetFw = cfg_.fwVersion;

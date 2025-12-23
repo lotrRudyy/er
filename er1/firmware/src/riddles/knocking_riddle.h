@@ -50,7 +50,7 @@ private:
   void initPiezo();
   void updatePiezoSamples(uint32_t nowMs);
   void handleKnockWindow(uint32_t nowMs);
-  void registerKnock(int idx, uint16_t raw);
+  void registerKnock(int idx, uint16_t raw, uint32_t nowMs);
   void playKnockSound(int idx);
   void enqueueSound(uint8_t track);
   bool soundQueueEmpty() const;

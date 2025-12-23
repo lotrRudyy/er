@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "1.19";
+static const char* FW_VERSION = "1.19xd";
 static const char* FW_DESC = "knocking 1.19 - OTA JSON command, PSK removed";
 static const char* FW_BUILD_ID = "VGN9YI0JVAMCNOB5VU6";
 
@@ -79,6 +79,7 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+  cfg.buildId = FW_BUILD_ID;
   cfg.startEnabled = true;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));

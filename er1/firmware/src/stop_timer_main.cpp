@@ -10,6 +10,7 @@ using namespace Core;
 // ======================= FIRMWARE INFO =======================
 static const char* FW_VERSION = "1.7";
 static const char* FW_DESC = "stop_timer 1.7 - OTA JSON command, PSK removed";
+static const char* FW_BUILD_ID = "QAC1CAILLBLXQR87ZVF2";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
@@ -78,6 +79,7 @@ void setup() {
   cfg.nodeId = "stop_timer";
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+  cfg.buildId = FW_BUILD_ID;
   cfg.startEnabled = true;
   cfg.prefsNamespace = "stop_timer";
 

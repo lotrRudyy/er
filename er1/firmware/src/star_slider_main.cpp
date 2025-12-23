@@ -10,6 +10,7 @@ using namespace Core;
 // ======================= FIRMWARE INFO =======================
 static const char* FW_VERSION = "1.3";
 static const char* FW_DESC = "star_slider 1.3 - OTA JSON command, PSK removed";
+static const char* FW_BUILD_ID = "MQPKAC6BQRM181HK8JA7";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
@@ -71,6 +72,7 @@ void setup() {
   cfg.nodeId = "star_slider";
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+  cfg.buildId = FW_BUILD_ID;
   cfg.startEnabled = true;
   cfg.prefsNamespace = "star_slider";
 

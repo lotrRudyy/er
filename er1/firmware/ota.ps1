@@ -158,11 +158,15 @@ function Get-FirmwareBuild {
         [string]$Dev
     )
 
-    # We no longer parse FW_BUILD from *_main.cpp.
-    # Use a deterministic build id that the firmware can also expose (we use compile timestamp),
-    # but on PC tooling we can just use git commit count (deterministic) or timestamp fallback.
-
-    return (Get-Date -Format "yyyy.MM.dd-HH.mm.ss")
+    # Build-id is a firmware constant (random 20 chars) so the PC can verify via heartbeat "build".
+    $mainPath = Get-FirmwareMainPath $Dev
+    $content = Get-Content -Path $mainPath -Raw
+    $match = [regex]::Match($content, 'FW_BUILD_ID\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        Write-Error "Unable to locate FW_BUILD_ID in $mainPath"
+        exit 1
+    }
+    return $match.Groups[1].Value
 }
 
 # ============ Resolve Env/Dev ============

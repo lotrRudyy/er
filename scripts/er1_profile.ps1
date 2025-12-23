@@ -571,7 +571,8 @@ function er1 {
             $url = "http://$httpHost/node_firmware/$target.bin"
 
             # Publish UPDATE via mosquitto_pub on the Pi (no Pi python scripts)
-            $otaId = ([guid]::NewGuid().ToString("N"))
+            # Use the firmware build-id as the OTA id (no extra random id generation).
+            $otaId = $bldStr
             $payloadObj = [ordered]@{
                 id      = $otaId
                 version = $verStr
@@ -583,7 +584,7 @@ function er1 {
             }
             $payloadJson = ($payloadObj | ConvertTo-Json -Compress)
             $cmdTopic = "$target/cmd"
-            $payloadLine = "UPDATE $target $payloadJson"
+            $payloadLine = "UPDATE $payloadJson"
 
             # Escape single quotes for remote bash single-quoted string
             $payloadEsc = $payloadLine -replace "'", "'\''"
@@ -593,83 +594,56 @@ function er1 {
             if ($LASTEXITCODE -ne 0) { throw "Failed to publish OTA command via mosquitto_pub (exit $LASTEXITCODE)." }
 
 
-	            # PC-side verify (10s max): ONLY check that
-	            #   1) the OTA id we just published is observed on '$target/ota'
-	            #   2) the ESP rebooted AFTER that (offline or uptime reset)
-	            # This avoids false fails while the node is still running the old build during OTA.
-	            $hbTimeoutSec = 10
-	            Write-Host "== Verifier(PC): expect id=$otaId; watching '$target/ota' + '$target/hb' (up to ${hbTimeoutSec}s) =="
 
-	            # -v prints "topic payload" so we can parse which stream the line came from.
-	            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/ota' -t '$target/hb' 2>/dev/null || true"
+	            # PC-side verify (10s max): ONLY check that
+	            #   1) ESP rebooted (offline or uptime reset)
+	            #   2) the first heartbeat AFTER reboot reports build == the build-id we just uploaded
+	            $hbTimeoutSec = 10
+	            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
+
+	            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"
 	            $lines = ssh $er1Pi $subCmd
 
-	            # We ONLY accept OTA_FLASHED with matching d.id as "finished".
-	            $seenOtaFlashedId = $false
 	            $rebooted = $false
 	            $prevUp = $null
-	            $lastLine = $null
+	            $lastSeen = $null
+	            $ok = $false
 
-	            foreach ($raw in $lines) {
-	                if (-not $raw) { continue }
-	                $lastLine = $raw
+	            foreach ($payload in $lines) {
+	                if (-not $payload) { continue }
+	                $lastSeen = $payload
 
-	                $sp = $raw.IndexOf(' ')
-	                if ($sp -lt 0) { continue }
-	                $topic = $raw.Substring(0, $sp).Trim()
-	                $payload = $raw.Substring($sp + 1).Trim()
-
-	                if ($topic -eq "$target/ota") {
-	                    try { $msg = $payload | ConvertFrom-Json } catch { continue }
-	                    $st = [string]$msg.st
-	                    $d = $msg.d
-	                    if ($null -eq $d) { continue }
-	                    $idSeen = [string]$d.id
-	                    if ($idSeen -and $idSeen -eq $otaId -and $st -eq "OTA_FLASHED") {
-	                        $seenOtaFlashedId = $true
-	                        $seenOtaStage = $st
-	                    }
+	                if ($payload.ToLowerInvariant() -eq "offline") {
+	                    $rebooted = $true
 	                    continue
 	                }
 
-	                if ($topic -eq "$target/hb") {
-	                    if ($payload.ToLowerInvariant() -eq "offline") {
-	                        if ($seenOtaFlashedId) {
-	                            $rebooted = $true
-	                            break
-	                        }
-	                        continue
+	                try { $hb = $payload | ConvertFrom-Json } catch { continue }
+	                $upVal = $hb.up
+	                try {
+	                    $upInt = [int]$upVal
+	                    if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
+	                        $rebooted = $true
 	                    }
+	                    $prevUp = $upInt
+	                } catch {
+	                    # ignore
+	                }
 
-	                    try { $hb = $payload | ConvertFrom-Json } catch { continue }
-	                    $upVal = $hb.up
-	                    try {
-	                        $upInt = [int]$upVal
-	                        if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
-	                            if ($seenOtaFlashedId) {
-	                                $rebooted = $true
-	                                break
-	                            }
-	                        }
-	                        $prevUp = $upInt
-	                    } catch {
-	                        # ignore
-	                    }
-	                    continue
+	                $hbBuild = [string]$hb.build
+	                if ($rebooted -and $hbBuild -and $hbBuild -eq $bldStr) {
+	                    $ok = $true
+	                    break
 	                }
 	            }
 
-	            if (-not $seenOtaFlashedId) {
-	                $reason = if (-not $lastLine) { "no messages received" } else { "no matching OTA_FLASHED id observed" }
-	                throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
+	            if ($ok) {
+	                Write-Host "== OTA VERIFY: OK (rebooted + hb.build matches) ==" -ForegroundColor Green
+	                return
 	            }
 
-	            if (-not $rebooted) {
-	                throw "== OTA VERIFY: FAIL (OTA_FLASHED id seen but no reboot detected) within ${hbTimeoutSec}s =="
-	            }
-
-	            Write-Host "== OTA VERIFY: OK (OTA_FLASHED id seen + reboot detected) ==" -ForegroundColor Green
-	            return
+	            $reason = if (-not $lastSeen) { "no hb received" } elseif (-not $rebooted) { "no reboot detected" } else { "hb.build didn't match" }
+	            throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
         }
 
         "lock" {
