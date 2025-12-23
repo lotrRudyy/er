@@ -112,6 +112,7 @@ Live stream:
 
 ```
 er1 log -live
+er1 logs pretty   # dashboard + OTA merge
 ```
 
 Save a copy while streaming:

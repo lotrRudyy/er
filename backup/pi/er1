@@ -10,12 +10,13 @@ case "$CMD" in
   logs)
     SUB="${1:-}"; shift || true
     case "$SUB" in
-      live)  "$SCRIPTS/mqtt-logs.sh" live ;;
-      tail)  "$SCRIPTS/mqtt-logs.sh" tail ;;
-      grep)  "$SCRIPTS/mqtt-logs.sh" grep "$@" ;;
-      help|"") "$SCRIPTS/mqtt-logs.sh" help ;;
+      live)  "$SCRIPTS/mqtt_logs.sh" live ;;
+      tail)  "$SCRIPTS/mqtt_logs.sh" tail ;;
+      pretty) "$SCRIPTS/mqtt_logs.sh" pretty ;;
+      grep)  "$SCRIPTS/mqtt_logs.sh" grep "$@" ;;
+      help|"") "$SCRIPTS/mqtt_logs.sh" help ;;
       *)
-        echo "Usage: er1 logs {live|tail|grep <pattern>|help}" >&2
+        echo "Usage: er1 logs {live|tail|pretty|grep <pattern>|help}" >&2
         exit 1
         ;;
     esac
@@ -71,6 +72,7 @@ er1 – ER1 helper CLI
 Usage:
   er1 logs live                 # live MQTT view
   er1 logs tail                 # tail today's log
+  er1 logs pretty               # dashboard + OTA merge view
   er1 logs grep <pattern>       # grep in today's log
   er1 lock open <id>            # open lock
   er1 lock close <id>           # close lock

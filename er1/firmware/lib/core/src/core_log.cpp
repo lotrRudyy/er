@@ -110,6 +110,8 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 
   if (isError) {
     errorCount_++;
+    lastErrorSinceUp_ = millis() / 1000;
+    lastErrorMsg_ = msg;
   }
   return ok;
 }

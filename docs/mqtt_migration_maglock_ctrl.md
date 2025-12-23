@@ -16,7 +16,7 @@ Canonical (images_piano / ER1)
 -----------------------------
 - Canonical topic builder: `Core::topic(node, channel)` → `node/channel` (see `lib/core/src/core_mqtt.cpp`).
 - Canonical node topics are created with `makeTopicConfig(nodeId)` and exposed in `NodeContext::config().topics`.
-  - Heartbeat topic: `node/hb` with payload fields `{ "node":"...","fw":"...","build":"...","up":...,"ts":"...","time_valid":...,"health":"...","mem":"...","last_err":"..." }`
+  - Heartbeat topic: `node/hb` with payload fields `{ "node":"...","fw":"...","build":"...","up":...,"ts":"...","time_valid":...,"heap_free":...,"heap_min":...,"heap_largest":...,"heap_size":...,"err_cnt":...,"err_code":...,"err_since_up":...,"err_msg":... }`
   - Debug/metric topic: `node/dbg` and payloads in this family include a `"t"` type field (see `src/riddles/images_riddle.cpp`).
 
 Mismatch

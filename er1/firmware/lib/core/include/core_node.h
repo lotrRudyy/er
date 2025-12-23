@@ -92,6 +92,9 @@ public:
 
   uint32_t uptimeSeconds() const;
   uint32_t nowMs() const { return millis(); }
+  uint32_t logErrorCount() const;
+  uint32_t lastErrorSinceUp() const;
+  String lastErrorMsg() const;
   PubSubClient* mqttClient();
   TimestampSource* timestampSource();
 
@@ -219,9 +222,10 @@ struct HeartbeatFields {
   const char* fw;
   const char* buildId;
   uint32_t uptime;
-  const char* health;
-  const char* mem;
-  const char* lastErr;
+  uint32_t errCount;
+  uint32_t errCode;
+  uint32_t errSinceUp;
+  const char* errMsg;
 };
 void buildHeartbeatPayload(String& out, const HeartbeatFields& hb);
 

@@ -57,6 +57,8 @@ public:
   void setSerialTag(const char* tag) { serialTag_ = tag; }
   void setTimestampSource(TimestampSource* src) { tsSource_ = src; }
   uint32_t errorCount() const { return errorCount_; }
+  uint32_t lastErrorSinceUp() const { return lastErrorSinceUp_; }
+  const String& lastErrorMsg() const { return lastErrorMsg_; }
   void resetErrorCount() { errorCount_ = 0; }
   void setTopic(const char* topic) { topic_ = topic; }
   void setFwVersion(const char* fw) { fwVersion_ = fw; }
@@ -84,6 +86,8 @@ private:
   LogFilterFn filter_ = nullptr;
   void* filterUser_ = nullptr;
   uint32_t errorCount_ = 0;
+  uint32_t lastErrorSinceUp_ = 0;
+  String lastErrorMsg_;
   TimestampSource* tsSource_ = nullptr;
   bool warnedMissingTs_ = false;
   bool warningActive_ = false;

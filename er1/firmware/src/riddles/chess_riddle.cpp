@@ -302,18 +302,60 @@ const char* ChessRiddle::presentLabelFromUid(const String& uid) {
 void ChessRiddle::logFullTable() const {
   if (!ctx_) return;
 
-  for (int i = 0; i < kReaderCount; i++) {
-    // EXACT format you demanded:
-    // QUEEN (Reader 1: rst=32 cs=14) - QUEEN
-    ctx_->log(
-      "INF",
-      String(expectedLabelForReader(i)) +
-        " (Reader " + String(i + 1) +
-        ": rst=" + String(kRfidRst[i]) +
-        " cs=" + String(kRfidCs[i]) + ") - " +
-        presentLabelFromUid(readerUid_[i])
-    );
+  TimestampFields tsFields{};
+  String datePart;
+  String timePart;
+  auto* tsSource = ctx_->timestampSource();
+  if (tsSource) {
+    tsFields = tsSource->currentTimestamp();
+    if (tsFields.timeValid && tsFields.ts[0] != '\0') {
+      String tsStr(tsFields.ts);
+      int spaceIdx = tsStr.indexOf(' ');
+      if (spaceIdx > 0) {
+        datePart = tsStr.substring(0, spaceIdx);
+        timePart = tsStr.substring(spaceIdx + 1);
+      }
+    }
   }
+
+  auto padded = [](const char* label) {
+    String s(label ? label : "");
+    while (s.length() < 5) s += " ";
+    return s;
+  };
+
+  String msg;
+  msg.reserve(256);
+  msg += "---------------------------------------------------------------------------\n";
+  msg += "chess/log INF ";
+  if (timePart.length() > 0) {
+    msg += timePart;
+    if (datePart.length() > 0) {
+      msg += " - ";
+      msg += datePart;
+    }
+  } else {
+    msg += "(time_unknown)";
+  }
+  msg += "\n---------------------------------------------------------------------------\n";
+
+  for (int i = 0; i < kReaderCount; i++) {
+    const String goal = padded(expectedLabelForReader(i));
+    const String now = padded(presentLabelFromUid(readerUid_[i]));
+    msg += "Reader ";
+    msg += String(i + 1);
+    msg += " (rst=";
+    msg += String(kRfidRst[i]);
+    msg += " cs=";
+    msg += String(kRfidCs[i]);
+    msg += ") | GOAL: ";
+    msg += goal;
+    msg += " | NOW : ";
+    msg += now;
+    if (i + 1 < kReaderCount) msg += "\n";
+  }
+
+  ctx_->log("INF", msg);
 }
 
 void ChessRiddle::log(const char* level, const String& msg) {

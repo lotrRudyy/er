@@ -38,6 +38,8 @@ Replace `<id>` with one of the canonical lock IDs.
 
 ```bash
 ./scripts/mqtt_logs.sh live
+# Pretty dashboard with OTA merge + hb cache:
+./scripts/mqtt_logs.sh pretty
 ```
 
 ## Log-to-File Example (Pi)
@@ -47,10 +49,12 @@ Replace `<id>` with one of the canonical lock IDs.
 ```
 
 Each line is prefixed by `date +"%Y.%m.%d %H:%M:%S.%3N"` and written to `<deploy_root>/logs/er1-DD.MM.YYYY.log`.
+Raw logging excludes `time/state` by default; the pretty view subscribes to it for the dashboard.
 
 ## Scripts & Aliases
 
 - Daily logging helpers live in `scripts/mqtt_logs.sh`. Use `daemon`, `live`, `tail`, or `grep` subcommands.
+  - `pretty` renders the human dashboard (hb/time + OTA merge).
 - Lock helpers live in `scripts/mqtt_locks.sh` with `open`/`close` actions.
 - Source `scripts/aliases_er1.sh` to load the `log_*` and `lock_*` aliases (`log_live`, `log_tail`, `log_grep`, `log_help`, `lock_open`, `lock_close`).
 - For Pi-side file refresh (log path now `/home/rudyy/er1/logs/`), see the manual steps in `docs/workflow.md#manual-update-on-pi-mqtt-logging-runtime-files`.

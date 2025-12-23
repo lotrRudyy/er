@@ -39,17 +39,20 @@ static bool logFilter(const char* level, void* user) {
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   auto* module = static_cast<StopTimerRiddle*>(user);
-  bool dfOk = module ? module->dfReady() : false;
-  uint32_t err = module ? module->errorCount() : 0;
-  const char* health = (!ctx.enabled() || !dfOk || err > 0) ? "degraded" : "ok";
+  uint32_t errCnt = module ? module->errorCount() : 0;
+  if (ctx.logErrorCount() > errCnt) errCnt = ctx.logErrorCount();
+  uint32_t errCode = (errCnt > 0) ? 1 : 0;
+  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
+  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
   HeartbeatFields hb{
       ctx.nodeId(),
       ctx.fwVersion(),
       ctx.buildId(),
       ctx.uptimeSeconds(),
-      health,
-      "ok",
-      err > 0 ? "err" : "0",
+      errCnt,
+      errCode,
+      errSince,
+      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
   };
   buildHeartbeatPayload(out, hb);
 }

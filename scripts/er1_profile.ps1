@@ -59,6 +59,7 @@ $er1Commands = [ordered]@{
     "help"   = "Show help + examples"
     "pi"     = "SSH into the ER1 Pi"
     "log"    = "Tail logs (today/errors/live), tag markers, or extract slices"
+    "logs"   = "Pi-side MQTT view (pretty dashboard)"
     "ota"    = "Upload firmware to a device via ota.ps1"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
@@ -505,6 +506,7 @@ function er1 {
             Write-Host "  er1 log tag game-start"
             Write-Host "  er1 log extract --tag game"
             Write-Host "  er1 log extract --from game-start --to game-end --date 2025-12-14 --no-open"
+            Write-Host "  er1 logs pretty"
             Write-Host ""
             return
         }
@@ -763,6 +765,19 @@ function er1 {
             $outLines | Set-Content -Path $outPath -Encoding utf8
             Write-Host "[er1 log] Saved -> $outPath" -ForegroundColor Green
             return
+        }
+
+        "logs" {
+            $sub = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs[0].ToLowerInvariant() } else { "pretty" }
+            switch ($sub) {
+                "pretty" {
+                    ssh -t $er1Pi "cd ~/er1 && ./scripts/mqtt_logs.sh pretty"
+                    return
+                }
+                default {
+                    throw "Usage: er1 logs pretty"
+                }
+            }
         }
 
         "push" {

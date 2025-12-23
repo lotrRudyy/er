@@ -78,6 +78,19 @@ uint32_t NodeContext::uptimeSeconds() const {
   return millis() / 1000;
 }
 
+uint32_t NodeContext::logErrorCount() const {
+  return core_ ? core_->logger().errorCount() : 0;
+}
+
+uint32_t NodeContext::lastErrorSinceUp() const {
+  return core_ ? core_->logger().lastErrorSinceUp() : 0;
+}
+
+String NodeContext::lastErrorMsg() const {
+  if (!core_) return "";
+  return core_->logger().lastErrorMsg();
+}
+
 const char* NodeContext::fwVersion() const {
   return core_ ? core_->cfg_.fwVersion : nullptr;
 }
@@ -686,9 +699,10 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   const char* node = (hb.nodeId && hb.nodeId[0]) ? hb.nodeId : "?";
   const char* fw = (hb.fw && hb.fw[0]) ? hb.fw : "?";
   const char* build = (hb.buildId && hb.buildId[0]) ? hb.buildId : "?";
-  const char* health = (hb.health && hb.health[0]) ? hb.health : "ok";
-  const char* mem = (hb.mem && hb.mem[0]) ? hb.mem : "ok";
-  const char* lastErr = (hb.lastErr && hb.lastErr[0]) ? hb.lastErr : "0";
+  const uint32_t heapFree = ESP.getFreeHeap();
+  const uint32_t heapMin = ESP.getMinFreeHeap();
+  const uint32_t heapSize = ESP.getHeapSize();
+  const uint32_t heapLargest = ESP.getMaxAllocHeap();
   TimestampFields tsFields{};
   tsFields.epoch = core_epoch_seconds();
   tsFields.timeValid = core_format_ts(tsFields.ts, sizeof(tsFields.ts));
@@ -697,11 +711,9 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   String nodeEsc = escapeJson(node);
   String fwEsc = escapeJson(fw);
   String buildEsc = escapeJson(build);
-  String healthEsc = escapeJson(health);
-  String memEsc = escapeJson(mem);
-  String lastErrEsc = escapeJson(lastErr);
+  String errMsgEsc = escapeJson(hb.errMsg);
 
-  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(tsFields.ts) + 96);
+  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(tsFields.ts) + 128);
   out = "{\"node\":\"";
   out += nodeEsc;
   out += "\",\"fw\":\"";
@@ -714,13 +726,28 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   out += tsFields.ts;
   out += "\",\"time_valid\":";
   out += tsFields.timeValid ? "true" : "false";
-  out += ",\"health\":\"";
-  out += healthEsc;
-  out += "\",\"mem\":\"";
-  out += memEsc;
-  out += "\",\"last_err\":\"";
-  out += lastErrEsc;
-  out += "\"}";
+  out += ",\"heap_free\":";
+  out += heapFree;
+  out += ",\"heap_min\":";
+  out += heapMin;
+  out += ",\"heap_largest\":";
+  out += heapLargest;
+  out += ",\"heap_size\":";
+  out += heapSize;
+  out += ",\"err_cnt\":";
+  out += hb.errCount;
+  out += ",\"err_code\":";
+  out += hb.errCode;
+  if (hb.errSinceUp > 0) {
+    out += ",\"err_since_up\":";
+    out += hb.errSinceUp;
+  }
+  if (hb.errCode != 0 && hb.errMsg && hb.errMsg[0]) {
+    out += ",\"err_msg\":\"";
+    out += errMsgEsc;
+    out += "\"";
+  }
+  out += "}";
 }
 
 }  // namespace Core
