@@ -109,6 +109,7 @@ class PrettyLogger:
         self.time_state_seen_at: Optional[float] = None
         self.start_ts = now_ts()
         self.running = True
+        self.last_dashboard_ts: Optional[int] = None
 
     def stop(self, *_: Any) -> None:
         self.running = False
@@ -184,7 +185,7 @@ class PrettyLogger:
 
         prev_up = rec.up if rec.up else rec.prev_up
         new_up = int_or_none(data.get("up"), rec.up)
-        if prev_up is not None and new_up is not None and (new_up + RESTART_DELTA) < prev_up:
+        if prev_up is not None and new_up is not None and new_up >= 0 and (new_up + RESTART_DELTA) < prev_up:
             rec.restart_seen_at = recv_ts
 
         rec.prev_up = prev_up
@@ -306,22 +307,25 @@ class PrettyLogger:
             parts.append(f"largest={hb.heap_largest//1024}k")
         if hb.heap_size is not None:
             parts.append(f"size={hb.heap_size//1024}k")
-        return " ".join(parts) if parts else "heap=?"
+        return " ".join(parts) if parts else "heap=n/a"
 
     def format_err(self, hb: Heartbeat) -> str:
+        err_cnt = hb.err_cnt if hb.err_cnt is not None else 0
         if hb.err_code:
             msg = f"code={hb.err_code}"
             if hb.err_msg:
                 msg += f" msg={hb.err_msg}"
             if hb.err_since_up is not None:
                 msg += f" at_up={hb.err_since_up}"
-            if hb.err_cnt is not None:
-                msg += f" cnt={hb.err_cnt}"
+            msg += f" cnt={err_cnt}"
             return msg
-        cnt_part = f"cnt={hb.err_cnt}" if hb.err_cnt is not None else "cnt=?"
-        return f"ok {cnt_part}"
+        return f"ok cnt={err_cnt}"
 
     def print_dashboard(self, boundary_ts: float) -> None:
+        boundary_min = int(boundary_ts // 60)
+        if self.last_dashboard_ts is not None and boundary_min == self.last_dashboard_ts:
+            return
+        self.last_dashboard_ts = boundary_min
         dt = datetime.fromtimestamp(boundary_ts)
         ts_str = dt.strftime("%H:%M:%S.%f")[:-3]
         date_str = dt.strftime("%Y.%m.%d")
@@ -338,15 +342,6 @@ class PrettyLogger:
                     date_str = date_part
             except Exception:
                 pass
-            epoch = self.time_state.get("epoch")
-            seq = self.time_state.get("seq")
-            extras = []
-            if epoch is not None:
-                extras.append(f"epoch={epoch}")
-            if seq is not None:
-                extras.append(f"seq={seq}")
-            if extras:
-                header_extra = f" ({' '.join(extras)})"
 
         print(SEPARATOR)
         print(f"HB | {ts_str} - {date_str}{header_extra}")
@@ -375,7 +370,7 @@ class PrettyLogger:
             row = (
                 f"{hb.node:12} "
                 f"up={format_uptime(hb.up):>12} "
-                f"age={int(age):>3}s{flag_str} "
+                f"age={int(age):>6}s{flag_str} "
                 f"fw={hb.fw or '?'} build={hb.build or '?'} "
                 f"{self.format_heap(hb)} "
                 f"err[{self.format_err(hb)}]"
@@ -391,7 +386,6 @@ class PrettyLogger:
         for warn in dict.fromkeys(warnings):
             print(f"! {warn}")
 
-        print(SEPARATOR)
         sys.stdout.flush()
 
     def print_ota_session(self, sess: OtaSession, note: Optional[str] = None) -> None:

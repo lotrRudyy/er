@@ -4,8 +4,7 @@
 
 #include "core_node.h"
 #include "riddles/images_riddle.h"
-#include "riddles/piano_mapper.h"
-#include "riddles/piano_riddle_fsm.h"
+#include "riddles/piano_riddle.h"
 
 using namespace Core;
 
@@ -36,17 +35,15 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 // ======================= MODULES =============================
 static NodeCore nodeCore;
 static ImagesRiddle imagesModule;
-static PianoRiddleFSM pianoFsm;
-static PianoMapper pianoMapper;
+static PianoRiddle pianoRiddle;
 static Logger pianoLogger;
 
 struct ModuleBundle {
   ImagesRiddle* images;
-  PianoRiddleFSM* piano;
-  PianoMapper* mapper;
+  PianoRiddle* piano;
 };
 
-static ModuleBundle moduleBundle{&imagesModule, &pianoFsm, &pianoMapper};
+static ModuleBundle moduleBundle{&imagesModule, &pianoRiddle};
 static String topicPianoCmd;
 static String topicPianoHb;
 static String topicPianoLog;
@@ -104,7 +101,7 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void pianoCmdSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
   ModuleBundle* bundle = static_cast<ModuleBundle*>(userData);
-  if (!bundle || (!bundle->piano && !bundle->mapper)) return;
+  if (!bundle || !bundle->piano) return;
   String trimmed = payload;
   trimmed.trim();
   if (trimmed.length() == 0) return;
@@ -119,12 +116,7 @@ static void pianoCmdSubscription(NodeContext& ctx, const char* /*topic*/, const 
   }
   const char* cmdStr = cmd.c_str();
   const char* argStr = arg.c_str();
-  if (bundle->piano) {
-    bundle->piano->onCmd(cmdStr, argStr);
-  }
-  if (bundle->mapper) {
-    bundle->mapper->onCmd(cmdStr, argStr);
-  }
+  bundle->piano->onCmd(cmdStr, argStr);
 }
 
 static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
@@ -202,14 +194,12 @@ void setup() {
 
   ctx.log("INF", String("BOOT FW=") + FW_DESC);
   imagesModule.begin(ctx, NODE_IMAGES);
-  pianoFsm.begin(ctx, NODE_PIANO, &pianoLogger);
-  pianoMapper.begin(ctx, &pianoLogger);
+  pianoRiddle.begin(ctx, NODE_PIANO, &pianoLogger);
 }
 
 void loop() {
   nodeCore.loop();
   uint32_t now = millis();
   imagesModule.tick(now);
-  pianoFsm.tick(now);
-  pianoMapper.tick(now);
+  pianoRiddle.tick(now);
 }

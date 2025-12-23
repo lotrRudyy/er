@@ -2,7 +2,15 @@
 #include <driver/i2s.h>
 #include <ArduinoFFT.h>
 #include "esp_heap_caps.h"
+
+#include "piano_detector.h"
 #include "piano_template.h"
+
+extern "C" __attribute__((weak)) void piano_detector_on_result(int /*accepted*/, const char* /*pred*/, float /*s1*/,
+                                                               float /*s2*/, float /*margin*/, float /*hps_ratio*/,
+                                                               int /*harmonic_ok*/, const char* /*t1*/, float /*t1s*/,
+                                                               const char* /*t2*/, float /*t2s*/, const char* /*t3*/,
+                                                               float /*t3s*/) {}
 
 // ============================================================
 // ESP32 realtime onset + harmonic gate + template matcher
@@ -763,6 +771,12 @@ static void process_one_job() {
                 (top3[1].li>=0?label_str_from_progmem(top3[1].li):""), top3[1].score,
                 (top3[2].li>=0?label_str_from_progmem(top3[2].li):""), top3[2].score);
 
+  piano_detector_on_result(
+      accepted ? 1 : 0, pred, s1, s2, margin, job->hps_ratio, job->harmonic_ok ? 1 : 0,
+      (top3[0].li>=0?label_str_from_progmem(top3[0].li):""), top3[0].score,
+      (top3[1].li>=0?label_str_from_progmem(top3[1].li):""), top3[1].score,
+      (top3[2].li>=0?label_str_from_progmem(top3[2].li):""), top3[2].score);
+
   if (accepted) last_note_ms = millis();
 
   q_pop();
@@ -821,7 +835,7 @@ static bool alloc_or_die() {
 }
 
 // ------------------ Setup/Loop ------------------
-void setup() {
+void piano_detector_setup() {
   Serial.begin(921600);
   delay(100);
 
@@ -856,7 +870,7 @@ void setup() {
   Serial.println("setup done -> entering loop()");
 }
 
-void loop() {
+void piano_detector_loop_once() {
   process_one_job();
   delay(1);
 }

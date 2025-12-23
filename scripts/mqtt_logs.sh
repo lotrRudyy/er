@@ -21,11 +21,16 @@ timestamp() {
 
 subscribe_stream() {
   local include_dbg="${INCLUDE_DBG:-0}"
-  local subs=(-t "+/log" -t "+/hb" -t "+/evt" -t "+/state")
+  local include_time="${INCLUDE_TIME_STATE:-0}"
+  local subs=(-t "+/log" -t "+/hb" -t "+/evt" -t "+/state" -t "+/ota")
   if [[ "$include_dbg" == "1" ]]; then
     subs+=(-t "+/dbg")
   fi
-  mosquitto_sub -h "$BROKER" "${subs[@]}" -T "time/state" -v
+  if [[ "$include_time" != "1" ]]; then
+    mosquitto_sub -h "$BROKER" "${subs[@]}" -T "time/state" -0 -v
+  else
+    mosquitto_sub -h "$BROKER" "${subs[@]}" -0 -v
+  fi
 }
 
 write_stream() {
@@ -36,14 +41,17 @@ write_stream() {
   current_date=$(date +%d.%m.%Y)
   file="$(log_file_for_date "$current_date")"
 
-  subscribe_stream | while IFS= read -r line; do
+  # -0 from mosquitto_sub makes each message NUL-terminated, so we can
+  # capture multiline payloads as a single record and escape newlines.
+  subscribe_stream | while IFS= read -r -d '' line; do
     today=$(date +%d.%m.%Y)
     if [[ "$today" != "$current_date" ]]; then
       current_date="$today"
       file="$(log_file_for_date "$current_date")"
     fi
 
-    stamped="$(timestamp) $line"
+    local escaped="${line//$'\n'/\\n}"
+    stamped="$(timestamp) $escaped"
     echo "$stamped" >> "$file"
     if [[ "$echo_output" == "yes" ]]; then
       echo "$stamped"
@@ -89,8 +97,8 @@ print_help() {
 Usage: scripts/mqtt_logs.sh <command> [args]
 
 Commands:
-  daemon          Capture +/log,+/hb,+/evt,+/state to <repo>/logs/er1-DD.MM.YYYY.log (no stdout).
-                  Set INCLUDE_DBG=1 to also subscribe to +/dbg. Excludes time/state by default.
+  daemon          Capture +/log,+/hb,+/evt,+/state,+/ota to <repo>/logs/er1-DD.MM.YYYY.log (no stdout).
+                  Set INCLUDE_DBG=1 to also subscribe to +/dbg. Excludes time/state by default (set INCLUDE_TIME_STATE=1 to include).
   live            Same as daemon but also echoes to stdout.
   pretty          Human-friendly dashboard + OTA merge view (uses time/state).
   tail            tail -f today's logfile.

@@ -2,7 +2,7 @@
 #include <driver/i2s.h>
 #include <ArduinoFFT.h>
 #include "esp_heap_caps.h"
-#include "template.h"
+#include "piano_template.h"
 
 // ============================================================
 // ESP32 realtime onset + harmonic gate + template matcher

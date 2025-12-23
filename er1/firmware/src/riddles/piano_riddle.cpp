@@ -1,295 +1,59 @@
-#include "piano_riddle_fsm.h"
+#include "piano_riddle.h"
 
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
 #include <strings.h>
 
 namespace {
-constexpr uint32_t kWindowIntervalMs = 45;
-constexpr uint32_t kNoteDebounceMs = 140;
-constexpr float kMinConfidence = 0.3f;
-constexpr float kMinMagnitude = 1200.0f;
-constexpr size_t kTotalNotes = 88;
+PianoRiddle* gPianoRiddle = nullptr;
+}
 
-const char* kSequenceNames[] = {
+const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen] = {
     "C4", "D4", "E4", "F4", "G4", "F4", "E4", "D4", "C4",
 };
 
-struct NoteTableState {
-  piano::NoteDef entries[kTotalNotes];
-  bool initialized = false;
-};
-
-NoteTableState& tableState() {
-  static NoteTableState state;
-  return state;
-}
-
-struct SequenceState {
-  int idx[sizeof(kSequenceNames) / sizeof(kSequenceNames[0])];
-  bool initialized = false;
-};
-
-SequenceState& sequenceState() {
-  static SequenceState st;
-  return st;
-}
-
-constexpr const char* kNoteNames[] = {
-    "A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#",
-};
-
-constexpr float kBaseFreq = 27.5f;  // A0
-constexpr float kPi = 3.14159265358979323846f;
-
-float goertzelMagnitude(const int16_t* samples, size_t count, float freq) {
-  if (!samples || freq <= 0.0f) return 0.0f;
-  const float omega = 2.0f * kPi * freq / static_cast<float>(piano::kSampleRate);
-  const float coeff = 2.0f * cosf(omega);
-  float q0 = 0.0f;
-  float q1 = 0.0f;
-  float q2 = 0.0f;
-  for (size_t i = 0; i < count; ++i) {
-    q0 = coeff * q1 - q2 + static_cast<float>(samples[i]);
-    q2 = q1;
-    q1 = q0;
+extern "C" void piano_detector_on_result(int accepted, const char* pred, float s1, float s2, float margin,
+                                         float hps_ratio, int harmonic_ok, const char* t1, float t1s,
+                                         const char* t2, float t2s, const char* t3, float t3s) {
+  if (gPianoRiddle) {
+    gPianoRiddle->handleDetectorResult(accepted, pred, s1, s2, margin, hps_ratio, harmonic_ok, t1, t1s, t2, t2s,
+                                       t3, t3s);
   }
-  float magnitude = q1 * q1 + q2 * q2 - q1 * q2 * coeff;
-  if (magnitude < 0.0f) magnitude = 0.0f;
-  return sqrtf(magnitude);
 }
 
-void ensureNoteTable() {
-  NoteTableState& state = tableState();
-  if (state.initialized) return;
-  for (size_t i = 0; i < kTotalNotes; ++i) {
-    size_t nameIdx = i % (sizeof(kNoteNames) / sizeof(kNoteNames[0]));
-    int octave = static_cast<int>((i + 9) / 12);
-    std::snprintf(state.entries[i].name, sizeof(state.entries[i].name), "%s%d", kNoteNames[nameIdx], octave);
-    float freq = kBaseFreq * powf(2.0f, static_cast<float>(i) / 12.0f);
-    state.entries[i].nominalHz = freq;
-    state.entries[i].meanHz = freq;
-    state.entries[i].minHz = freq * 0.985f;
-    state.entries[i].maxHz = freq * 1.015f;
-    state.entries[i].confFloor = 0.25f;
-  }
-  state.initialized = true;
-}
-
-void ensureSequence() {
-  SequenceState& st = sequenceState();
-  if (st.initialized) return;
-  ensureNoteTable();
-  constexpr size_t seqLen = sizeof(kSequenceNames) / sizeof(kSequenceNames[0]);
-  std::fill_n(st.idx, seqLen, -1);
-  for (size_t i = 0; i < (sizeof(kSequenceNames) / sizeof(kSequenceNames[0])); ++i) {
-    st.idx[i] = piano::noteIndexByName(kSequenceNames[i]);
-  }
-  st.initialized = true;
-}
-
-const char* safeName(int idx) {
-  const auto* tbl = piano::noteTable();
-  if (!tbl) return "UNK";
-  size_t count = piano::noteCount();
-  if (idx < 0 || static_cast<size_t>(idx) >= count) return "UNK";
-  return tbl[idx].name;
-}
-
-}  // namespace
-
-namespace piano {
-
-const NoteDef* noteTable() {
-  ensureNoteTable();
-  return tableState().entries;
-}
-
-size_t noteCount() {
-  return kTotalNotes;
-}
-
-const NoteDef* noteByName(const char* name) {
-  if (!name) return nullptr;
-  ensureNoteTable();
-  const NoteDef* table = tableState().entries;
-  for (size_t i = 0; i < kTotalNotes; ++i) {
-    if (strcasecmp(table[i].name, name) == 0) {
-      return &table[i];
-    }
-  }
-  return nullptr;
-}
-
-int noteIndexByName(const char* name) {
-  if (!name) return -1;
-  ensureNoteTable();
-  const NoteDef* table = tableState().entries;
-  for (size_t i = 0; i < kTotalNotes; ++i) {
-    if (strcasecmp(table[i].name, name) == 0) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
-}
-
-const int* defaultSequence(size_t* len) {
-  ensureSequence();
-  if (len) {
-    *len = sizeof(kSequenceNames) / sizeof(kSequenceNames[0]);
-  }
-  return sequenceState().idx;
-}
-
-bool captureWindow(int audioPin, int16_t* dest, size_t sampleCount) {
-  if (!dest || audioPin < 0) return false;
-  constexpr int32_t kCenter = 2048;
-  for (size_t i = 0; i < sampleCount; ++i) {
-    int32_t raw = analogRead(audioPin);
-    dest[i] = static_cast<int16_t>(raw - kCenter);
-    delayMicroseconds(kSampleIntervalUs);
-  }
-  return true;
-}
-
-Detection analyzeWindow(const int16_t* samples, size_t sampleCount) {
-  Detection det{};
-  det.noteIndex = -1;
-  det.noteHz = 0.0f;
-  det.magnitude = 0.0f;
-  det.maxMagnitude = 0.0f;
-  det.confidence = 0.0f;
-  det.hit = false;
-
-  ensureNoteTable();
-  const NoteDef* table = tableState().entries;
-
-  float bestMag = 0.0f;
-  float secondMag = 0.0f;
-  int bestIdx = -1;
-  for (size_t i = 0; i < kTotalNotes; ++i) {
-    float freq = table[i].meanHz > 0.0f ? table[i].meanHz : table[i].nominalHz;
-    float mag = goertzelMagnitude(samples, sampleCount, freq);
-    if (mag > bestMag) {
-      secondMag = bestMag;
-      bestMag = mag;
-      bestIdx = static_cast<int>(i);
-    } else if (mag > secondMag) {
-      secondMag = mag;
-    }
-  }
-
-  if (bestIdx >= 0) {
-    det.noteIndex = bestIdx;
-    det.noteHz = table[bestIdx].meanHz;
-    det.magnitude = bestMag;
-    det.maxMagnitude = bestMag;
-    det.hit = true;
-    if (bestMag > 0.0f) {
-      float conf = (bestMag - secondMag) / bestMag;
-      if (conf < 0.0f) conf = 0.0f;
-      if (conf > 1.0f) conf = 1.0f;
-      det.confidence = conf;
-    }
-  }
-
-  return det;
-}
-
-}  // namespace piano
-
-void PianoRiddleFSM::begin(Core::NodeContext& ctx, const char* nodeId, Core::Logger* logger) {
+void PianoRiddle::begin(Core::NodeContext& ctx, const char* nodeId, Core::Logger* logger) {
   ctx_ = &ctx;
   logger_ = logger;
-  prefs_ = &ctx_->prefs();
+  prefs_ = &ctx.prefs();
   nodeId_ = (nodeId && nodeId[0]) ? nodeId : "piano";
   topicEvt_ = Core::topic(nodeId_.c_str(), "evt");
   topicState_ = Core::topic(nodeId_.c_str(), "state");
-  // No dedicated /dbg topic; use core_log for any debug output.
   topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
+  solved_ = prefs_ ? prefs_->getBool(kPrefsSolvedKey, false) : false;
+  solvedPublished_ = solved_;
 
-  sequence_ = piano::defaultSequence(&sequenceLen_);
-  resetBuffer();
-  analogReadResolution(12);
-
-  if (prefs_) {
-    bool hasKey = prefs_->isKey(kPrefsSolvedKey);
-    solved_ = prefs_->getBool(kPrefsSolvedKey, false);
-    solvedPublished_ = solved_;
-    if (hasKey) {
-      log("INF", String("STATE restore piano_solved=") + (solved_ ? "1" : "0"));
-    } else {
-      log("INF", "STATE default piano_solved=0");
-      prefs_->putBool(kPrefsSolvedKey, solved_);
-    }
-  } else {
-    log("INF", "STATE default piano_solved=0 (no prefs)");
+  gPianoRiddle = this;
+  if (!detectorStarted_) {
+    piano_detector_setup();
+    detectorStarted_ = true;
   }
 
-  if (solved_) {
-    log("INF", "PIANO_BOOT_SOLVED");
-  } else {
-    log("INF", "PIANO_READY");
-  }
   publishState();
 }
 
-void PianoRiddleFSM::tick(uint32_t nowMs) {
-  if (!ctx_ || !sequence_ || sequenceLen_ == 0) return;
-  if (!ctx_->enabled() || !moduleEnabled_) return;
-
-  if (solved_) {
-    if (!solvedPublished_) {
-      handleSolved();
-    }
-    return;
+void PianoRiddle::tick(uint32_t nowMs) {
+  if (detectorStarted_) {
+    piano_detector_loop_once();
   }
 
-  if (nowMs - lastWindowMs_ < kWindowIntervalMs) return;
-  lastWindowMs_ = nowMs;
+  if (!ctx_) return;
+  if (solved_) return;
 
-  if (!piano::captureWindow(piano::kAudioInputPin, sampleBuf_, piano::kSamplesPerWindow)) {
-    return;
-  }
-
-  piano::Detection det = piano::analyzeWindow(sampleBuf_, piano::kSamplesPerWindow);
-  if (!det.hit) return;
-
-  const auto* table = piano::noteTable();
-  size_t tableCount = piano::noteCount();
-  if (det.noteIndex < 0 || static_cast<size_t>(det.noteIndex) >= tableCount) return;
-  const auto& note = table[det.noteIndex];
-
-  float confFloor = std::max(note.confFloor, kMinConfidence);
-  if (det.confidence < confFloor) return;
-  if (det.magnitude < kMinMagnitude) return;
-  if (det.noteHz < note.minHz || det.noteHz > note.maxHz) return;
-
-  if (det.noteIndex == lastAcceptedNote_) {
-    uint32_t dt = nowMs - lastAcceptedMs_;
-    if (dt < kNoteDebounceMs) return;
-  }
-
-  lastAcceptedNote_ = det.noteIndex;
-  lastAcceptedMs_ = nowMs;
-
-  pushNote(det.noteIndex);
-  logNote(det);
-  bool hit = checkSequenceSolved();
-  logBuffer(hit);
-  if (hit) {
-    solved_ = true;
-    if (prefs_) {
-      prefs_->putBool(kPrefsSolvedKey, true);
-      log("INF", "STATE save piano_solved=1");
-    }
-    handleSolved();
+  if (seqPos_ > 0 && (nowMs - lastAcceptedMs_ > kNoteTimeoutMs)) {
+    resetProgress("timeout");
+    publishState();
   }
 }
 
-bool PianoRiddleFSM::onCmd(const char* cmd, const char* payload) {
+bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
   if (equalsCmd(cmd, "PIANO_ENABLE") || equalsCmd(cmd, "ENABLE")) {
     setModuleEnabled(true);
@@ -302,153 +66,184 @@ bool PianoRiddleFSM::onCmd(const char* cmd, const char* payload) {
     return true;
   }
   if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET")) {
-    clearSolvedState();
-    log("INF", "PIANO_RESET");
+    solved_ = false;
+    solvedPublished_ = false;
+    if (prefs_) {
+      prefs_->putBool(kPrefsSolvedKey, false);
+    }
+    resetProgress("cmd");
     publishState();
     return true;
   }
   if (equalsCmd(cmd, "PIANO_SET_SEQ") || equalsCmd(cmd, "SET_SEQ")) {
-    log("WRN", "PIANO_SET_SEQ_TODO");
+    log("WRN", "PIANO_SET_SEQ_UNSUPPORTED");
     return true;
   }
   return false;
 }
 
-void PianoRiddleFSM::resetBuffer() {
-  bufferLen_ = 0;
-  bufferHead_ = 0;
-  std::fill(std::begin(noteBuffer_), std::end(noteBuffer_), -1);
-}
+void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1, float s2, float margin,
+                                       float hps_ratio, int harmonic_ok, const char* t1, float t1s,
+                                       const char* t2, float t2s, const char* t3, float t3s) {
+  const char* predSafe = pred ? pred : "";
+  const char* t1Safe = t1 ? t1 : "";
+  const char* t2Safe = t2 ? t2 : "";
+  const char* t3Safe = t3 ? t3 : "";
+  bool isAccepted = accepted != 0;
 
-void PianoRiddleFSM::pushNote(int noteIdx) {
-  noteBuffer_[bufferHead_] = static_cast<int8_t>(noteIdx);
-  bufferHead_ = (bufferHead_ + 1) % kBufferSize;
-  if (bufferLen_ < kBufferSize) {
-    bufferLen_++;
-  }
-}
+  String compat = String(isAccepted ? "NOTE_COMPAT " : "REJ_COMPAT ");
+  compat += "pred=";
+  compat += predSafe;
+  compat += " s1=";
+  compat += String(s1, 4);
+  compat += " s2=";
+  compat += String(s2, 4);
+  compat += " m=";
+  compat += String(margin, 4);
+  compat += " hps=";
+  compat += String(hps_ratio, 2);
+  compat += " harm=";
+  compat += (harmonic_ok ? "1" : "0");
+  compat += " top3=[";
+  compat += t1Safe;
+  compat += " ";
+  compat += String(t1s, 4);
+  compat += ", ";
+  compat += t2Safe;
+  compat += " ";
+  compat += String(t2s, 4);
+  compat += ", ";
+  compat += t3Safe;
+  compat += " ";
+  compat += String(t3s, 4);
+  compat += "]";
 
-bool PianoRiddleFSM::checkSequenceSolved() const {
-  if (!sequence_ || sequenceLen_ == 0) return false;
-  if (bufferLen_ < sequenceLen_) return false;
-  for (size_t start = 0; start <= bufferLen_ - sequenceLen_; ++start) {
-    bool match = true;
-    for (size_t i = 0; i < sequenceLen_; ++i) {
-      size_t idx = (bufferHead_ + kBufferSize - bufferLen_ + start + i) % kBufferSize;
-      if (noteBuffer_[idx] != sequence_[i]) {
-        match = false;
-        break;
+  String data = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
+  data += "\"pred\":\"";
+  data += predSafe;
+  data += "\",\"s1\":";
+  data += String(s1, 6);
+  data += ",\"s2\":";
+  data += String(s2, 6);
+  data += ",\"margin\":";
+  data += String(margin, 6);
+  data += ",\"hps\":";
+  data += String(hps_ratio, 6);
+  data += ",\"harm\":";
+  data += harmonic_ok ? "1" : "0";
+  data += ",\"top\":[{\"p\":\"";
+  data += t1Safe;
+  data += "\",\"s\":";
+  data += String(t1s, 6);
+  data += "},{\"p\":\"";
+  data += t2Safe;
+  data += "\",\"s\":";
+  data += String(t2s, 6);
+  data += "},{\"p\":\"";
+  data += t3Safe;
+  data += "\",\"s\":";
+  data += String(t3s, 6);
+  data += "}],\"pos\":";
+  data += String(seqPos_);
+  data += ",\"solved\":";
+  data += solved_ ? "true" : "false";
+  data += "}";
+
+  log("INF", compat, data);
+
+  if (!ctx_ || !moduleEnabled_ || !ctx_->enabled() || solved_) return;
+  if (!isAccepted) return;
+
+  uint32_t now = ctx_->nowMs();
+  lastAcceptedMs_ = now;
+
+  const char* expected = kSequence[seqPos_];
+  if (expected && predSafe[0] != '\0' && strcasecmp(predSafe, expected) == 0) {
+    seqPos_++;
+    if (seqPos_ >= kSequenceLen) {
+      solved_ = true;
+      if (prefs_) {
+        prefs_->putBool(kPrefsSolvedKey, true);
       }
-    }
-    if (match) return true;
-  }
-  return false;
-}
-
-void PianoRiddleFSM::logNote(const piano::Detection& det) {
-  if (!ctx_) return;
-  const auto* table = piano::noteTable();
-  size_t tableCount = piano::noteCount();
-  const char* name = (det.noteIndex >= 0 && static_cast<size_t>(det.noteIndex) < tableCount)
-                         ? table[det.noteIndex].name
-                         : "UNK";
-  String data = String("{\"note\":\"") + name +
-                "\",\"hz\":" + det.noteHz +
-                ",\"conf\":" + det.confidence +
-                ",\"mag\":" + det.magnitude +
-                ",\"best\":true}";
-  log("INF", "PIANO_NOTE", data);
-}
-
-void PianoRiddleFSM::logBuffer(bool hit) const {
-  if (!ctx_) return;
-  String bufStr;
-  const auto* table = piano::noteTable();
-  size_t tableCount = piano::noteCount();
-  for (size_t i = 0; i < bufferLen_; ++i) {
-    if (i > 0) bufStr += ",";
-    size_t idx = (bufferHead_ + kBufferSize - bufferLen_ + i) % kBufferSize;
-    int noteIdx = noteBuffer_[idx];
-    if (noteIdx >= 0 && static_cast<size_t>(noteIdx) < tableCount) {
-      bufStr += table[noteIdx].name;
+      if (!solvedPublished_) {
+        publishSolvedEvent();
+        openLock();
+        solvedPublished_ = true;
+      }
+      publishState();
     } else {
-      bufStr += "UNK";
+      publishState();
     }
+    return;
   }
-  String data = String("{\"buf\":\"") + bufStr + "\",\"hit\":" + (hit ? "1" : "0") + "}";
-  log("DBG", "PIANO_BUF", data);
-}
 
-void PianoRiddleFSM::handleSolved() {
-  if (solvedPublished_) return;
-  solvedPublished_ = true;
-  log("INF", "PIANO_SOLVED");
-  publishSolvedEvent();
-  openLock();
+  resetProgress("wrong_note");
+  if (predSafe[0] != '\0' && strcasecmp(predSafe, kSequence[0]) == 0) {
+    seqPos_ = 1;
+    lastAcceptedMs_ = now;
+  }
   publishState();
 }
 
-void PianoRiddleFSM::publishSolvedEvent() {
+void PianoRiddle::publishState() {
   if (!ctx_) return;
-  String payload = String("{\"id\":\"piano\",\"seq\":\"");
-  if (sequence_ && sequenceLen_ > 0) {
-    for (size_t i = 0; i < sequenceLen_; ++i) {
-      if (i > 0) payload += ",";
-      payload += safeName(sequence_[i]);
-    }
+  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
+                ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
+                ",\"progress\":" + String(seqPos_) + "}";
+  ctx_->publishEnvelope(topicState_.c_str(), "state", 1, data, nullptr, true);
+}
+
+void PianoRiddle::publishSolvedEvent() {
+  if (!ctx_) return;
+  String payload = "{\"id\":\"piano\",\"seq\":\"";
+  for (size_t i = 0; i < kSequenceLen; ++i) {
+    if (i > 0) payload += ",";
+    payload += kSequence[i];
   }
   payload += "\"}";
   ctx_->publishEnvelope(topicEvt_.c_str(), "riddle_solved", 1, payload, nullptr, false);
 }
 
-void PianoRiddleFSM::publishState() {
-  if (!ctx_) return;
-  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
-                ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") + "}";
-  ctx_->publishEnvelope(topicState_.c_str(), "state", 1, data, nullptr, true);
-}
-
-void PianoRiddleFSM::openLock() const {
+void PianoRiddle::openLock() const {
   if (!ctx_) return;
   ctx_->publish(topicLockCmd_.c_str(), "OPEN");
 }
 
-bool PianoRiddleFSM::equalsCmd(const char* cmd, const char* ref) const {
-  if (!cmd || !ref) return false;
-  return strcasecmp(cmd, ref) == 0;
-}
-
-void PianoRiddleFSM::setModuleEnabled(bool en) {
-  moduleEnabled_ = en;
-  log("INF", en ? "PIANO_ENABLE" : "PIANO_DISABLE");
-}
-
-void PianoRiddleFSM::clearSolvedState() {
-  solved_ = false;
-  solvedPublished_ = false;
-  resetBuffer();
-  lastAcceptedNote_ = -1;
+void PianoRiddle::resetProgress(const char* reason) {
+  seqPos_ = 0;
   lastAcceptedMs_ = 0;
-  if (prefs_) {
-    prefs_->putBool(kPrefsSolvedKey, false);
-    log("INF", "STATE save piano_solved=0");
+  if (reason) {
+    String data = String("{\"reason\":\"") + reason + "\"}";
+    log("DBG", "PIANO_PROGRESS_RESET", data);
   }
 }
 
-void PianoRiddleFSM::log(const char* level, const String& msg) const {
-  if (!ctx_) return;
+void PianoRiddle::log(const char* level, const String& msg) const {
   if (logger_) {
     logger_->publish(level, msg);
-  } else {
+    return;
+  }
+  if (ctx_) {
     ctx_->log(level, msg);
   }
 }
 
-void PianoRiddleFSM::log(const char* level, const String& msg, const String& dataJson) const {
-  if (!ctx_) return;
+void PianoRiddle::log(const char* level, const String& msg, const String& dataJson) const {
   if (logger_) {
     logger_->publish(level, msg, dataJson);
-  } else {
+    return;
+  }
+  if (ctx_) {
     ctx_->log(level, msg, dataJson);
   }
+}
+
+bool PianoRiddle::equalsCmd(const char* cmd, const char* ref) const {
+  if (!cmd || !ref) return false;
+  return strcasecmp(cmd, ref) == 0;
+}
+
+void PianoRiddle::setModuleEnabled(bool en) {
+  moduleEnabled_ = en;
+  log("INF", en ? "PIANO_ENABLE" : "PIANO_DISABLE");
 }
