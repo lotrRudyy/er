@@ -49,7 +49,6 @@ private:
 
   Core::NodeContext* ctx_ = nullptr;
   String topicEvent_;
-  String topicMetric_;
   String topicCmdStarSky_;
   String topicCmdLighting_;
   bool lit_[4] = {true, true, true, true};

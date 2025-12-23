@@ -59,7 +59,6 @@ private:
   const char* uidToPieceNameOrEmpty(const String& uid) const;
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicMetric_;
   String topicLockR3Cmd_;
 
   // MFRC522 lib keeps CS/RST pins protected, so derive to access them for init.

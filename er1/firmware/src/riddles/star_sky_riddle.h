@@ -38,7 +38,6 @@ private:
 
   Core::NodeContext* ctx_ = nullptr;
   Preferences prefs_;
-  String topicDbg_;
 
   bool candlesSolved_ = false;
   uint32_t cycleStartMs_ = 0;

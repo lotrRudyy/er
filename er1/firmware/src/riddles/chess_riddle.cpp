@@ -17,7 +17,7 @@ ChessRiddle::ChessRiddle()
 void ChessRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "chess";
-  topicMetric_ = Core::topic(node, "dbg");
+  (void)node;
   topicLockR3Cmd_ = Core::topic("maglock", "lock/r3/cmd");
 
   // Ensure all CS pins are driven HIGH before any RFID init.
@@ -323,11 +323,11 @@ void ChessRiddle::publishMetricsIfDue(uint32_t nowMs) {
     patternStr += readerUid_[i];
   }
 
-  const String payload = String("{\"t\":\"INF\",\"up\":") + String(nowMs / 1000) +
-                         ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
-                         ",\"solves\":" + solvedCount_ +
-                         ",\"pattern\":\"" + patternStr + "\"}";
-  ctx_->publish(topicMetric_.c_str(), payload);
+  // Emit as DBG log so it can be suppressed with <node>/log/level.
+  const String data = String("{\"en\":") + (ctx_->enabled() ? "1" : "0") +
+                      ",\"solves\":" + solvedCount_ +
+                      ",\"pattern\":\"" + patternStr + "\"}";
+  ctx_->log("DBG", "chess_metrics", data);
 }
 
 void ChessRiddle::log(const char* level, const String& msg) {

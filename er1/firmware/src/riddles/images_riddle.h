@@ -34,7 +34,6 @@ private:
   void log(const char* level, const String& msg, const String& dataJson);
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicDbg_;
   String topicLockImagesCmd_;
   String nodeId_;
 

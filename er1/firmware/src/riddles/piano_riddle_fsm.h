@@ -68,7 +68,6 @@ private:
   String nodeId_;
   String topicEvt_;
   String topicState_;
-  String topicDbg_;
   String topicLockCmd_;
   bool moduleEnabled_ = true;
   bool solved_ = false;

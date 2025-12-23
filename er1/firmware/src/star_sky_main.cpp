@@ -108,7 +108,7 @@ void setup() {
   cfg.log.filter = logFilter;
   cfg.log.filterUser = &starSky;
 
-  cfg.heartbeat.intervalMs = 5000;
+  cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &starSky;
 

@@ -9,7 +9,7 @@ constexpr const char* kPrefsKey = "candles";
 void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "star_sky";
-  topicDbg_ = Core::topic(node, "dbg");
+  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   loadState();
   for (int i = 0; i < 4; i++) {
     ledcSetup(i, kLedcFreq, kLedcRes);
@@ -121,7 +121,7 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"candles\":" + (candlesSolved_ ? "1" : "0") +
                    ",\"phase\":\"" + phase + "\"" +
                    "}";
-  ctx_->publish(topicDbg_.c_str(), payload);
+  ctx_->log("DBG", "star_sky_metrics", payload);
 }
 
 void StarSkyRiddle::persistState() {

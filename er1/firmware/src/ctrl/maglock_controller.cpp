@@ -275,8 +275,8 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
   }
   payload += "]}";
 
-  const char* topic = (topicDbg_.length() > 0) ? topicDbg_.c_str() : "maglock/dbg";
-  ctx_->publish(topic, payload);
+  // Emit as DBG log so it can be suppressed with <node>/log/level.
+  ctx_->log("DBG", "maglock_metrics", payload);
 }
 
 void MaglockController::publishStateSnapshot() {
@@ -359,12 +359,8 @@ void MaglockController::handleLockCommandTopicInternal(const String& topic, cons
 }
 
 uint32_t MaglockController::hbIntervalForMode(GameMode mode) const {
-  switch (mode) {
-    case GameMode::InGame: return 5000;
-    case GameMode::Maint: return 10000;
-    case GameMode::Off:
-    default: return 15000;
-  }
+  (void)mode;
+  return 20000;
 }
 
 void MaglockController::applyHeartbeatInterval() {

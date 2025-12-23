@@ -4,7 +4,7 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
   topicEvent_ = Core::topic(node, "evt");
-  topicMetric_ = Core::topic(node, "dbg");
+  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   topicCmdStarSky_ = Core::topic("star_sky", "cmd");
   topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
@@ -232,7 +232,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
                      ",\"d\":" + (int(mm.avg) - int(mm.base)) +
                      ",\"thr\":" + delta_[i] +
                      "}";
-    ctx_->publish(topicMetric_.c_str(), payload);
+    ctx_->log("DBG", "candles_metrics", payload);
     mm.sum = 0;
     mm.samples = 0;
     mm.maxVal = 0;

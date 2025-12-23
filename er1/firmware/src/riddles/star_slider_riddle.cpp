@@ -6,7 +6,7 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   prefs_ = &ctx.prefs();
   const char* node = ctx.nodeId() ? ctx.nodeId() : "star_slider";
-  topicDbg_ = Core::topic(node, "dbg");
+  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
 
   pinMode(kButtonPin, INPUT_PULLUP);
   btnPrevState_ = digitalRead(kButtonPin);
@@ -195,7 +195,7 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"attempts\":" + String(solveAttempts_) +
                    ",\"success\":" + String(solveSuccess_) +
                    "}";
-  ctx_->publish(topicDbg_.c_str(), payload);
+  ctx_->log("DBG", "star_slider_metrics", payload);
 }
 
 void StarSliderRiddle::publishState() {

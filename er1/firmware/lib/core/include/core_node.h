@@ -164,10 +164,19 @@ private:
   void maybeWarnMissingTs();
   void handleTimeStateMessage(const String& payload);
 
+  // Runtime log-level control via MQTT (<node>/log/level).
+  void handleLogLevelMessage(const String& payload);
+  static bool logFilterThunk(const char* level, void* user);
+
   NodeCoreConfig cfg_{};
   HeartbeatConfig hbCfg_{};
   MqttClient mqtt_;
   Logger logger_;
+  // User-provided log filter from cfg.log.filter (if any); composed with minLogRank_.
+  LogFilterFn userLogFilter_ = nullptr;
+  void* userLogFilterUser_ = nullptr;
+  int minLogRank_ = 0;  // default DBG
+  String topicLogLevel_;
   OtaUpdater ota_;
   Preferences prefs_;
   bool prefsReady_ = false;

@@ -10,6 +10,17 @@ namespace Core {
 
 namespace {
 String escapeJson(const char* s);
+
+// Log levels ordered from most verbose to least.
+// Matches what we emit on the wire ("DBG","INF","WRN","ERR").
+static int levelRank(const char* level) {
+  if (!level) return 99;
+  if (strcmp(level, "DBG") == 0) return 0;
+  if (strcmp(level, "INF") == 0) return 1;
+  if (strcmp(level, "WRN") == 0) return 2;
+  if (strcmp(level, "ERR") == 0) return 3;
+  return 99;
+}
 }
 
 // -------- NodeContext --------
@@ -127,6 +138,8 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
     cfg_.buildId = buildIdBuf_;
   }
   cfg_.topics = makeTopicConfig(cfg_.nodeId, cfg.topics);
+  // Runtime log-level control topic: <node>/log/level
+  topicLogLevel_ = String(cfg_.nodeId) + "/log/level";
   if (!cfg_.ota.targetFw || cfg_.ota.targetFw[0] == '\0') {
     cfg_.ota.targetFw = cfg_.fwVersion;
   }
@@ -147,8 +160,17 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   LogOptions logOpts = cfg.log;
   logOpts.topic = cfg_.topics.log.c_str();
   logOpts.fwVersion = cfg.fwVersion;
+  // Compose runtime log-level filter with any user-provided filter.
+  userLogFilter_ = logOpts.filter;
+  userLogFilterUser_ = logOpts.filterUser;
+  logOpts.filter = &NodeCore::logFilterThunk;
+  logOpts.filterUser = this;
   logger_.begin(&mqtt_.client(), logOpts);
   logger_.setTimestampSource(this);
+
+  // Default runtime level: DBG (most verbose). Can be changed at runtime via <node>/log/level.
+  minLogRank_ = 0;
+  topicLogLevel_ = topic(cfg_.nodeId, "log/level");
 
   ota_.begin(cfg.ota, &logger_);
 
@@ -161,6 +183,35 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
       restoreEnabledState();
     }
   }
+}
+
+bool NodeCore::logFilterThunk(const char* level, void* user) {
+  auto* self = static_cast<NodeCore*>(user);
+  if (!self) return true;
+  const int r = levelRank(level);
+  const bool allowByLevel = (r >= self->minLogRank_);
+  if (!allowByLevel) return false;
+  if (self->userLogFilter_) {
+    return self->userLogFilter_(level, self->userLogFilterUser_);
+  }
+  return true;
+}
+
+void NodeCore::handleLogLevelMessage(const String& payload) {
+  String p = payload;
+  p.trim();
+  p.toUpperCase();
+  int newRank = minLogRank_;
+  if (p == "DBG") newRank = 0;
+  else if (p == "INF" || p == "INFO") newRank = 1;
+  else if (p == "WRN" || p == "WARN") newRank = 2;
+  else if (p == "ERR" || p == "ERROR") newRank = 3;
+  else {
+    logger_.publish("WRN", String("Invalid log level: ") + p);
+    return;
+  }
+  minLogRank_ = newRank;
+  logger_.publish("INF", String("log_level set to ") + p);
 }
 
 void NodeCore::loop() {
@@ -221,6 +272,11 @@ void NodeCore::onMqttConnected() {
   // Subscribe to time/state for clock sync
   mqtt_.subscribe("time/state");
 
+  // Subscribe to runtime log-level control
+  if (topicLogLevel_.length() > 0) {
+    mqtt_.subscribe(topicLogLevel_.c_str());
+  }
+
   for (size_t i = 0; i < subCount_; i++) {
     mqtt_.subscribe(subs_[i].topic);
   }
@@ -240,6 +296,12 @@ void NodeCore::onMqttMessage(const char* topic, const uint8_t* payload, size_t l
   // Handle time sync before other messages
   if (strcmp(topic, "time/state") == 0) {
     handleTimeStateMessage(msg);
+    return;
+  }
+
+  // Runtime log-level control
+  if (topicLogLevel_.length() > 0 && strcmp(topic, topicLogLevel_.c_str()) == 0) {
+    handleLogLevelMessage(msg);
     return;
   }
 

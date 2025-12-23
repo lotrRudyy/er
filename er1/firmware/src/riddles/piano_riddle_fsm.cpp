@@ -207,7 +207,7 @@ void PianoRiddleFSM::begin(Core::NodeContext& ctx, const char* nodeId, Core::Log
   nodeId_ = (nodeId && nodeId[0]) ? nodeId : "piano";
   topicEvt_ = Core::topic(nodeId_.c_str(), "evt");
   topicState_ = Core::topic(nodeId_.c_str(), "state");
-  topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");
+  // No dedicated /dbg topic; use core_log for any debug output.
   topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
 
   sequence_ = piano::defaultSequence(&sequenceLen_);

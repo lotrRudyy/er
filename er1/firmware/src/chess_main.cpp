@@ -88,7 +88,7 @@ void setup() {
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::LevelMsg;
 
-  cfg.heartbeat.intervalMs = 5000;
+  cfg.heartbeat.intervalMs = 7500;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &chess;
 

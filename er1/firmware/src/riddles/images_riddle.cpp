@@ -15,7 +15,7 @@ String prefixedMessage(const char* prefix, const String& msg) {
 void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   ctx_ = &ctx;
   nodeId_ = (nodeId && nodeId[0]) ? nodeId : "images";
-  topicDbg_ = Core::topic(nodeId_.c_str(), "dbg");
+  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   topicLockImagesCmd_ = Core::topic("maglock", "lock/images/cmd");
 
   for (int i = 0; i < kButtonCount; i++) {
@@ -165,7 +165,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       ",\"state\":" + (b.cur ? 1 : 0) +
                       ",\"presses\":" + b.presses +
                       "}";
-  ctx_->publish(topicDbg_.c_str(), payloadBtn);
+  ctx_->log("DBG", "images_btn", payloadBtn);
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
@@ -179,7 +179,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->publish(topicDbg_.c_str(), payloadAll);
+  ctx_->log("DBG", "images_all", payloadAll);
 }
 
 void ImagesRiddle::publishMetricsIfDue() {
@@ -198,7 +198,7 @@ void ImagesRiddle::publishMetricsIfDue() {
                      ",\"state\":" + (b.cur ? 1 : 0) +
                      ",\"presses\":" + b.presses +
                      "}";
-    ctx_->publish(topicDbg_.c_str(), payload);
+    ctx_->log("DBG", "images_metrics", payload);
   }
 
   bool allPressedNow = true;
@@ -213,7 +213,7 @@ void ImagesRiddle::publishMetricsIfDue() {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->publish(topicDbg_.c_str(), payloadAll);
+  ctx_->log("DBG", "images_all", payloadAll);
 }
 
 void ImagesRiddle::publishSolvedEvent(const char* rid) {

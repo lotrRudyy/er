@@ -61,5 +61,4 @@ private:
   uint32_t lastPollMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
-  String topicDbg_;
 };

@@ -89,7 +89,7 @@ void setup() {
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
 
-  cfg.heartbeat.intervalMs = 5000;
+  cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &starSlider;
 
