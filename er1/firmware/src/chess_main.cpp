@@ -9,9 +9,9 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "chess";
-static const char* FW_VERSION = "1.4";
-static const char* FW_DESC = "chess 1.4 - OTA JSON command, PSK removed";
-static const char* FW_BUILD_ID = "Q1EZ0WJYK37UZ0GW3NU0";
+static const char* FW_VERSION = "1.6";
+static const char* FW_DESC = "chess 1.6 - logging improvements";
+static const char* FW_BUILD_ID = "asdfdasf37UZ0GW3NU0";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -88,7 +88,7 @@ void setup() {
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::LevelMsg;
 
-  cfg.heartbeat.intervalMs = 7500;
+  cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &chess;
 

@@ -1,7 +1,7 @@
 #include "chess_riddle.h"
 
 // W5500 CS pin used by core ethernet bring-up.
-// We keep it HIGH whenever touching the RFID readers.
+// Keep it HIGH whenever touching RFID readers.
 #ifndef ETH_CS
 #define ETH_CS 15
 #endif
@@ -10,19 +10,15 @@ ChessRiddle::ChessRiddle()
     : r1_(kRfidCs[0], kRfidRst[0]),
       r2_(kRfidCs[1], kRfidRst[1]),
       r3_(kRfidCs[2], kRfidRst[2]),
-      r4_(kRfidCs[3], kRfidRst[3]) {
-  // readers_ already points to r1_..r4_ via in-class init.
-}
+      r4_(kRfidCs[3], kRfidRst[3]) {}
 
 void ChessRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-  const char* node = ctx.nodeId() ? ctx.nodeId() : "chess";
-  (void)node;
-  topicLockR3Cmd_ = Core::topic("maglock", "lock/r3/cmd");
 
   // Ensure all CS pins are driven HIGH before any RFID init.
   pinMode(ETH_CS, OUTPUT);
   digitalWrite(ETH_CS, HIGH);
+
   for (int i = 0; i < kReaderCount; i++) {
     pinMode(kRfidCs[i], OUTPUT);
     digitalWrite(kRfidCs[i], HIGH);
@@ -33,79 +29,39 @@ void ChessRiddle::begin(Core::NodeContext& ctx) {
   initReadersNoSpiBegin();
 
   lastPollMs_ = millis();
-  lastMetricMs_ = millis();
-  pollIntervalMs_ = kPollSlowMs;
-  maglockOpened_ = false;
   publishState();
 }
 
 void ChessRiddle::tick(uint32_t nowMs) {
-  pollOneReader(nowMs);
-  publishMetricsIfDue(nowMs);
-}
+  // Round robin: one reader per tick interval
+  if (nowMs - lastPollMs_ < perReaderMs_) return;
+  lastPollMs_ = nowMs;
 
-uint8_t ChessRiddle::correctCount() const {
-  uint8_t c = 0;
-  for (int i = 0; i < kReaderCount; i++) {
-    if (readerUid_[i] == kTargetUIDs[i]) c++;
+  // Keep W5500 deselected while touching RFID.
+  digitalWrite(ETH_CS, HIGH);
+  // Keep all readers deselected.
+  for (int j = 0; j < kReaderCount; j++) digitalWrite(kRfidCs[j], HIGH);
+
+  const uint8_t i = currentReader_;
+  bool event = pollOneReader(i, nowMs);
+  if (event) {
+    // Update speed policy based on how many are correct
+    const int cc = correctCount();
+    perReaderMs_ = (cc >= 3) ? kPollFastMs : kPollSlowMs;
+
+    // Evaluate riddle state transitions
+    evaluatePattern();
+
+    // REQUIRED: print FULL TABLE on every event
+    logFullTable();
   }
-  return c;
-}
 
-void ChessRiddle::updatePollInterval() {
-  const uint8_t c = correctCount();
-  // Start slow, speed up as we get close.
-  if (c < 3) pollIntervalMs_ = kPollSlowMs;
-  else pollIntervalMs_ = kPollFastMs;
-}
-
-const char* ChessRiddle::uidToPieceNameOrEmpty(const String& uid) const {
-  if (uid.length() == 0 || uid == "NONE") return "";
-  // Map the 4 known target UIDs to names. Order: Horse/Rook/Queen/King.
-  if (uid == kTargetUIDs[0]) return "Horse";
-  if (uid == kTargetUIDs[1]) return "Rook";
-  if (uid == kTargetUIDs[2]) return "Queen";
-  if (uid == kTargetUIDs[3]) return "King";
-  return "";
-}
-
-void ChessRiddle::logBoardChange(uint8_t changedReaderIdx) {
-  if (!ctx_) return;
-  // Format requested by you:
-  // Reader N (rst=.. cs=..) Horse/Rook/Queen/King: v1/v2/v3/v4
-  // Where vK is the piece name detected on reader K ("" if none/unknown).
-  const uint8_t cs = kRfidCs[changedReaderIdx];
-  const uint8_t rst = kRfidRst[changedReaderIdx];
-
-  String v1(uidToPieceNameOrEmpty(readerUid_[0]));
-  String v2(uidToPieceNameOrEmpty(readerUid_[1]));
-  String v3(uidToPieceNameOrEmpty(readerUid_[2]));
-  String v4(uidToPieceNameOrEmpty(readerUid_[3]));
-
-  // Convert empty to "" explicitly.
-  if (v1.length() == 0) v1 = "\"\"";
-  if (v2.length() == 0) v2 = "\"\"";
-  if (v3.length() == 0) v3 = "\"\"";
-  if (v4.length() == 0) v4 = "\"\"";
-
-  String msg;
-  msg.reserve(96);
-  msg += "Reader ";
-  msg += String(changedReaderIdx + 1);
-  msg += " (rst=";
-  msg += String(rst);
-  msg += " cs=";
-  msg += String(cs);
-  msg += ") Horse/Rook/Queen/King: ";
-  msg += v1; msg += "/";
-  msg += v2; msg += "/";
-  msg += v3; msg += "/";
-  msg += v4;
-
-  log("INF", msg);
+  currentReader_++;
+  if (currentReader_ >= kReaderCount) currentReader_ = 0;
 }
 
 bool ChessRiddle::onCmd(const char* cmd, const char* payload) {
+  // Keep same behavior: log unknown commands, but don't crash.
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
     message += " ";
@@ -116,10 +72,9 @@ bool ChessRiddle::onCmd(const char* cmd, const char* payload) {
 }
 
 void ChessRiddle::initReadersNoSpiBegin() {
-  // IMPORTANT: NodeCore's MQTT brings up Ethernet and calls SPI.begin() already.
-  // MFRC522::PCD_Init() calls SPI.begin() internally (many versions) and can
-  // trigger the ESP32 duplicate APB callback warning. So we replicate init
-  // without calling SPI.begin().
+  // NodeCore Ethernet already called SPI.begin().
+  // MFRC522::PCD_Init() often calls SPI.begin() internally and can trigger
+  // ESP32 duplicate APB callback warnings. So we init without SPI.begin().
 
   for (int i = 0; i < kReaderCount; i++) {
     auto* r = readers_[i];
@@ -152,7 +107,7 @@ void ChessRiddle::initReadersNoSpiBegin() {
     delay(10);
 
     const byte ver = r->PCD_ReadRegister(MFRC522::VersionReg);
-    log("INF", String("RFID init r") + i + " ver=0x" + String(ver, HEX));
+    log("INF", String("RFID init r") + String(i + 1) + " ver=0x" + String(ver, HEX));
   }
 }
 
@@ -160,70 +115,84 @@ String ChessRiddle::uidToHexUpper(const MFRC522::Uid& uid) {
   String s;
   s.reserve(uid.size * 2);
   for (byte i = 0; i < uid.size; i++) {
-    if (uid.uidByte[i] < 0x10) s += '0';
-    s += String(uid.uidByte[i], HEX);
+    char b[3];
+    snprintf(b, sizeof(b), "%02X", uid.uidByte[i]);
+    s += b;
   }
-  s.toUpperCase();
   return s;
 }
 
-void ChessRiddle::pollOneReader(uint32_t nowMs) {
-  if (nowMs - lastPollMs_ < pollIntervalMs_) return;
-  lastPollMs_ = nowMs;
-
-  // Keep W5500 deselected while touching RFID.
-  digitalWrite(ETH_CS, HIGH);
-  // Keep other readers deselected.
-  for (int j = 0; j < kReaderCount; j++) digitalWrite(kRfidCs[j], HIGH);
-
-  const uint8_t i = currentReader_;
+// IMPORTANT CHANGE:
+// MFRC522 PICC_IsNewCardPresent() is edge-triggered (new tag enters field).
+// We use it only to detect arrival/swap, and we maintain presence with a
+// software state machine (tag still there / removed) using PICC_ReadCardSerial().
+bool ChessRiddle::pollOneReader(uint8_t i, uint32_t nowMs) {
   MFRC522& r = *readers_[i];
+  bool event = false;
 
-  bool changed = false;
-  bool tagEvent = false;
+  // Select only this reader
+  for (int j = 0; j < kReaderCount; j++) digitalWrite(kRfidCs[j], HIGH);
+  digitalWrite(kRfidCs[i], LOW);
 
-  if (r.PICC_IsNewCardPresent() && r.PICC_ReadCardSerial()) {
-    const String uid = uidToHexUpper(r.uid);
-    lastSeenMs_[i] = nowMs;
-    if (readerUid_[i] != uid) {
-      readerUid_[i] = uid;
-      changed = true;
-      tagEvent = true;
-      // Log only on changes: new/different tag.
-      log("INF", String("RFID r") + i + " uid=" + uid);
+  const bool hadTag = (readerUid_[i] != "NONE");
+  bool levelPresent = false;  // "tag is present" (level)
+  bool uidRead = false;
+
+  // LEVEL PRESENCE CHECK:
+  // Use WUPA (WakeupA) so we also detect tags that we previously HALTed.
+  // REQA can fail on a halted PICC; WUPA wakes it up.
+  byte atqa[2] = {0, 0};
+  byte atqaSize = sizeof(atqa);
+  MFRC522::StatusCode st = r.PICC_WakeupA(atqa, &atqaSize);
+  if (st == MFRC522::STATUS_OK || st == MFRC522::STATUS_COLLISION) {
+    levelPresent = true;
+    lastSeenMs_[i] = nowMs;  // refresh presence even if UID read fails this poll
+
+    // Try to read UID whenever presence is detected.
+    // This handles: boot with tag already present, steady tags, and swaps.
+    if (r.PICC_ReadCardSerial()) {
+      String uid = uidToHexUpper(r.uid);
+      if (uid.length() > 8) uid = uid.substring(0, 8);
+      uidRead = true;
+
+      if (!hadTag || readerUid_[i] != uid) {
+        readerUid_[i] = uid;
+        event = true;  // arrival or swap
+      }
+
+      r.PICC_HaltA();
+      r.PCD_StopCrypto1();
     }
+  }
 
-    r.PICC_HaltA();
-    r.PCD_StopCrypto1();
-  } else {
-    // Clear if we haven't seen the tag in a while.
-    if (readerUid_[i] != "NONE" && (nowMs - lastSeenMs_[i] > kCardLostMs)) {
+  // REMOVAL DETECTION:
+  // If we previously had a tag and REQA no longer sees one for >=2s, clear it.
+  if (!levelPresent && hadTag) {
+    if (nowMs - lastSeenMs_[i] >= kCardLostMs) {
       readerUid_[i] = "NONE";
-      changed = true;
-      tagEvent = true;
-      log("INF", String("RFID r") + i + " uid=NONE");
+      event = true;
     }
   }
 
-  if (changed) {
-    updatePollInterval();
-    if (tagEvent) {
-      logBoardChange(i);
-    }
-    evaluatePattern();
-  }
-
-  currentReader_++;
-  if (currentReader_ >= kReaderCount) currentReader_ = 0;
+  // Deselect reader after poll
+  digitalWrite(kRfidCs[i], HIGH);
+  (void)uidRead; // kept for future diagnostics
+  return event;
 }
 
 bool ChessRiddle::patternCorrect() const {
   for (int i = 0; i < kReaderCount; i++) {
-    if (readerUid_[i] != kTargetUIDs[i]) {
-      return false;
-    }
+    if (readerUid_[i] != kTargetUIDs[i]) return false;
   }
   return true;
+}
+
+int ChessRiddle::correctCount() const {
+  int c = 0;
+  for (int i = 0; i < kReaderCount; i++) {
+    if (readerUid_[i] == kTargetUIDs[i]) c++;
+  }
+  return c;
 }
 
 bool ChessRiddle::anyTagPresent() const {
@@ -235,13 +204,9 @@ bool ChessRiddle::anyTagPresent() const {
 
 void ChessRiddle::evaluatePattern() {
   if (!ctx_ || !ctx_->enabled()) return;
+
   const bool correct = patternCorrect();
   const bool anyPresent = anyTagPresent();
-
-  // Allow re-opening on a new future solve.
-  if (!correct) {
-    maglockOpened_ = false;
-  }
 
   const RiddleState prevState = riddleState_;
   switch (riddleState_) {
@@ -251,24 +216,24 @@ void ChessRiddle::evaluatePattern() {
         lastSolvedMs_ = millis();
         solvedCount_++;
         publishSolvedEvent();
-        openMaglockR3();
         log("INF", "CHESS_SOLVED");
       } else if (anyPresent) {
         riddleState_ = RiddleState::Partial;
       }
       break;
+
     case RiddleState::Partial:
       if (correct) {
         riddleState_ = RiddleState::Solved;
         lastSolvedMs_ = millis();
         solvedCount_++;
         publishSolvedEvent();
-        openMaglockR3();
         log("INF", "CHESS_SOLVED");
       } else if (!anyPresent) {
         riddleState_ = RiddleState::Idle;
       }
       break;
+
     case RiddleState::Solved:
       if (!correct) {
         riddleState_ = anyPresent ? RiddleState::Partial : RiddleState::Idle;
@@ -283,22 +248,18 @@ void ChessRiddle::evaluatePattern() {
 
 void ChessRiddle::publishSolvedEvent() {
   if (!ctx_) return;
+
+  // 1) Emit canonical riddle solved event
   const String payload = "{\"id\":\"chess\"}";
   ctx_->publishEvent("riddle_solved", payload);
-  publishState();
-}
 
-void ChessRiddle::openMaglockR3() {
-  if (!ctx_) return;
-  if (maglockOpened_) return;
-  if (topicLockR3Cmd_.length() == 0) return;
-  ctx_->publish(topicLockR3Cmd_.c_str(), "OPEN");
-  maglockOpened_ = true;
-  log("INF", "Sent OPEN to maglock r3");
+  // 2) Directly command maglock to open r3 (legacy supported command topic)
+  ctx_->publish("maglock/lock/r3/cmd", "OPEN", false);
 }
 
 void ChessRiddle::publishState() {
   if (!ctx_) return;
+
   const char* stateName = "idle";
   switch (riddleState_) {
     case RiddleState::Partial: stateName = "partial"; break;
@@ -306,38 +267,58 @@ void ChessRiddle::publishState() {
     case RiddleState::Idle:
     default: stateName = "idle"; break;
   }
-  const String data = String("{\"state\":\"") + stateName +
-                      "\",\"solved_count\":" + solvedCount_ +
-                      ",\"enabled\":" + (ctx_->enabled() ? "true" : "false") + "}";
+
+  const String data =
+      String("{\"state\":\"") + stateName +
+      "\",\"solved_count\":" + solvedCount_ +
+      ",\"enabled\":" + (ctx_->enabled() ? "true" : "false") + "}";
+
   ctx_->publishState(data, true);
 }
 
-void ChessRiddle::publishMetricsIfDue(uint32_t nowMs) {
-  if (!ctx_) return;
-  if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
-  lastMetricMs_ = nowMs;
+// ===== Required FULL TABLE formatting =====
 
-  String patternStr;
-  for (int i = 0; i < kReaderCount; i++) {
-    if (i > 0) patternStr += ",";
-    patternStr += readerUid_[i];
+const char* ChessRiddle::expectedLabelForReader(uint8_t i) {
+  // Reader order is fixed:
+  // R1=QUEEN, R2=HORSE, R3=ROOK, R4=KING
+  switch (i) {
+    case 0: return "QUEEN";
+    case 1: return "HORSE";
+    case 2: return "ROOK";
+    case 3: return "KING";
+    default: return "???";
   }
+}
 
-  // Emit as DBG log so it can be suppressed with <node>/log/level.
-  const String data = String("{\"en\":") + (ctx_->enabled() ? "1" : "0") +
-                      ",\"solves\":" + solvedCount_ +
-                      ",\"pattern\":\"" + patternStr + "\"}";
-  ctx_->log("DBG", "chess_metrics", data);
+const char* ChessRiddle::presentLabelFromUid(const String& uid) {
+  if (uid == "NONE" || uid.length() == 0) return "EMPTY";
+  if (uid == "607A512F") return "KING";
+  if (uid == "A06B512F") return "QUEEN";
+  if (uid == "4015512F") return "ROOK";
+  if (uid == "C06B512F") return "HORSE";
+  return "UNKNOWN";
+}
+
+void ChessRiddle::logFullTable() const {
+  if (!ctx_) return;
+
+  for (int i = 0; i < kReaderCount; i++) {
+    // EXACT format you demanded:
+    // QUEEN (Reader 1: rst=32 cs=14) - QUEEN
+    ctx_->log(
+      "INF",
+      String(expectedLabelForReader(i)) +
+        " (Reader " + String(i + 1) +
+        ": rst=" + String(kRfidRst[i]) +
+        " cs=" + String(kRfidCs[i]) + ") - " +
+        presentLabelFromUid(readerUid_[i])
+    );
+  }
 }
 
 void ChessRiddle::log(const char* level, const String& msg) {
   if (!ctx_) return;
   ctx_->log(level, msg);
-}
-
-void ChessRiddle::log(const char* level, const String& msg, const String& dataJson) {
-  if (!ctx_) return;
-  ctx_->log(level, msg, dataJson);
 }
 
 void ChessRiddle::logErr(const String& msg) {
