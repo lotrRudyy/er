@@ -11,6 +11,7 @@ using namespace Core;
 static const char* NODE_ID = "knocking";
 static const char* FW_VERSION = "1.19";
 static const char* FW_DESC = "knocking 1.19 - OTA JSON command, PSK removed";
+static const char* FW_BUILD_ID = "VGN9YI0JVAMCNOB5VU6";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};

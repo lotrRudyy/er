@@ -52,11 +52,10 @@ bool KnockingRiddle::onCmd(const char* /*cmd*/, const char* /*payload*/) {
 }
 
 bool KnockingRiddle::shouldAllowLog(const char* level) {
-  bool isErr = (strcmp(level, "ERR") == 0);
-  if (isErr) {
-    errorCount_++;
-    return true;
-  }
+  // NOTE: This filter applies to *all* logs in the firmware (core + module).
+  // Do NOT mutate module health/error counters here, otherwise any transient
+  // core/network error will permanently mark the module as degraded.
+  (void)level;
   return kDevLog;
 }
 
@@ -135,10 +134,10 @@ void KnockingRiddle::handleKnockWindow(uint32_t nowMs) {
                   ",\"m2\":" + windowMax_[2] + "}";
     log("INF", "KNOCK_WINDOW_WINNER", data);
   }
-  registerKnock(bestIdx, bestVal);
+  registerKnock(bestIdx, bestVal, nowMs);
 }
 
-void KnockingRiddle::registerKnock(int idx, uint16_t raw) {
+void KnockingRiddle::registerKnock(int idx, uint16_t raw, uint32_t nowMs) {
   if (!ctx_->enabled()) return;
   if (kDevLog) {
     String data = String("{\"idx\":") + idx + ",\"raw\":" + raw + "}";
