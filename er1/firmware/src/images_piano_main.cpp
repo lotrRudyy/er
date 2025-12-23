@@ -54,14 +54,19 @@ static String topicPianoLog;
 // ======================= HELPERS =============================
 static void publishPianoHeartbeat(NodeContext& ctx) {
   if (topicPianoHb.length() == 0) return;
+  uint32_t errCnt = ctx.logErrorCount();
+  uint32_t errCode = (errCnt > 0) ? 1 : 0;
+  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
+  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
   HeartbeatFields hb{
       NODE_PIANO,
       ctx.fwVersion(),
       ctx.buildId(),
       ctx.uptimeSeconds(),
-      ctx.enabled() ? "ok" : "degraded",
-      "ok",
-      "0",
+      errCnt,
+      errCode,
+      errSince,
+      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
   };
   String payload;
   buildHeartbeatPayload(payload, hb);
@@ -70,14 +75,19 @@ static void publishPianoHeartbeat(NodeContext& ctx) {
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userData*/) {
   NodeContext& mutableCtx = const_cast<NodeContext&>(ctx);
+  uint32_t errCnt = ctx.logErrorCount();
+  uint32_t errCode = (errCnt > 0) ? 1 : 0;
+  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
+  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
   HeartbeatFields hb{
       NODE_IMAGES,
       ctx.fwVersion(),
       ctx.buildId(),
       ctx.uptimeSeconds(),
-      ctx.enabled() ? "ok" : "degraded",
-      "ok",
-      "0",
+      errCnt,
+      errCode,
+      errSince,
+      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
   };
   buildHeartbeatPayload(out, hb);
   publishPianoHeartbeat(mutableCtx);
