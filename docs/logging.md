@@ -8,6 +8,9 @@ Published on `<node>/hb` every 20s and immediately on MQTT connect. Required fie
 - `ts`, `time_valid`
 - `heap_free`, `heap_min`, `heap_largest`, `heap_size` (bytes)
 - `err_cnt`, `err_code`, `err_since_up` (optional), `err_msg` (only when `err_code != 0`)
+- `err_cnt` is monotonic (ERR logs or explicit bumps); `err_code/msg/since_up` surface only when an active
+  error is set via the core error API (`setError/clearError`), so benign WARNs (e.g., ignored OTA payloads)
+  do not poison the dashboard.
 
 Example:
 
@@ -42,6 +45,13 @@ Example:
 - OTA events are merged per node/id (START/PROGRESS/FLASHED/OK/FAIL + reboot detection).
 - Multiline logs (e.g., chess table) are printed as one message.
 - Requires `paho-mqtt` on the Pi (`pip install paho-mqtt`).
+
+## Changelog
+
+- Harmonized heartbeat error semantics (err_code only for active errors; err_cnt monotonic).
+- OTA UPDATE parsing now tolerates missing `version` with a single WARN and ignores the command instead of emitting a
+  persistent ERR/FAIL.
+- OTA status publishing is centralized in `core_ota` so every node reports `fw`/`build`/`up` + status/data uniformly.
 
 ## Chess table log (single publish)
 

@@ -13,8 +13,10 @@ import queue
 import signal
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:
@@ -27,7 +29,9 @@ except ImportError as exc:  # pragma: no cover - dependency check
 HB_INTERVAL_SEC = int(os.environ.get("HB_INTERVAL_SEC", "20"))
 TIME_STALE_SEC = 90
 RESTART_DELTA = 5  # seconds of slack when detecting uptime drops
-SEPARATOR = "-" * 75
+SEPARATOR = "-" * 64
+LOG_HISTORY_LINES = int(os.environ.get("LOG_HISTORY_LINES", "200"))
+LOG_DIR = Path(os.environ.get("LOG_DIR", Path(__file__).resolve().parent.parent / "logs"))
 
 
 def now_ts() -> float:
@@ -39,6 +43,9 @@ def next_minute_boundary(from_ts: Optional[float] = None) -> float:
     boundary = (base.replace(second=0, microsecond=0) + timedelta(minutes=1)).timestamp()
     return boundary
 
+def minute_floor(ts: Optional[float] = None) -> float:
+    base = datetime.fromtimestamp(ts or now_ts())
+    return base.replace(second=0, microsecond=0).timestamp()
 
 def format_uptime(secs: int) -> str:
     if secs < 0:
@@ -110,6 +117,10 @@ class PrettyLogger:
         self.start_ts = now_ts()
         self.running = True
         self.last_dashboard_ts: Optional[int] = None
+        self.history_lines = LOG_HISTORY_LINES
+        self.log_dir = LOG_DIR
+        self.burst_active = False
+        self.burst_end_ts: Optional[float] = None
 
     def stop(self, *_: Any) -> None:
         self.running = False
@@ -135,23 +146,34 @@ class PrettyLogger:
         client.connect(self.broker, self.port, 30)
         client.loop_start()
 
+        self.print_startup_history()
+
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
 
         next_tick = next_minute_boundary()
+        self.burst_active = True
+        self.burst_end_ts = now_ts() + 60  # allow rapid prints during first minute after start
         while self.running:
             timeout = max(0.0, next_tick - now_ts())
             try:
                 topic, payload, recv_ts = self.queue.get(timeout=timeout)
                 self.handle_message(topic, payload, recv_ts)
             except queue.Empty:
-                self.print_dashboard(next_tick)
-                next_tick = next_minute_boundary(next_tick + 0.1)
+                current_ts = now_ts()
+                if self.burst_active and self.burst_end_ts and current_ts >= self.burst_end_ts:
+                    self.burst_active = False
+                while current_ts >= next_tick:
+                    self.print_dashboard(next_tick)
+                    next_tick += 60
                 continue
 
-            if now_ts() >= next_tick:
+            current_ts = now_ts()
+            if self.burst_active and self.burst_end_ts and current_ts >= self.burst_end_ts:
+                self.burst_active = False
+            while current_ts >= next_tick:
                 self.print_dashboard(next_tick)
-                next_tick = next_minute_boundary()
+                next_tick += 60
 
         client.loop_stop()
         client.disconnect()
@@ -209,6 +231,8 @@ class PrettyLogger:
         rec.last_seen = recv_ts
         self.hb_cache[node] = rec
         self.mark_ota_reboot(node, rec)
+        if self.burst_active and self.burst_end_ts and recv_ts <= self.burst_end_ts:
+            self.print_dashboard(minute_floor(recv_ts), force=True)
 
     def handle_time_state(self, payload: str, recv_ts: float) -> None:
         data = self.safe_json(payload)
@@ -275,7 +299,7 @@ class PrettyLogger:
         session.bytes = int_or_none(details.get("bytes"), session.bytes)
         session.sha256 = str(details.get("sha256") or session.sha256 or "")
         self.ota_sessions.setdefault(node, {})[ota_id] = session
-        self.print_ota_session(session)
+        self.print_ota_group(node)
 
     def mark_ota_reboot(self, node: str, hb: Heartbeat) -> None:
         if not hb.restart_seen_at:
@@ -290,24 +314,56 @@ class PrettyLogger:
                 sess.last_update = hb.restart_seen_at
                 updated = True
         if updated:
-            for sess in sessions.values():
-                if sess.reboot_seen and sess.status not in {"OTA_OK", "OTA_FAIL"}:
-                    self.print_ota_session(sess, note="reboot detected")
+            self.print_ota_group(node, note="reboot detected via hb reset")
 
     def print_fallback(self, topic: str, payload: str) -> None:
         print(f"[unparsed] {topic}: {payload}")
 
+    def print_startup_history(self) -> None:
+        if self.history_lines <= 0:
+            return
+        today = datetime.fromtimestamp(now_ts()).strftime("%d.%m.%Y")
+        log_file = self.log_dir / f"er1-{today}.log"
+        try:
+            with log_file.open("r", encoding="utf-8") as fh:
+                last_lines = deque(fh, maxlen=self.history_lines)
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # pragma: no cover - best-effort history
+            print(f"[history] failed to read {log_file}: {exc}", file=sys.stderr)
+            return
+
+        lines = list(last_lines)
+        if not lines:
+            return
+        print(f"[history] showing last {len(lines)} lines from {log_file}")
+        for line in lines:
+            print(line.rstrip("\n"))
+        print(SEPARATOR)
+
     def format_heap(self, hb: Heartbeat) -> str:
-        parts = []
-        if hb.heap_free is not None:
-            parts.append(f"free={hb.heap_free//1024}k")
-        if hb.heap_min is not None:
-            parts.append(f"min={hb.heap_min//1024}k")
-        if hb.heap_largest is not None:
-            parts.append(f"largest={hb.heap_largest//1024}k")
-        if hb.heap_size is not None:
-            parts.append(f"size={hb.heap_size//1024}k")
-        return " ".join(parts) if parts else "heap=n/a"
+        size = hb.heap_size or 0
+        free_pct = None
+        min_pct = None
+        if size > 0:
+            if hb.heap_free is not None:
+                free_pct = max(0, min(100, int(hb.heap_free * 100 / size)))
+            if hb.heap_min is not None:
+                min_pct = max(0, min(100, int(hb.heap_min * 100 / size)))
+
+        if free_pct is not None and min_pct is not None:
+            return f"heap[{free_pct:02d}/{min_pct:02d}]"
+        if free_pct is not None:
+            return f"heap[{free_pct:02d}%]"
+        if min_pct is not None:
+            return f"heap[min{min_pct:02d}]"
+        return "heap[n/a]"
+
+    def format_build(self, build: str, max_len: int = 3) -> str:
+        build_clean = (build or "").strip()
+        if not build_clean:
+            return "?"
+        return build_clean if len(build_clean) <= max_len else f"{build_clean[:max_len]}..."
 
     def format_err(self, hb: Heartbeat) -> str:
         err_cnt = hb.err_cnt if hb.err_cnt is not None else 0
@@ -321,13 +377,13 @@ class PrettyLogger:
             return msg
         return f"ok cnt={err_cnt}"
 
-    def print_dashboard(self, boundary_ts: float) -> None:
+    def print_dashboard(self, boundary_ts: float, force: bool = False) -> None:
         boundary_min = int(boundary_ts // 60)
-        if self.last_dashboard_ts is not None and boundary_min == self.last_dashboard_ts:
+        if not force and self.last_dashboard_ts is not None and boundary_min == self.last_dashboard_ts:
             return
         self.last_dashboard_ts = boundary_min
-        dt = datetime.fromtimestamp(boundary_ts)
-        ts_str = dt.strftime("%H:%M:%S.%f")[:-3]
+        dt = datetime.fromtimestamp(boundary_min * 60)
+        header_ts = datetime.fromtimestamp(minute_floor(boundary_ts)).strftime("%H:%M:%S.%f")[:-3]
         date_str = dt.strftime("%Y.%m.%d")
 
         header_extra = ""
@@ -344,7 +400,7 @@ class PrettyLogger:
                 pass
 
         print(SEPARATOR)
-        print(f"HB | {ts_str} - {date_str}{header_extra}")
+        print(f"HB | {header_ts} - {date_str}{header_extra}")
         print(SEPARATOR)
 
         now = now_ts()
@@ -363,23 +419,34 @@ class PrettyLogger:
                 warnings.append(f"time invalid: {hb.node}")
             flags = []
             if hb.restart_seen_at and (now - hb.restart_seen_at) < 180:
-                flags.append("RESTARTED")
+                flags.append("RES")
             if stale:
-                flags.append("STALE")
+                flags.append("STL")
             flag_str = f" ({', '.join(flags)})" if flags else ""
-            row = (
-                f"{hb.node:12} "
-                f"up={format_uptime(hb.up):>12} "
-                f"age={int(age):>6}s{flag_str} "
-                f"fw={hb.fw or '?'} build={hb.build or '?'} "
-                f"{self.format_heap(hb)} "
-                f"err[{self.format_err(hb)}]"
-            )
-            rows.append(row)
+            up_field = f"{format_uptime(hb.up)}{flag_str}"
+            row = [
+                f"{hb.node:9}",
+                f"{up_field:<14}",
+                f"{(hb.fw or '?'):<6}",
+                f"{self.format_build(hb.build):<7}",
+                f"{self.format_heap(hb):<11}",
+                f"{self.format_err(hb)}",
+            ]
+            rows.append(" ".join(row))
 
         if not rows:
             print("(no heartbeats yet)")
         else:
+            header = [
+                f"{'node':9}",
+                f"{'up':<14}",
+                f"{'fw':<6}",
+                f"{'build':<7}",
+                f"{'heap':<11}",
+                f"{'err'}",
+            ]
+            print(" ".join(header))
+            print("-" * (len(" ".join(header)) + 9))
             for r in rows:
                 print(r)
 
@@ -388,30 +455,37 @@ class PrettyLogger:
 
         sys.stdout.flush()
 
-    def print_ota_session(self, sess: OtaSession, note: Optional[str] = None) -> None:
-        lines = [SEPARATOR]
-        header = f"OTA {sess.node} id={sess.id} status={sess.status}"
-        if sess.version:
-            header += f" ver={sess.version}"
-        if sess.target:
-            header += f" target={sess.target}"
-        lines.append(header)
+    def format_ota_line(self, sess: OtaSession) -> str:
+        parts = [f"id={sess.id}", f"st={sess.status}"]
         if sess.pct is not None:
-            lines.append(f"  progress={sess.pct}%")
+            parts.append(f"{sess.pct}%")
+        if sess.version:
+            parts.append(f"ver={sess.version}")
+        if sess.target:
+            parts.append(f"tgt={sess.target}")
         if sess.bytes is not None:
-            lines.append(f"  bytes={sess.bytes}")
+            parts.append(f"bytes={sess.bytes}")
         if sess.sha256:
-            lines.append(f"  sha256={sess.sha256}")
+            parts.append(f"sha256={sess.sha256}")
         if sess.url:
-            lines.append(f"  url={sess.url}")
+            parts.append(f"url={sess.url}")
         if sess.reboot_seen:
-            lines.append("  reboot: detected via hb reset")
+            parts.append("reboot")
         reason = sess.last_details.get("reason")
         if reason:
-            lines.append(f"  reason={reason}")
-        if note:
-            lines.append(f"  note={note}")
-        lines.append(SEPARATOR)
+            parts.append(f"reason={reason}")
+        return " ".join(parts)
+
+    def print_ota_group(self, node: str, note: Optional[str] = None) -> None:
+        sessions = self.ota_sessions.get(node, {})
+        if not sessions:
+            return
+        lines = [SEPARATOR, f"OTA | {node} ({len(sessions)} session{'s' if len(sessions) != 1 else ''})", SEPARATOR]
+        for sess in sorted(sessions.values(), key=lambda s: (s.last_update, s.id)):
+            line = self.format_ota_line(sess)
+            if note:
+                line = f"{line} note={note}"
+            lines.append(line)
         print("\n".join(lines))
         sys.stdout.flush()
 

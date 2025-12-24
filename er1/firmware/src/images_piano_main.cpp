@@ -3,18 +3,18 @@
 #include <cstring>
 
 #include "core_node.h"
+#include "../include/fw_build_id.h"
 #include "riddles/images_riddle.h"
 #include "riddles/piano_riddle.h"
 
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* NODE_IDENTITY = "images_piano";
+static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
 static const char* FW_VERSION = "1.19";
 static const char* FW_DESC = "Single firmware with two logical MQTT nodes; OTA JSON, no PSK";
-static const char* FW_BUILD_ID = "ZFX663XD7DXFSQG26ZAF";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
@@ -51,19 +51,16 @@ static String topicPianoLog;
 // ======================= HELPERS =============================
 static void publishPianoHeartbeat(NodeContext& ctx) {
   if (topicPianoHb.length() == 0) return;
-  uint32_t errCnt = ctx.logErrorCount();
-  uint32_t errCode = (errCnt > 0) ? 1 : 0;
-  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
-  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
+  ErrorInfo err = ctx.errorInfo();
   HeartbeatFields hb{
       NODE_PIANO,
       ctx.fwVersion(),
       ctx.buildId(),
       ctx.uptimeSeconds(),
-      errCnt,
-      errCode,
-      errSince,
-      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
+      err.count,
+      err.code,
+      (err.code != 0) ? err.sinceUp : 0,
+      (err.code != 0 && err.msg.length() > 0) ? err.msg.c_str() : nullptr,
   };
   String payload;
   buildHeartbeatPayload(payload, hb);
@@ -72,19 +69,16 @@ static void publishPianoHeartbeat(NodeContext& ctx) {
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userData*/) {
   NodeContext& mutableCtx = const_cast<NodeContext&>(ctx);
-  uint32_t errCnt = ctx.logErrorCount();
-  uint32_t errCode = (errCnt > 0) ? 1 : 0;
-  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
-  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
+  ErrorInfo err = ctx.errorInfo();
   HeartbeatFields hb{
       NODE_IMAGES,
       ctx.fwVersion(),
       ctx.buildId(),
       ctx.uptimeSeconds(),
-      errCnt,
-      errCode,
-      errSince,
-      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
+      err.count,
+      err.code,
+      (err.code != 0) ? err.sinceUp : 0,
+      (err.code != 0 && err.msg.length() > 0) ? err.msg.c_str() : nullptr,
   };
   buildHeartbeatPayload(out, hb);
   publishPianoHeartbeat(mutableCtx);
@@ -119,28 +113,15 @@ static void pianoCmdSubscription(NodeContext& ctx, const char* /*topic*/, const 
   bundle->piano->onCmd(cmdStr, argStr);
 }
 
-static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
-  if (!st) return;
-  NodeContext& ctx = nodeCore.context();
-  const auto& topics = ctx.config().topics;
-  if (topics.ota.length() == 0) return;
-  const char* fw = ctx.fwVersion() ? ctx.fwVersion() : FW_VERSION;
-  String payload;
-  payload.reserve(96 + dataJson.length());
-  payload = String("{\"fw\":\"") + fw + "\",\"up\":" + String(ctx.uptimeSeconds()) +
-            ",\"st\":\"" + st + "\",\"d\":" + dataJson + "}";
-  ctx.publish(topics.ota.c_str(), payload, retained);
-}
-
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
   NodeCoreConfig cfg;
-  cfg.nodeId = NODE_IDENTITY;
+  cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-  cfg.buildId = FW_BUILD_ID;
+  cfg.buildId = fwBuildId();
   cfg.startEnabled = true;
-  cfg.prefsNamespace = NODE_IDENTITY;
+  cfg.prefsNamespace = NODE_ID;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
   cfg.net.ip = NET_IP;
@@ -149,22 +130,23 @@ void setup() {
   cfg.net.subnet = NET_SUBNET;
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
-  cfg.net.clientId = NODE_IDENTITY;
+  cfg.net.clientId = NODE_ID;
 
   cfg.topics = makeTopicConfig(NODE_IMAGES);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
   cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
-  cfg.commands.cmdLogLevel = "DBG";
   cfg.commands.levelEnable = "INF";
   cfg.commands.levelDisable = "INF";
+  cfg.commands.allowReboot = true;
   cfg.commands.logPing = false;  // legacy: no log on ping
-  cfg.commands.allowReboot = false;
-  cfg.commands.logUnknown = false;
-  cfg.commands.levelPing = "INF";
-  cfg.commands.levelUpdate = "INF";
+  cfg.commands.levelPing = "DBG";
+  cfg.commands.logUnknown = true;
+  cfg.commands.levelUnknown = "WRN";
   cfg.commands.logUpdate = false;  // OTA logs handled inside updater
+  cfg.commands.levelUpdate = "INF";
+  cfg.commands.cmdLogLevel = "DBG";
 
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
@@ -173,7 +155,6 @@ void setup() {
   cfg.ota.allowedPathPrefix = OTA_PATH_PREFIX;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
-  cfg.ota.statusPublisher = publishOtaStatus;
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &moduleBundle);
@@ -192,7 +173,7 @@ void setup() {
   pianoLogger.begin(ctx.mqttClient(), pianoLogOpts);
   pianoLogger.setTimestampSource(ctx.timestampSource());
 
-  ctx.log("INF", String("BOOT FW=") + FW_DESC);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC + " rst=" + resetReasonShort());
   imagesModule.begin(ctx, NODE_IMAGES);
   pianoRiddle.begin(ctx, NODE_PIANO, &pianoLogger);
 }

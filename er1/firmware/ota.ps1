@@ -13,10 +13,10 @@ try {
 # ============ DEPLOYMENT MAP ============
 $deployments = @{
     "maglock" = @{
-        Env                 = "maglock"
-        Dev                 = "maglock"
-        CmdNode             = "maglock"
-        FirmwareName        = "maglock.bin"
+        Env          = "maglock"
+        Dev          = "maglock"
+        CmdNode      = "maglock"
+        FirmwareName = "maglock.bin"
     }
     "images_piano" = @{
         Env          = "images_piano"
@@ -149,21 +149,33 @@ function Get-FirmwareVersion([string]$dev) {
     return $match.Groups[1].Value
 }
 
-function Get-FirmwareBuild {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Dev
-    )
+function Get-FirmwareBuildSeed([string]$Override) {
+    if ($Override) { return $Override }
+    # Avoid spaces so the value survives compiler -D quoting on all shells.
+    return (Get-Date).ToString("yyyy-MM-dd_HHmmss")
+}
 
-    # Build-id is a firmware constant (random 20 chars) so the PC can verify via heartbeat "build".
-    $mainPath = Get-FirmwareMainPath $Dev
-    $content = Get-Content -Path $mainPath -Raw
-    $match = [regex]::Match($content, 'FW_BUILD_ID\s*=\s*"([^"]+)"')
-    if (-not $match.Success) {
-        Write-Error "Unable to locate FW_BUILD_ID in $mainPath"
-        exit 1
+function Get-FirmwareBuildId([string]$Seed) {
+    $alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    $offset = [uint64]14695981039346656037
+    $prime  = [uint64]1099511628211
+    $mod64 = [System.Numerics.BigInteger]::Pow(2, 64)
+    $state = $offset
+
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes($Seed)
+    foreach ($b in $bytes) {
+        $state = $state -bxor [uint64]$b
+        $state = [uint64]([System.Numerics.BigInteger]::Remainder(([System.Numerics.BigInteger]$state * [System.Numerics.BigInteger]$prime), $mod64))
     }
-    return $match.Groups[1].Value
+
+    $sb = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt 20; $i++) {
+        $state = [uint64]([System.Numerics.BigInteger]::Remainder(([System.Numerics.BigInteger]6364136223846793005 * [System.Numerics.BigInteger]$state) + 1, $mod64))
+        $idx = $state % $alphabet.Length
+        $sb.Append($alphabet[$idx]) | Out-Null
+    }
+
+    return $sb.ToString()
 }
 
 # ============ Resolve Env/Dev ============
@@ -191,16 +203,19 @@ $verifyNodes = $cfg.VerifyNodes
 Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev  CmdNode=$cmdNode  Firmware=$firmwareName  VerifyNodes=$($verifyNodes -join ',') =="
 
 $otaVersion = Get-FirmwareVersion $Dev
-$otaBuild   = Get-FirmwareBuild $Dev
-Write-Host "== Build = $otaBuild =="
-
 if (-not $otaVersion) {
     Write-Error "Failed to determine firmware version for $Dev"
     exit 1
 }
 
-$otaId = [guid]::NewGuid().ToString()
-Write-Host "== Version = $otaVersion  UpdateId=$otaId =="
+$buildSeed = Get-FirmwareBuildSeed $null
+$env:FW_BUILD_SEED = $buildSeed
+$env:FW_BUILD_ID = ""
+
+$otaBuild = Get-FirmwareBuildId $buildSeed
+$env:FW_BUILD_ID = $otaBuild
+
+Write-Host "== Version = $otaVersion  Build=$otaBuild  Seed='$buildSeed'  =="
 
 # ============ Locate platformio.exe ============
 $possiblePaths = @(
@@ -232,6 +247,8 @@ if ($NoBuild) {
         exit 1
     }
 }
+
+Write-Host "== Build = $otaBuild =="
 
 $firmwarePath = ".pio/build/$Env/firmware.bin"
 Write-Host "== Preflight: verifying firmware exists at $firmwarePath =="
@@ -282,7 +299,6 @@ $otaPublishCmd = @(
     "--version", "`"$otaVersion`"",
     "--build",   "`"$otaBuild`"",
     "--target",  $Dev,
-    "--id",      $otaId,
     "--url",     "http://192.168.0.10/node_firmware/$firmwareName",
     "--file",    "$piFirmwareDir/$firmwareName"
 ) -join " "

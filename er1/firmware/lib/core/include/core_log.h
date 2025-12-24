@@ -7,17 +7,7 @@
 
 namespace Core {
 
-struct TimestampFields {
-  int64_t epoch = 0;
-  bool timeValid = false;
-  char ts[CORE_TS_LEN] = {0};
-};
-
-class TimestampSource {
-public:
-  virtual ~TimestampSource() = default;
-  virtual TimestampFields currentTimestamp() = 0;
-};
+using LogFilterFn = bool (*)(const char* level, void* userData);
 
 enum class LogFormat : uint8_t {
   LevelMsg = 0,        // Compatibility only; all formats emit {"lv":"..","msg":"..","d":{}}
@@ -25,13 +15,17 @@ enum class LogFormat : uint8_t {
   FwUptimeLevelMsg
 };
 
+struct TimestampFields {
+  int64_t epoch = 0;
+  bool timeValid = false;
+  char ts[CORE_TS_LEN] = {0};
+};
+
 struct LogMessage {
   const char* level;
   const String* msg;
   const String* dataJson;
 };
-
-using LogFilterFn = bool (*)(const char* level, void* userData);
 
 struct LogOptions {
   const char* topic = nullptr;
@@ -42,6 +36,12 @@ struct LogOptions {
   bool serialDebug = true;
   LogFilterFn filter = nullptr;
   void* filterUser = nullptr;
+};
+
+class TimestampSource {
+public:
+  virtual ~TimestampSource() = default;
+  virtual TimestampFields currentTimestamp() = 0;
 };
 
 class Logger {

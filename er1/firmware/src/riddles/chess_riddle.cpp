@@ -302,7 +302,7 @@ const char* ChessRiddle::presentLabelFromUid(const String& uid) {
 void ChessRiddle::logFullTable() const {
   if (!ctx_) return;
 
-  TimestampFields tsFields{};
+  Core::TimestampFields tsFields = {};
   String datePart;
   String timePart;
   auto* tsSource = ctx_->timestampSource();

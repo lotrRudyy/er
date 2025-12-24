@@ -22,6 +22,12 @@ struct TopicConfig {
   String ota;
 };
 
+struct ErrorInfo {
+  uint32_t count = 0;
+  uint32_t code = 0;
+  uint32_t sinceUp = 0;
+  String msg;
+};
 struct HeartbeatConfig {
   uint32_t intervalMs = 5000;
   using Builder = void (*)(String& out, const class NodeContext& ctx, void* userData);
@@ -95,6 +101,14 @@ public:
   uint32_t logErrorCount() const;
   uint32_t lastErrorSinceUp() const;
   String lastErrorMsg() const;
+  uint32_t errorCount() const;
+  uint32_t activeErrorCode() const;
+  uint32_t activeErrorSinceUp() const;
+  String activeErrorMsg() const;
+  void setError(uint32_t code, const char* msg = nullptr);
+  void clearError();
+  void bumpErrorCount();
+  struct ErrorInfo errorInfo(const struct ErrorInfo& moduleErr = {}) const;
   PubSubClient* mqttClient();
   TimestampSource* timestampSource();
 
@@ -192,6 +206,12 @@ private:
   // Time sync state
   bool timeValidFirstSet_ = false;
   uint32_t lastTimeSyncParseErrorMs_ = 0;
+  struct ErrorState {
+    uint32_t count = 0;
+    uint32_t activeCode = 0;
+    uint32_t activeSinceUp = 0;
+    String activeMsg;
+  } errState_;
 
   static constexpr size_t kMaxSubscriptions = 10;
   struct SubscriptionEntry {
@@ -214,9 +234,19 @@ private:
   NodeContext ctx_;
   bool missingTsWarned_ = false;
   bool missingTsWarningActive_ = false;
+
+  uint32_t errorCount() const;
+  uint32_t activeErrorCode() const { return errState_.activeCode; }
+  uint32_t activeErrorSinceUp() const { return errState_.activeCode ? errState_.activeSinceUp : 0; }
+  String activeErrorMsg() const { return errState_.activeCode ? errState_.activeMsg : String(); }
+  void setErrorInternal(uint32_t code, const char* msg = nullptr);
+  void clearErrorInternal();
+  void bumpErrorCountInternal();
 };
 
 TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg = {});
+const char* resetReasonShort();
+
 struct HeartbeatFields {
   const char* nodeId;
   const char* fw;
@@ -228,5 +258,6 @@ struct HeartbeatFields {
   const char* errMsg;
 };
 void buildHeartbeatPayload(String& out, const HeartbeatFields& hb);
+void buildHeartbeat(String& out, const NodeContext& ctx, const ErrorInfo& moduleErr = {});
 
 }  // namespace Core

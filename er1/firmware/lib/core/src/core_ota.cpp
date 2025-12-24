@@ -7,6 +7,8 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
+#include "core_node.h"
+
 namespace Core {
 
 namespace {
@@ -23,19 +25,7 @@ constexpr size_t kMaxTargetLen = 47;
 constexpr const char* kDefaultPathPrefix = "/node_firmware/";
 constexpr uint32_t kPendingMagic = 0xC05A4E2A;
 
-struct CommandFields {
-  char sha256[kSha256HexBufLen]{};
-  char version[kMaxVersionLen + 1]{};
-  char id[kMaxIdLen + 1]{};
-  char target[kMaxTargetLen + 1]{};
-  char urlHost[kMaxHostLen + 1]{};
-  char urlPath[kMaxPathLen + 1]{};
-  uint16_t urlPort = 0;
-  bool hasUrlHost = false;
-  bool hasUrlPath = false;
-  bool hasUrlPort = false;
-  size_t sizeBytes = 0;
-};
+using CommandFields = OtaUpdateCommand;
 
 RTC_DATA_ATTR struct {
   uint32_t magic = 0;
@@ -153,6 +143,12 @@ void copyBounded(const char* src, char* dst, size_t dstLen) {
   dst[dstLen - 1] = '\0';
 }
 
+void refreshPresenceFlags(CommandFields& out) {
+  out.hasVersion = out.version[0] != '\0';
+  out.hasId = out.id[0] != '\0';
+  out.hasTarget = out.target[0] != '\0';
+}
+
 bool parseSize(const JsonVariantConst& var, size_t& out) {
   if (var.is<uint32_t>()) {
     out = var.as<uint32_t>();
@@ -185,9 +181,8 @@ bool parseJsonCommand(const char* payload, CommandFields& out) {
     if (brace) payload = brace;
   }
 
-  // ArduinoJson needs enough headroom for long strings (URL + sha256).
-  // 512 is often too tight across builds, so use a safer capacity.
-  StaticJsonDocument<1024> doc;
+  // JsonDocument grows as needed; defaults are sufficient for URLs + sha256.
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) return false;
   JsonObjectConst obj = doc.as<JsonObjectConst>();
@@ -283,14 +278,23 @@ bool parseLegacyTokens(const String& payload, CommandFields& out) {
 }
 
 bool parseCommandPayload(const char* payload, CommandFields& out) {
-  if (parseJsonCommand(payload, out)) return true;
-  return parseLegacyTokens(String(payload), out);
+  if (parseJsonCommand(payload, out) || parseLegacyTokens(String(payload), out)) {
+    refreshPresenceFlags(out);
+    return true;
+  }
+  return false;
 }
 }  // namespace
+
+bool parseUpdateCommand(const char* payload, OtaUpdateCommand& out) {
+  out = {};
+  return parseCommandPayload(payload, out);
+}
 
 void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
   cfg_ = cfg;
   logger_ = logger;
+  statusCtx_ = cfg_.statusCtx;
   currentId_ = "";
   currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
   currentUrl_ = "";
@@ -299,6 +303,7 @@ void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
   bootReportOk_ = false;
   pendingVersion_ = "";
   currentVersion_ = cfg_.targetFw ? cfg_.targetFw : "";
+  lastMissingVersionWarnMs_ = 0;
 
   if (g_pending.magic == kPendingMagic) {
     pendingVersion_ = String(g_pending.version);
@@ -325,11 +330,20 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  if (!parseCommandPayload(cmdPayload, cmd)) {
+  if (!parseUpdateCommand(cmdPayload, cmd)) {
     logger_->publish(cfg_.errLevel, "OTA payload parse failed");
     publishFail("parse", -1, "invalid_payload", 0, "\"reason\":\"invalid_payload\"");
     return false;
   }
+
+  currentId_ = cmd.hasId ? String(cmd.id) : "";
+  currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
+  if (cmd.hasTarget) {
+    currentTarget_ = cmd.target;
+  }
+  currentVersion_ = cmd.hasVersion ? String(cmd.version) : "";
+  pendingVersion_ = currentVersion_;
+  expectedSize_ = cmd.sizeBytes;
 
   size_t shaLen = strlen(cmd.sha256);
   if (shaLen != kSha256HexLen || !isHex(cmd.sha256, shaLen)) {
@@ -338,13 +352,16 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  if (cmd.version[0] == '\0') {
-    logger_->publish(cfg_.errLevel, "OTA missing version");
-    publishFail("auth", -1, "missing_version", 0, "\"reason\":\"missing_version\"");
+  if (!cmd.hasVersion) {
+    uint32_t nowMs = millis();
+    if (lastMissingVersionWarnMs_ == 0 || nowMs - lastMissingVersionWarnMs_ >= 60000) {
+      lastMissingVersionWarnMs_ = nowMs;
+      logger_->publish("WRN", "OTA missing version; ignoring");
+    }
     return false;
   }
 
-  if (cmd.id[0] == '\0') {
+  if (!cmd.hasId) {
     logger_->publish(cfg_.errLevel, "OTA missing id");
     publishFail("auth", -1, "missing_id", 0, "\"reason\":\"missing_id\"");
     return false;
@@ -352,7 +369,7 @@ bool OtaUpdater::perform(const char* cmdPayload) {
 
   const char* expectedTarget = cfg_.targetId;
   if (expectedTarget && expectedTarget[0]) {
-    if (cmd.target[0] == '\0') {
+    if (!cmd.hasTarget) {
       logger_->publish(cfg_.errLevel, "OTA missing target");
       publishFail("auth", -1, "missing_target", 0, "\"reason\":\"missing_target\"");
       return false;
@@ -398,11 +415,6 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   }
 
   currentId_ = cmd.id;
-  currentVersion_ = cmd.version;
-  pendingVersion_ = currentVersion_;
-  currentTarget_ = (cmd.target[0] != '\0') ? String(cmd.target) : currentTarget_;
-  expectedSize_ = cmd.sizeBytes;
-
   currentUrl_ = String("http://") + host;
   if (port != 0 && port != 80) {
     currentUrl_ += ":";
@@ -662,12 +674,30 @@ bool OtaUpdater::perform(const char* cmdPayload) {
 }
 
 void OtaUpdater::publishStatus(const char* st, const String& dataJson, bool retained) {
-  if (!cfg_.statusPublisher || !st) return;
-  cfg_.statusPublisher(st, dataJson, retained);
+  if (!st) return;
+  if (cfg_.statusPublisher) {
+    cfg_.statusPublisher(st, dataJson, retained);
+    return;
+  }
+  if (!statusCtx_) return;
+  const auto& topics = statusCtx_->config().topics;
+  if (topics.ota.length() == 0) return;
+  const char* fw = statusCtx_->fwVersion();
+  if (!fw || !fw[0]) {
+    fw = cfg_.targetFw ? cfg_.targetFw : "?";
+  }
+  const char* build = statusCtx_->buildId();
+  if (!build || !build[0]) {
+    build = "?";
+  }
+  String payload;
+  payload.reserve(128 + dataJson.length());
+  payload = String("{\"fw\":\"") + fw + "\",\"up\":" + String(statusCtx_->uptimeSeconds()) +
+            ",\"build\":\"" + build + "\",\"st\":\"" + st + "\",\"d\":" + dataJson + "}";
+  statusCtx_->publish(topics.ota.c_str(), payload, retained);
 }
 
 void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t bytes, const char* extraJson) {
-  if (!cfg_.statusPublisher) return;
   if (!at || !msg) return;
   String data = buildBaseJson();
   data += ",\"at\":\"";
@@ -694,7 +724,6 @@ void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t b
 }
 
 void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
-  if (!cfg_.statusPublisher) return;
   String data = buildBaseJson();
   if (bytes > 0) {
     data += ",\"bytes\":";
@@ -710,14 +739,12 @@ void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
 }
 
 void OtaUpdater::publishStart() {
-  if (!cfg_.statusPublisher) return;
   String data = buildBaseJson();
   data += "}";
   publishStatus("OTA_START", data, true);
 }
 
 void OtaUpdater::publishProgress(int pct) {
-  if (!cfg_.statusPublisher) return;
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
   String data = buildBaseJson();

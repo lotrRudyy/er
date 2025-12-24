@@ -6,9 +6,7 @@ namespace {
 PianoRiddle* gPianoRiddle = nullptr;
 }
 
-const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen] = {
-    "C4", "D4", "E4", "F4", "G4", "F4", "E4", "D4", "C4",
-};
+constexpr const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen];
 
 extern "C" void piano_detector_on_result(int accepted, const char* pred, float s1, float s2, float margin,
                                          float hps_ratio, int harmonic_ok, const char* t1, float t1s,

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <ctime>
 #include <stdexcept>
+#include <esp_system.h>
 
 #include "core_time.h"
 
@@ -79,16 +80,61 @@ uint32_t NodeContext::uptimeSeconds() const {
 }
 
 uint32_t NodeContext::logErrorCount() const {
-  return core_ ? core_->logger().errorCount() : 0;
+  return core_ ? core_->errorCount() : 0;
 }
 
 uint32_t NodeContext::lastErrorSinceUp() const {
-  return core_ ? core_->logger().lastErrorSinceUp() : 0;
+  return core_ ? core_->activeErrorSinceUp() : 0;
 }
 
 String NodeContext::lastErrorMsg() const {
   if (!core_) return "";
-  return core_->logger().lastErrorMsg();
+  return core_->activeErrorMsg();
+}
+
+uint32_t NodeContext::errorCount() const {
+  return core_ ? core_->errorCount() : 0;
+}
+
+uint32_t NodeContext::activeErrorCode() const {
+  return core_ ? core_->activeErrorCode() : 0;
+}
+
+uint32_t NodeContext::activeErrorSinceUp() const {
+  return core_ ? core_->activeErrorSinceUp() : 0;
+}
+
+String NodeContext::activeErrorMsg() const {
+  return core_ ? core_->activeErrorMsg() : String();
+}
+
+void NodeContext::setError(uint32_t code, const char* msg) {
+  if (!core_) return;
+  core_->setErrorInternal(code, msg);
+}
+
+void NodeContext::clearError() {
+  if (core_) core_->clearErrorInternal();
+}
+
+void NodeContext::bumpErrorCount() {
+  if (core_) core_->bumpErrorCountInternal();
+}
+
+ErrorInfo NodeContext::errorInfo(const ErrorInfo& moduleErr) const {
+  ErrorInfo out = moduleErr;
+  if (!core_) return out;
+  // err_cnt: monotonic count of any errors seen.
+  uint32_t coreCount = core_->errorCount();
+  if (out.count < coreCount) out.count = coreCount;
+
+  // Active error comes from module (if provided) or core.
+  if (out.code == 0) {
+    out.code = core_->activeErrorCode();
+    out.sinceUp = core_->activeErrorSinceUp();
+    out.msg = core_->activeErrorMsg();
+  }
+  return out;
 }
 
 const char* NodeContext::fwVersion() const {
@@ -136,6 +182,7 @@ NodeCore::NodeCore() : ctx_(*this) {}
 
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
+  errState_ = {};
   // Ensure local time formatting matches Europe/Rome (CET/CEST), not UTC.
   core_time_init_tz();
   buildIdBuf_[0] = '\0';
@@ -159,6 +206,7 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   if (!cfg_.ota.targetId || cfg_.ota.targetId[0] == '\0') {
     cfg_.ota.targetId = cfg_.nodeId;
   }
+  cfg_.ota.statusCtx = cfg_.ota.statusCtx ? cfg_.ota.statusCtx : &ctx_;
   hbCfg_ = cfg.heartbeat;
   heartbeatIntervalMs_ = hbCfg_.intervalMs;
   enabled_ = cfg.startEnabled;
@@ -185,7 +233,7 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   minLogRank_ = 0;
   topicLogLevel_ = topic(cfg_.nodeId, "log/level");
 
-  ota_.begin(cfg.ota, &logger_);
+  ota_.begin(cfg_.ota, &logger_);
 
   const char* prefsNs = cfg.prefsNamespace ? cfg.prefsNamespace : cfg.net.clientId;
   if (prefsNs && prefsNs[0] != '\0') {
@@ -641,6 +689,50 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
   }
 }
 
+uint32_t NodeCore::errorCount() const {
+  uint32_t count = errState_.count;
+  uint32_t logCount = logger_.errorCount();
+  if (logCount > count) count = logCount;
+  return count;
+}
+
+void NodeCore::setErrorInternal(uint32_t code, const char* msg) {
+  if (code == 0) {
+    clearErrorInternal();
+    return;
+  }
+  errState_.count++;
+  errState_.activeCode = code;
+  errState_.activeSinceUp = millis() / 1000;
+  errState_.activeMsg = msg ? msg : "";
+}
+
+void NodeCore::clearErrorInternal() {
+  errState_.activeCode = 0;
+  errState_.activeSinceUp = 0;
+  errState_.activeMsg = "";
+}
+
+void NodeCore::bumpErrorCountInternal() {
+  errState_.count++;
+}
+
+const char* resetReasonShort() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "ext";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
+}
+
 TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg) {
   TopicConfig out = overrideCfg;
   if (!nodeId || nodeId[0] == '\0') {
@@ -694,6 +786,21 @@ String escapeJson(const char* s) {
   return out;
 }
 }  // namespace
+
+void buildHeartbeat(String& out, const NodeContext& ctx, const ErrorInfo& moduleErr) {
+  ErrorInfo merged = ctx.errorInfo(moduleErr);
+  HeartbeatFields hb{
+      ctx.nodeId(),
+      ctx.fwVersion(),
+      ctx.buildId(),
+      ctx.uptimeSeconds(),
+      merged.count,
+      merged.code,
+      (merged.code != 0) ? merged.sinceUp : 0,
+      (merged.code != 0 && merged.msg.length() > 0) ? merged.msg.c_str() : nullptr,
+  };
+  buildHeartbeatPayload(out, hb);
+}
 
 void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   const char* node = (hb.nodeId && hb.nodeId[0]) ? hb.nodeId : "?";

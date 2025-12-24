@@ -8,6 +8,7 @@
 
 namespace Core {
 
+class NodeContext;
 using OtaStatusPublisher = void (*)(const char* st, const String& dataJson, bool retained);
 
 struct OtaConfig {
@@ -22,7 +23,28 @@ struct OtaConfig {
   const char* targetFw = "?";
   OtaStatusPublisher statusPublisher = nullptr;
   uint32_t progressIntervalMs = 1000;
+  NodeContext* statusCtx = nullptr;  // if null, NodeCore will supply its context
 };
+
+struct OtaUpdateCommand {
+  char sha256[65]{};
+  char version[48]{};
+  char id[48]{};
+  char target[48]{};
+  char urlHost[64]{};
+  char urlPath[128]{};
+  uint16_t urlPort = 0;
+  bool hasUrlHost = false;
+  bool hasUrlPath = false;
+  bool hasUrlPort = false;
+  size_t sizeBytes = 0;
+  bool hasVersion = false;
+  bool hasId = false;
+  bool hasTarget = false;
+};
+
+// Parse OTA UPDATE payload (JSON or legacy tokens). Returns false on parse failure.
+bool parseUpdateCommand(const char* payload, OtaUpdateCommand& out);
 
 class OtaUpdater {
 public:
@@ -39,8 +61,10 @@ private:
   String currentUrl_;
   String pendingVersion_;
   size_t expectedSize_ = 0;
+  NodeContext* statusCtx_ = nullptr;
   bool bootReportPending_ = false;
   bool bootReportOk_ = false;
+  uint32_t lastMissingVersionWarnMs_ = 0;
 
   void publishStatus(const char* st, const String& dataJson, bool retained);
   void publishFail(const char* at, int code, const char* msg, size_t bytes, const char* extraJson = nullptr);

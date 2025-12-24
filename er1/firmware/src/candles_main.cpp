@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "core_node.h"
+#include "../include/fw_build_id.h"
 #include "riddles/candles_riddle.h"
 
 using namespace Core;
@@ -11,7 +12,6 @@ using namespace Core;
 static const char* NODE_ID = "candles";
 static const char* FW_VERSION = "1.4";
 static const char* FW_DESC = "candles 1.4 - OTA JSON command, PSK removed";
-static const char* FW_BUILD_ID = "IC0C5PXTFS6QFR9XDHTY";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
@@ -40,40 +40,16 @@ static bool logFilter(const char* level, void* user) {
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   auto* module = static_cast<CandlesRiddle*>(user);
-  uint32_t errCnt = module ? module->errorCount() : 0;
-  if (ctx.logErrorCount() > errCnt) errCnt = ctx.logErrorCount();
-  uint32_t errCode = (errCnt > 0) ? 1 : 0;
-  uint32_t errSince = (errCode > 0) ? ctx.lastErrorSinceUp() : 0;
-  String errMsg = (errCode > 0) ? ctx.lastErrorMsg() : "";
-  HeartbeatFields hb{
-      ctx.nodeId(),
-      ctx.fwVersion(),
-      ctx.buildId(),
-      ctx.uptimeSeconds(),
-      errCnt,
-      errCode,
-      errSince,
-      (errCode > 0 && errMsg.length() > 0) ? errMsg.c_str() : nullptr,
-  };
-  buildHeartbeatPayload(out, hb);
+  ErrorInfo err{};
+  if (module) {
+    err.count = module->errorCount();
+  }
+  buildHeartbeat(out, ctx, err);
 }
 
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<CandlesRiddle*>(user);
   return module ? module->onCmd(cmd, payload) : false;
-}
-
-static void publishOtaStatus(const char* st, const String& dataJson, bool retained) {
-  if (!st) return;
-  NodeContext& ctx = nodeCore.context();
-  const auto& topics = ctx.config().topics;
-  if (topics.ota.length() == 0) return;
-  const char* fw = ctx.fwVersion() ? ctx.fwVersion() : FW_VERSION;
-  String payload;
-  payload.reserve(96 + dataJson.length());
-  payload = String("{\"fw\":\"") + fw + "\",\"up\":" + String(ctx.uptimeSeconds()) +
-            ",\"st\":\"" + st + "\",\"d\":" + dataJson + "}";
-  ctx.publish(topics.ota.c_str(), payload, retained);
 }
 
 // ======================= ARDUINO LIFECYCLE ===================
@@ -84,7 +60,7 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-  cfg.buildId = FW_BUILD_ID;
+  cfg.buildId = fwBuildId();
   cfg.startEnabled = true;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
@@ -97,7 +73,8 @@ void setup() {
   cfg.net.clientId = NODE_ID;
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
-  cfg.log.format = LogFormat::LevelMsg;
+  cfg.log.format = LogFormat::FwUptimeLevelMsg;
+  cfg.log.includeDataField = true;
   cfg.log.filter = logFilter;
   cfg.log.filterUser = &candles;
 
@@ -105,15 +82,17 @@ void setup() {
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &candles;
 
-  cfg.commands.cmdLogLevel = "DBG";
   cfg.commands.levelEnable = "INF";
   cfg.commands.levelDisable = "INF";
-  cfg.commands.levelPing = "DBG";
-  cfg.commands.allowReboot = true;
   cfg.commands.levelReboot = "INF";
+  cfg.commands.allowReboot = true;
+  cfg.commands.logPing = false;
+  cfg.commands.levelPing = "DBG";
   cfg.commands.logUnknown = true;
   cfg.commands.levelUnknown = "WRN";
   cfg.commands.logUpdate = false;
+  cfg.commands.levelUpdate = "INF";
+  cfg.commands.cmdLogLevel = "DBG";
 
   cfg.ota.host = OTA_HOST;
   cfg.ota.port = OTA_PORT;
@@ -122,14 +101,13 @@ void setup() {
   cfg.ota.allowedPathPrefix = OTA_PATH_PREFIX;
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
-  cfg.ota.statusPublisher = publishOtaStatus;
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &candles);
 
   NodeContext& ctx = nodeCore.context();
   candles.begin(ctx);
-  ctx.log("INF", String("BOOT FW=") + FW_DESC);
+  ctx.log("INF", String("BOOT FW=") + FW_DESC + " rst=" + resetReasonShort());
 }
 
 void loop() {

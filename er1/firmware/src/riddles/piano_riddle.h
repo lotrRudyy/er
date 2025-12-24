@@ -43,5 +43,7 @@ private:
   static constexpr uint32_t kNoteTimeoutMs = 3000;
   static constexpr const char* kPrefsSolvedKey = "piano_solved";
   static constexpr size_t kSequenceLen = 9;
-  static constexpr const char* kSequence[kSequenceLen];
+  static constexpr const char* const kSequence[kSequenceLen] = {
+      "C4", "D4", "E4", "F4", "G4", "F4", "E4", "D4", "C4",
+  };
 };
