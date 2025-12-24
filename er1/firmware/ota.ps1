@@ -17,8 +17,6 @@ $deployments = @{
         Dev                 = "maglock"
         CmdNode             = "maglock"
         FirmwareName        = "maglock.bin"
-        LegacyFirmwareNames = @("maglock_ctrl.bin")
-        VerifyNodes         = @("maglock")
     }
     "images_piano" = @{
         Env          = "images_piano"
@@ -71,7 +69,6 @@ function Resolve-Deployment([string]$target) {
     if (-not $cfg.ContainsKey("CmdNode") -or -not $cfg.CmdNode) { $cfg.CmdNode = $cfg.Dev }
     if (-not $cfg.ContainsKey("FirmwareName") -or -not $cfg.FirmwareName) { $cfg.FirmwareName = "$($cfg.Dev).bin" }
     if (-not $cfg.ContainsKey("VerifyNodes") -or -not $cfg.VerifyNodes) { $cfg.VerifyNodes = @($cfg.CmdNode) }
-    if (-not $cfg.ContainsKey("LegacyFirmwareNames") -or -not $cfg.LegacyFirmwareNames) { $cfg.LegacyFirmwareNames = @() }
     return $cfg
 }
 
@@ -186,10 +183,9 @@ if (-not $Env -or -not $Dev) {
     exit 1
 }
 
-$cfg = if ($Target) { Resolve-Deployment $Target } else { @{ Env = $Env; Dev = $Dev; CmdNode = $Dev; FirmwareName = "$Dev.bin"; LegacyFirmwareNames = @(); VerifyNodes = @($Dev) } }
+$cfg = if ($Target) { Resolve-Deployment $Target } else { @{ Env = $Env; Dev = $Dev; CmdNode = $Dev; FirmwareName = "$Dev.bin"; VerifyNodes = @($Dev) } }
 $cmdNode = $cfg.CmdNode
 $firmwareName = $cfg.FirmwareName
-$legacyNames = $cfg.LegacyFirmwareNames
 $verifyNodes = $cfg.VerifyNodes
 
 Write-Host "== TARGET = $Target  Env=$Env  Dev=$Dev  CmdNode=$cmdNode  Firmware=$firmwareName  VerifyNodes=$($verifyNodes -join ',') =="
@@ -264,17 +260,6 @@ scp $firmwarePath $remotePath
 if ($LASTEXITCODE -ne 0) {
     Write-Error "SCP failed"
     exit 1
-}
-
-# ============ LEGACY FILENAME COPIES ============
-foreach ($legacyName in $legacyNames) {
-    Write-Host "== Creating legacy copy on Pi: $legacyName =="
-    ssh "$piUser@$piHost" "cp $piFirmwareDir/$firmwareName $piFirmwareDir/$legacyName"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create legacy firmware copy $legacyName on Pi"
-        exit 1
-    }
-    Write-Host "== Created legacy copy: $piFirmwareDir/$legacyName =="
 }
 
 # ============ POSTFLIGHT CHECK ============
