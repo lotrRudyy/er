@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <Ethernet.h>
 #include <IPAddress.h>
 #include <cstring>
 

@@ -252,6 +252,60 @@ class PrettyLogger:
         msg = data.get("msg") or ""
         data_field = data.get("d")
 
+        # Special pretty card for piano DSP compatibility logs.
+        # The firmware emits a compact msg like "REJ_COMPAT ..." and also includes
+        # a structured dict in `d` (e.g. {"t":"REJ", "pred":..., "s1":..., ...}).
+        if node == "piano" and isinstance(data_field, dict):
+            t = str(data_field.get("t") or "")
+            if not t:
+                # fall back to msg prefix (REJ_COMPAT/ACC_COMPAT)
+                if "REJ_COMPAT" in msg:
+                    t = "REJ"
+                elif "ACC_COMPAT" in msg:
+                    t = "ACC"
+            if t in {"REJ", "ACC"}:
+                pred = str(data_field.get("pred") or "?")
+                s1 = data_field.get("s1")
+                s2 = data_field.get("s2")
+                margin = data_field.get("margin")
+                hps = data_field.get("hps")
+                harm = data_field.get("harm")
+
+                def fnum(v: Any, fmt: str) -> str:
+                    try:
+                        return format(float(v), fmt)
+                    except Exception:
+                        return "?"
+
+                line1 = (
+                    f"pred={pred}  "
+                    f"margin={fnum(margin, '.4f')}  "
+                    f"s1={fnum(s1, '.4f')} s2={fnum(s2, '.4f')}  "
+                    f"harm={harm if harm is not None else '?'}  "
+                    f"hps={fnum(hps, '.1f')}"
+                )
+
+                top = data_field.get("top")
+                top3_parts = []
+                if isinstance(top, list):
+                    for item in top[:3]:
+                        if isinstance(item, dict):
+                            p = item.get("p")
+                            s = item.get("s")
+                            if p is not None and s is not None:
+                                top3_parts.append(f"{p} {fnum(s, '.4f')}")
+                line2 = "top3: " + (" | ".join(top3_parts) if top3_parts else "n/a")
+
+                piano_sep = "-" * 75
+                print(piano_sep)
+                # Example: piano | REJ | 03:04:00.578 - 2025.12.25
+                print(f"piano | {t} | {ts}".rstrip())
+                print(piano_sep)
+                print(line1)
+                print(line2)
+                print(piano_sep)
+                return
+
         header = f"{node}/log {level}"
         if ts:
             header += f" {ts}"
@@ -262,12 +316,6 @@ class PrettyLogger:
                 print(line)
         else:
             print(f"{header} {msg}")
-
-        if isinstance(data_field, dict) and data_field:
-            try:
-                print(f"  data: {json.dumps(data_field, separators=(',', ':'))}")
-            except Exception:
-                pass
 
     def handle_ota(self, topic: str, payload: str, recv_ts: float) -> None:
         data = self.safe_json(payload)
