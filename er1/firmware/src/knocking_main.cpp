@@ -14,7 +14,7 @@ static const char* FW_VERSION = "1.19xd";
 static const char* FW_DESC = "knocking 1.19 - OTA JSON command, PSK removed";
 
 // ======================= NETWORK CONFIG ======================
-static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x56};
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x51};  // knocking node MAC - must stay unique
 static const IPAddress NET_IP(192, 168, 0, 14);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);

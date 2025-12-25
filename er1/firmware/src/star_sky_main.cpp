@@ -14,7 +14,7 @@ static const char* FW_VERSION = "1.3";
 static const char* FW_DESC = "star_sky 1.3 - OTA JSON command, PSK removed";
 
 // ======================= NETWORK CONFIG ======================
-static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};  // star_sky node MAC - must stay unique
 static const IPAddress NET_IP(192, 168, 0, 16);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);

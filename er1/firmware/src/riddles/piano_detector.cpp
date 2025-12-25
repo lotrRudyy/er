@@ -836,8 +836,9 @@ static bool alloc_or_die() {
 
 // ------------------ Setup/Loop ------------------
 void piano_detector_setup() {
-  Serial.begin(921600);
-  delay(100);
+  // Serial is already configured in the main firmware (115200); avoid changing
+  // baud here so logs stay readable on the default monitor.
+  delay(50);
 
   Serial.println("ESP32 Piano Detector boot");
   Serial.printf("RING_MS=%d RING_SAMPLES=%d QDEPTH=%d\n", RING_MS, RING_SAMPLES, QDEPTH);

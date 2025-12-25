@@ -38,7 +38,7 @@ private:
   String nodeId_;
 
   static constexpr int kButtonCount = 4;
-  static constexpr int kButtonPins[kButtonCount] = {16, 17, 14, 12};
+  static constexpr int kButtonPins[kButtonCount] = {12, 13, 14, 32};
   static constexpr uint32_t kDebounceMs = 30;
   static constexpr uint32_t kEdgeMinLogMs = 100;
   static constexpr uint32_t kMetricIntervalMs = 1000;

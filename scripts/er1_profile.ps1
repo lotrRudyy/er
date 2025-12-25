@@ -600,7 +600,7 @@ function er1 {
 	            # PC-side verify (10s max): ONLY check that
 	            #   1) ESP rebooted (offline or uptime reset)
 	            #   2) the first heartbeat AFTER reboot reports build == the build-id we just uploaded
-	            $hbTimeoutSec = 10
+	            $hbTimeoutSec = 30
 	            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
 
 	            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"

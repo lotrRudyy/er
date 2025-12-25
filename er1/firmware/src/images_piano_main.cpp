@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Ethernet.h>
 #include <IPAddress.h>
 #include <cstring>
 
@@ -13,11 +14,11 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.19";
+static const char* FW_VERSION = "1.22";
 static const char* FW_DESC = "Single firmware with two logical MQTT nodes; OTA JSON, no PSK";
 
 // ======================= NETWORK CONFIG ======================
-static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x59};  // images_piano node MAC - must stay unique
 static const IPAddress NET_IP(192, 168, 0, 12);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
