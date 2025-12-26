@@ -21,9 +21,9 @@ $deployments = @{
     "images_piano" = @{
         Env          = "images_piano"
         Dev          = "images_piano"
-        CmdNode      = "images"
+        CmdNode      = "images_piano"
         FirmwareName = "images_piano.bin"
-        VerifyNodes  = @("images","piano")
+        VerifyNodes  = @("images_piano")
     }
     "chess" = @{
         Env          = "chess"

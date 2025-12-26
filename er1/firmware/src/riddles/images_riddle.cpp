@@ -10,6 +10,27 @@ String prefixedMessage(const char* prefix, const String& msg) {
   return out;
 }
 
+String withSrc(const String& dataJson, const String& src) {
+  const char* srcVal = (src.length() > 0) ? src.c_str() : "";
+  if (dataJson.length() == 0) {
+    return String("{\"src\":\"") + srcVal + "\"}";
+  }
+  bool looksObject = dataJson.startsWith("{") && dataJson.endsWith("}");
+  if (looksObject) {
+    String out = dataJson;
+    out.remove(out.length() - 1);
+    if (out.length() > 1) {
+      out += ",";
+    }
+    out += "\"src\":\"";
+    out += srcVal;
+    out += "\"}";
+    return out;
+  }
+  String out = String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
+  return out;
+}
+
 }  // namespace
 
 void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
@@ -165,7 +186,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       ",\"state\":" + (b.cur ? 1 : 0) +
                       ",\"presses\":" + b.presses +
                       "}";
-  ctx_->log("DBG", "images_btn", payloadBtn);
+  ctx_->log("DBG", "images_btn", withSrc(payloadBtn, nodeId_));
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
@@ -179,7 +200,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->log("DBG", "images_all", payloadAll);
+  ctx_->log("DBG", "images_all", withSrc(payloadAll, nodeId_));
 }
 
 void ImagesRiddle::publishMetricsIfDue() {
@@ -198,7 +219,7 @@ void ImagesRiddle::publishMetricsIfDue() {
                      ",\"state\":" + (b.cur ? 1 : 0) +
                      ",\"presses\":" + b.presses +
                      "}";
-    ctx_->log("DBG", "images_metrics", payload);
+    ctx_->log("DBG", "images_metrics", withSrc(payload, nodeId_));
   }
 
   bool allPressedNow = true;
@@ -213,13 +234,13 @@ void ImagesRiddle::publishMetricsIfDue() {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->log("DBG", "images_all", payloadAll);
+  ctx_->log("DBG", "images_all", withSrc(payloadAll, nodeId_));
 }
 
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
   String data = String("{\"id\":\"") + rid + "\"}";
-  ctx_->publishEvent("riddle_solved", data);
+  ctx_->publishEvent("riddle_solved", withSrc(data, nodeId_));
   publishState();
   log("INF", String("SOLVED event sent for rid=") + rid);
 }
@@ -232,15 +253,15 @@ void ImagesRiddle::openImagesMaglock() {
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
   String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
-  ctx_->publishState(data, true);
+  ctx_->publishState(withSrc(data, nodeId_), true);
 }
 
 void ImagesRiddle::log(const char* level, const String& msg) {
   if (!ctx_) return;
-  ctx_->log(level, prefixedMessage("[images] ", msg));
+  ctx_->log(level, prefixedMessage("[images] ", msg), withSrc("", nodeId_));
 }
 
 void ImagesRiddle::log(const char* level, const String& msg, const String& dataJson) {
   if (!ctx_) return;
-  ctx_->log(level, prefixedMessage("[images] ", msg), dataJson);
+  ctx_->log(level, prefixedMessage("[images] ", msg), withSrc(dataJson, nodeId_));
 }

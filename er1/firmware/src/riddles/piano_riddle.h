@@ -8,7 +8,7 @@
 
 class PianoRiddle {
 public:
-  void begin(Core::NodeContext& ctx, const char* nodeId = nullptr, Core::Logger* logger = nullptr);
+  void begin(Core::NodeContext& ctx, const char* srcId = nullptr);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
   void handleDetectorResult(int accepted, const char* pred, float s1, float s2, float margin,
@@ -26,12 +26,9 @@ private:
   void setModuleEnabled(bool en);
 
   Core::NodeContext* ctx_ = nullptr;
-  Core::Logger* logger_ = nullptr;
   Preferences* prefs_ = nullptr;
 
-  String nodeId_;
-  String topicEvt_;
-  String topicState_;
+  String srcId_;
   String topicLockCmd_;
   bool moduleEnabled_ = true;
   bool solved_ = false;

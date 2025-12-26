@@ -1,4 +1,4 @@
-The white bishop must be diagonal to the black queen and the black rook
+The black rook and the black queen must both be diagonal to the white bishop
 The black rook must be in the same file or rank as another rook
 The black rook must not be directly next to the white knight
 The black king must be on a white square

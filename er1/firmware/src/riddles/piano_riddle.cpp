@@ -4,6 +4,27 @@
 
 namespace {
 PianoRiddle* gPianoRiddle = nullptr;
+
+String withSrc(const String& dataJson, const String& src) {
+  const char* srcVal = (src.length() > 0) ? src.c_str() : "";
+  if (dataJson.length() == 0) {
+    return String("{\"src\":\"") + srcVal + "\"}";
+  }
+  bool looksObject = dataJson.startsWith("{") && dataJson.endsWith("}");
+  if (looksObject) {
+    String out = dataJson;
+    out.remove(out.length() - 1);
+    if (out.length() > 1) {
+      out += ",";
+    }
+    out += "\"src\":\"";
+    out += srcVal;
+    out += "\"}";
+    return out;
+  }
+  String out = String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
+  return out;
+}
 }
 
 constexpr const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen];
@@ -17,13 +38,10 @@ extern "C" void piano_detector_on_result(int accepted, const char* pred, float s
   }
 }
 
-void PianoRiddle::begin(Core::NodeContext& ctx, const char* nodeId, Core::Logger* logger) {
+void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   ctx_ = &ctx;
-  logger_ = logger;
   prefs_ = &ctx.prefs();
-  nodeId_ = (nodeId && nodeId[0]) ? nodeId : "piano";
-  topicEvt_ = Core::topic(nodeId_.c_str(), "evt");
-  topicState_ = Core::topic(nodeId_.c_str(), "state");
+  srcId_ = (srcId && srcId[0]) ? srcId : "piano";
   topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
   solved_ = prefs_ ? prefs_->getBool(kPrefsSolvedKey, false) : false;
   solvedPublished_ = solved_;
@@ -188,7 +206,7 @@ void PianoRiddle::publishState() {
   String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
                 ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
                 ",\"progress\":" + String(seqPos_) + "}";
-  ctx_->publishEnvelope(topicState_.c_str(), "state", 1, data, nullptr, true);
+  ctx_->publishState(withSrc(data, srcId_), true);
 }
 
 void PianoRiddle::publishSolvedEvent() {
@@ -199,7 +217,7 @@ void PianoRiddle::publishSolvedEvent() {
     payload += kSequence[i];
   }
   payload += "\"}";
-  ctx_->publishEnvelope(topicEvt_.c_str(), "riddle_solved", 1, payload, nullptr, false);
+  ctx_->publishEvent("riddle_solved", withSrc(payload, srcId_));
 }
 
 void PianoRiddle::openLock() const {
@@ -217,22 +235,14 @@ void PianoRiddle::resetProgress(const char* reason) {
 }
 
 void PianoRiddle::log(const char* level, const String& msg) const {
-  if (logger_) {
-    logger_->publish(level, msg);
-    return;
-  }
   if (ctx_) {
-    ctx_->log(level, msg);
+    ctx_->log(level, msg, withSrc("", srcId_));
   }
 }
 
 void PianoRiddle::log(const char* level, const String& msg, const String& dataJson) const {
-  if (logger_) {
-    logger_->publish(level, msg, dataJson);
-    return;
-  }
   if (ctx_) {
-    ctx_->log(level, msg, dataJson);
+    ctx_->log(level, msg, withSrc(dataJson, srcId_));
   }
 }
 
