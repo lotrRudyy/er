@@ -14,7 +14,7 @@ public:
   bool shouldAllowLog(const char* level);
 
 private:
-  static constexpr bool kDevLog = true;
+  static constexpr bool kDevLog = false;
   static constexpr uint32_t kHbIntervalMs = 20000;
   static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kSeqTimeoutMs = 3000;
