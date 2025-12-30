@@ -10,8 +10,8 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "1.5";
-static const char* FW_DESC = "candles 1.5";
+static const char* FW_VERSION = "1.6";
+static const char* FW_DESC = "candles 1.6";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};  // candles node MAC - must stay unique
