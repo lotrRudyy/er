@@ -187,24 +187,26 @@ void CandlesRiddle::initState() {
 }
 
 bool CandlesRiddle::detectBlow(int idx) {
-  // Short window, but require a strong majority of samples over threshold.
-  // This reduces false "blow" triggers from mic noise / ADC drift.
-  const int samples = 80;
-  const int needed = (samples * 3) / 5;  // 60%
-
-  // Fixed baseline (no adaptive tracking)
-    // Effective baseline: max(measured idle, configured minimum floor).
-  // If the channel is saturated, effBase_[idx] is forced to 4095 and it will never trigger.
+  // Windowed majority vote (per mic):
+  // - baseline is per-mic effBase_[idx]
+  // - threshold is baseline + delta_[idx] (default 120)
+  // - evaluate over a 50ms window
+  // - require >= 60% of samples over threshold
+  const uint32_t windowMs = 50;
   const int baseEff = effBase_[idx];
+  const int thrAbs = baseEff + delta_[idx];
 
   int over = 0;
+  int samples = 0;
   int maxWindow = 0;
   uint32_t sumWindow = 0;
   int lastRaw = 0;
-  for (int k = 0; k < samples; k++) {
-    int v = analogRead(kMicPins[idx]);
 
+  uint32_t t0 = millis();
+  while (uint32_t(millis() - t0) < windowMs) {
+    int v = int(analogRead(kMicPins[idx]));
     sumWindow += uint32_t(v);
+    samples++;
     if (v > maxWindow) maxWindow = v;
     lastRaw = v;
 
@@ -215,24 +217,28 @@ bool CandlesRiddle::detectBlow(int idx) {
     mm.lastRaw = uint16_t(v);
     if (uint16_t(v) > mm.maxVal) mm.maxVal = uint16_t(v);
 
-    // Trigger condition (per your request):
-    // 1) signal must be ABOVE the fixed base floor
-    // 2) and it must exceed the delta threshold (120)
-    // i.e. v > base + delta
-        if (v > baseEff && (v - baseEff) > delta_[idx]) over++;
+    // Trigger: value must be >= absolute threshold (baseline + delta)
+    if (v >= thrAbs) over++;
+
     delay(2);
   }
+
+  if (samples <= 0) samples = 1;
+  // 60% majority, rounded up.
+  const int needed = (samples * 60 + 99) / 100;
+
   uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
   lastRaw_[idx] = uint16_t(lastRaw);
   lastAvgWin_[idx] = avgWindow;
   lastMaxWin_[idx] = uint16_t(maxWindow);
   lastOver_[idx] = uint8_t(min(over, 255));
-  lastNeeded_[idx] = uint8_t(needed);
+  lastNeeded_[idx] = uint8_t(min(needed, 255));
+
   bool hit = over >= needed;
   lastHit_[idx] = hit ? 1 : 0;
+
   if (hit) {
     // Detailed trigger debug (always DBG; controllable via <node>/log/level).
-    // Values are for the detection window that caused the trigger.
     String payload = String("{\"i\":") + idx +
                      ",\"raw\":" + lastRaw +
                      ",\"avg_win\":" + avgWindow +
@@ -241,6 +247,8 @@ bool CandlesRiddle::detectBlow(int idx) {
                      ",\"base_eff\":" + baseEff +
                      ",\"sat\":" + micSaturated_[idx] +
                      ",\"thr\":" + delta_[idx] +
+                     ",\"thr_abs\":" + thrAbs +
+                     ",\"win_ms\":" + windowMs +
                      ",\"over\":" + over +
                      ",\"need\":" + needed +
                      ",\"m_avg\":" + metrics_[idx].avg +
@@ -253,6 +261,7 @@ bool CandlesRiddle::detectBlow(int idx) {
   }
   return hit;
 }
+
 
 void CandlesRiddle::evaluateSequence() {
   if (progressed_ == 0) return;
