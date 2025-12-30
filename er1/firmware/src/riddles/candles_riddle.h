@@ -68,6 +68,9 @@ private:
   uint8_t lastNeeded_[4] = {0,0,0,0};
   uint8_t lastHit_[4] = {0,0,0,0};
   int base_[4] = {1515, 1490, 1485, 1508};
+  static constexpr int kBaseMin[4] = {1515, 1490, 1485, 1508};
+  int effBase_[4] = {1515, 1490, 1485, 1508};
+  uint8_t micSaturated_[4] = {0, 0, 0, 0};
   int delta_[4] = {120, 120, 120, 120};
   uint32_t errorCount_ = 0;
 };

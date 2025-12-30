@@ -29,19 +29,21 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
 }
 
 void CandlesRiddle::calibrateBases() {
-  // One-time *idle probe* at boot: sample each mic for a short window and
-  // log the observed DC level.
+  // One-time idle calibration at boot.
   //
-  // IMPORTANT: Per your request, the detection baseline is FIXED and must
-  // NOT be adapted or auto-calibrated. So this function does not modify
-  // base_[]. It only logs what the ADC is doing so you can spot wiring/
-  // saturation issues.
+  // IMPORTANT:
+  // - We do NOT use an adaptive baseline.
+  // - We DO measure the idle DC level once at boot, because many mic boards
+  //   have a mid-rail bias that can drift during power-up (e.g. ~300 -> ~3000).
+  //
+  // Your provided base_[i] values are treated as a *minimum floor* (kBaseMin[i]).
+  // The effective baseline used for detection is:
+  //   effBase_[i] = max(kBaseMin[i], measured_idle_avg)
+  //
+  // If a channel appears saturated (near 4095), we mark it saturated and set
+  // effBase_ to 4095 so it cannot trigger "blow" until hardware is fixed.
   const int samples = 300;   // ~600ms per channel with delay(2)
   const int delayMs = 2;
-
-  uint16_t calAvg[4] = {0, 0, 0, 0};
-  uint16_t calMax[4] = {0, 0, 0, 0};
-  uint16_t calMin[4] = {4095, 4095, 4095, 4095};
 
   for (int i = 0; i < 4; i++) {
     uint32_t sum = 0;
@@ -54,37 +56,38 @@ void CandlesRiddle::calibrateBases() {
       if (v < mn) mn = v;
       delay(delayMs);
     }
+
     uint16_t avg = uint16_t(sum / uint32_t(samples));
-    metrics_[i].base = avg;
-    calAvg[i] = avg;
-    calMax[i] = mx;
-    calMin[i] = mn;
-  }
+    metrics_[i].base = avg;  // informational only (for logs)
 
-  // Log calibration results once. DBG so you can enable via <node>/log/level.
-  if (ctx_) {
-    String payload;
-    payload.reserve(220);
-    payload = String("{\"samples\":") + samples + ",\"delay_ms\":" + delayMs + ",\"b\":[" +
-              calAvg[0] + "," + calAvg[1] + "," + calAvg[2] + "," + calAvg[3] +
-              "],\"min\":[" + calMin[0] + "," + calMin[1] + "," + calMin[2] + "," + calMin[3] +
-              "],\"max\":[" + calMax[0] + "," + calMax[1] + "," + calMax[2] + "," + calMax[3] +
-              "]}";
-    ctx_->log("DBG", "candles_cal", payload);
+    // Determine effective base
+    micSaturated_[i] = 0;
+    if (avg > 4050 || mx > 4090) {
+      micSaturated_[i] = 1;
+      effBase_[i] = 4095;
+    } else {
+      int eff = int(avg);
+      if (eff < kBaseMin[i]) eff = kBaseMin[i];
+      effBase_[i] = eff;
+    }
 
-    // Warn if any channel is likely floating or saturated.
-    for (int i = 0; i < 4; i++) {
-      if (calAvg[i] <= 50 || calAvg[i] >= 4045 || calMax[i] >= 4090) {
-        String w = String("{\"i\":") + i +
-                   ",\"avg\":" + calAvg[i] +
-                   ",\"min\":" + calMin[i] +
-                   ",\"max\":" + calMax[i] +
-                   "}";
-        ctx_->log("WRN", "candles_adc_suspect", w);
-      }
+    if (ctx_) {
+      String js;
+      js.reserve(120);
+      js = String("{\"i\":") + i +
+           ",\"avg\":" + avg +
+           ",\"min\":" + mn +
+           ",\"max\":" + mx +
+           ",\"base_min\":" + kBaseMin[i] +
+           ",\"eff_base\":" + effBase_[i] +
+           ",\"sat\":" + micSaturated_[i] +
+           "}";
+      ctx_->log("DBG", "candles_idle_cal", js);
+      if (micSaturated_[i]) ctx_->log("WRN", "candles_adc_saturated", js);
     }
   }
 }
+
 
 void CandlesRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
@@ -184,7 +187,9 @@ bool CandlesRiddle::detectBlow(int idx) {
   const int needed = (samples * 3) / 5;  // 60%
 
   // Fixed baseline (no adaptive tracking)
-  const uint16_t baseFixed = uint16_t(base_[idx]);
+    // Effective baseline: max(measured idle, configured minimum floor).
+  // If the channel is saturated, effBase_[idx] is forced to 4095 and it will never trigger.
+  const int baseEff = effBase_[idx];
 
   int over = 0;
   int maxWindow = 0;
@@ -208,7 +213,7 @@ bool CandlesRiddle::detectBlow(int idx) {
     // 1) signal must be ABOVE the fixed base floor
     // 2) and it must exceed the delta threshold (120)
     // i.e. v > base + delta
-    if (v > int(baseFixed) && (v - int(baseFixed)) > delta_[idx]) over++;
+        if (v > baseEff && (v - baseEff) > delta_[idx]) over++;
     delay(2);
   }
   uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
@@ -226,7 +231,9 @@ bool CandlesRiddle::detectBlow(int idx) {
                      ",\"raw\":" + lastRaw +
                      ",\"avg_win\":" + avgWindow +
                      ",\"max_win\":" + maxWindow +
-                     ",\"base\":" + baseFixed +
+                     ",\"base_min\":" + base_[idx] +
+                     ",\"base_eff\":" + baseEff +
+                     ",\"sat\":" + micSaturated_[idx] +
                      ",\"thr\":" + delta_[idx] +
                      ",\"over\":" + over +
                      ",\"need\":" + needed +
@@ -351,7 +358,9 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
                ",\"hit\":" + lastHit_[i] +
                ",\"avg\":" + mm.avg +
                ",\"max\":" + mm.maxVal +
-               ",\"base\":" + base_[i] +
+               ",\"base_min\":" + base_[i] +
+               ",\"base_eff\":" + effBase_[i] +
+               ",\"sat\":" + micSaturated_[i] +
                ",\"thr\":" + delta_[i] +
                "}";
   }
