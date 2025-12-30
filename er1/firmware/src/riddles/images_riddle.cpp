@@ -190,7 +190,10 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
-    if (buttons_[i].cur != LOW) {
+    // IMPORTANT: this function is called from inside the per-button scan loop.
+    // At this moment, buttons_[j].cur for j>idx may still contain the previous
+    // tick's value. Read pins directly to avoid reporting a stale all_pressed.
+    if (digitalRead(buttons_[i].pin) != LOW) {
       allPressedNow = false;
       break;
     }

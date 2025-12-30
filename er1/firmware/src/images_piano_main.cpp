@@ -107,6 +107,13 @@ void setup() {
 void loop() {
   nodeCore.loop();
   uint32_t now = millis();
-  imagesModule.tick(now);
+  // piano must run every loop (audio / timing sensitive)
   pianoRiddle.tick(now);
+
+  // images can be slow
+  static uint32_t lastImagesTick = 0;
+  if (now - lastImagesTick >= 500) {
+    lastImagesTick = now;
+    imagesModule.tick(now);
+  }
 }
