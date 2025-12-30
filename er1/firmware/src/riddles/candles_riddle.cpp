@@ -82,8 +82,8 @@ void CandlesRiddle::calibrateBases() {
            ",\"eff_base\":" + effBase_[i] +
            ",\"sat\":" + micSaturated_[i] +
            "}";
-      ctx_->log("DBG", "candles_idle_cal", js);
-      if (micSaturated_[i]) ctx_->log("WRN", "candles_adc_saturated", js);
+      log("DBG", "candles_idle_cal", js);
+      if (micSaturated_[i]) log("WRN", "candles_adc_saturated", js);
     }
   }
 }
@@ -144,19 +144,25 @@ bool CandlesRiddle::shouldAllowLog(const char* level) {
   return true;
 }
 
-void CandlesRiddle::log(const char* level, const String& msg) {
+void CandlesRiddle::log(const char* level, const String& msg) const {
   if (!ctx_) return;
   ctx_->log(level, msg);
 }
 
-void CandlesRiddle::log(const char* level, const String& msg, const String& dataJson) {
+void CandlesRiddle::log(const char* level, const String& msg, const String& dataJson) const {
   if (!ctx_) return;
   ctx_->log(level, msg, dataJson);
 }
 
-void CandlesRiddle::logErr(const String& msg, const String& dataJson) {
-  errorCount_++;
-  log("ERR", msg, dataJson);
+bool CandlesRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                            const char* id, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool CandlesRiddle::publish(const char* topic, const String& payload, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void CandlesRiddle::setLed(int idx, bool on) {
@@ -241,7 +247,10 @@ bool CandlesRiddle::detectBlow(int idx) {
                      ",\"m_base\":" + metrics_[idx].base +
                      ",\"m_max\":" + metrics_[idx].maxVal +
                      "}";
-    if (ctx_) ctx_->log("DBG", "candles_blow", payload);  }
+    if (ctx_) {
+      log("DBG", "candles_blow", payload);
+    }
+  }
   return hit;
 }
 
@@ -317,9 +326,9 @@ void CandlesRiddle::publishSolvedEvent() {
   if (solvedEventSent_) return;
   if (!ctx_) return;
   String payload = "{\"event\":\"SOLVED\",\"rid\":\"candles\"}";
-  ctx_->publish(topicEvent_.c_str(), payload);
-  ctx_->publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
-  ctx_->publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
+  publish(topicEvent_.c_str(), payload);
+  publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
+  publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
   solvedEventSent_ = true;
 }
 
@@ -328,65 +337,42 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
   lastMetricMs_ = nowMs;
 
-  // Compute per-mic rolling stats (from samples gathered during detectBlow scans),
-  // but keep the baseline fixed (base_[i]) as requested.
+  // Compute per-mic rolling stats (from samples gathered during detectBlow scans).
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
     if (mm.samples > 0) mm.avg = mm.sum / mm.samples;
     else mm.avg = 0;
   }
 
-  // One merged, readable log every second (even if no blow is detected).
-  // Per your request, this must be emitted unconditionally for now.
-  String payload;
-  payload.reserve(320);
-  payload = String("{\"k\":\"candles\",\"en\":") + (ctx_->enabled() ? "1" : "0") +
-            ",\"sol\":" + (solved_ ? "1" : "0") +
-            ",\"prog\":" + progressed_ +
-            ",\"seq_to_ms\":" + kSeqTimeoutMs +
-            ",\"m\":[";
+  // IMPORTANT: PubSubClient has a small max packet size by default (often 256 bytes).
+  // The previous "mics":[...] aggregate payload could exceed it and silently fail to publish.
+  // Emit one compact message per mic so we always get 1Hz telemetry.
+  const auto& topic = ctx_->config().topics.log;
+  Core::TimestampSource* tsSrc = ctx_->timestampSource();
+
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
-    if (i) payload += ",";
-    payload += String("{\"i\":") + i +
-               ",\"lit\":" + (lit_[i] ? "1" : "0") +
-               ",\"raw\":" + lastRaw_[i] +
-               ",\"avg_win\":" + lastAvgWin_[i] +
-               ",\"max_win\":" + lastMaxWin_[i] +
-               ",\"over\":" + lastOver_[i] +
-               ",\"need\":" + lastNeeded_[i] +
-               ",\"hit\":" + lastHit_[i] +
-               ",\"avg\":" + mm.avg +
-               ",\"max\":" + mm.maxVal +
-               ",\"base_min\":" + base_[i] +
-               ",\"base_eff\":" + effBase_[i] +
-               ",\"sat\":" + micSaturated_[i] +
-               ",\"thr\":" + delta_[i] +
-               "}";
-  }
-  payload += "]}";
 
-  // Emit through the standard logger too. This is the DBG path controlled by
-  // MQTT topic `<node>/log/level`.
-  // If DBG isn't enabled, this will be filtered out; the direct publish below
-  // still guarantees visibility at least once per second as INF.
-  ctx_->log("DBG", "candles_mics", payload);
+    // Compact data object (keep keys short; avoid large arrays).
+    String d;
+    d.reserve(160);
+    d = String("{\"i\":") + i +
+        ",\"lit\":" + (lit_[i] ? "1" : "0") +
+        ",\"raw\":" + lastRaw_[i] +
+        ",\"aw\":" + lastAvgWin_[i] +
+        ",\"mw\":" + lastMaxWin_[i] +
+        ",\"ov\":" + lastOver_[i] +
+        ",\"need\":" + lastNeeded_[i] +
+        ",\"hit\":" + lastHit_[i] +
+        ",\"avg\":" + mm.avg +
+        ",\"max\":" + mm.maxVal +
+        ",\"base\":" + effBase_[i] +
+        ",\"sat\":" + micSaturated_[i] +
+        ",\"thr\":" + delta_[i] +
+        "}";
 
-  // Bypass log-level filtering by publishing directly to the log topic.
-  const auto& topic = ctx_->config().topics.log;
-  if (topic.length() > 0) {
-    Core::TimestampSource* tsSrc = ctx_->timestampSource();
-    Core::TimestampFields ts{};
-    if (tsSrc) ts = tsSrc->currentTimestamp();
-
-    String env;
-    env.reserve(80 + payload.length());
-    env = String("{\"t\":") + String((int64_t)ts.epoch) +
-          ",\"ts\":\"" + String(ts.ts) + "\"," +
-          "\"time_valid\":" + (ts.timeValid ? "true" : "false") +
-          ",\"lv\":\"INF\",\"msg\":\"candles_mics\",\"d_type\":\"object\",\"d\":" +
-          payload + "}";
-    ctx_->publish(topic.c_str(), env, false);
+    // DBG path (subject to <node>/log/level).
+    log("DBG", "candles_mic", d);
   }
 
   // Reset accumulation for the next interval.

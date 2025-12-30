@@ -92,9 +92,7 @@ bool Logger::publish(const char* level, const String& msg, const String& dataJso
 
   bool allowed = shouldLog(level);
   bool isError = (strcmp(level, "ERR") == 0);
-  if (!allowed && !isError) {
-    return false;
-  }
+  if (!allowed && !isError) return false;
 
   LogMessage lm{level, &msg, &dataJson};
   TimestampFields ts = timestamp();

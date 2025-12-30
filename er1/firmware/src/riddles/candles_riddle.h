@@ -31,9 +31,11 @@ private:
     uint16_t lastRaw;
   };
 
-  void log(const char* level, const String& msg);
-  void log(const char* level, const String& msg, const String& dataJson);
-  void logErr(const String& msg, const String& dataJson = String());
+  void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false) const;
+  bool publish(const char* topic, const String& payload, bool retained = false) const;
 
   void setLed(int idx, bool on);
   void initState();

@@ -16,6 +16,9 @@ public:
                             const char* t2, float t2s, const char* t3, float t3s);
 
 private:
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false) const;
+  bool publish(const char* topic, const String& payload, bool retained = false) const;
   void publishState();
   void publishSolvedEvent();
   void openLock() const;

@@ -30,8 +30,11 @@ private:
   void publishSolvedEvent(const char* rid);
   void publishState();
   void openImagesMaglock();
-  void log(const char* level, const String& msg);
-  void log(const char* level, const String& msg, const String& dataJson);
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false) const;
+  bool publish(const char* topic, const String& payload, bool retained = false) const;
+  void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
 
   Core::NodeContext* ctx_ = nullptr;
   String topicLockImagesCmd_;

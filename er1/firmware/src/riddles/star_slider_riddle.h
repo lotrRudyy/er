@@ -20,19 +20,21 @@ private:
   static constexpr uint8_t kRc522SsPins[kReaderCount] = {5, 17, 16};
   static constexpr uint8_t kButtonPin = 25;
   static constexpr uint32_t kBtnDebounceMs = 50;
-  static constexpr uint32_t kPollIntervalMs = 150;
+  static constexpr uint32_t kPollIntervalMs = 150;      // kept (unused now; button-only evaluation)
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint8_t kUidExpected[kReaderCount][4] = {
       {0xDE, 0xAD, 0xBE, 0x01},
       {0xDE, 0xAD, 0xBE, 0x02},
       {0xDE, 0xAD, 0xBE, 0x03}};
 
-  void log(const char* level, const String& msg);
-  void log(const char* level, const String& msg, const String& dataJson);
-  void logErr(const String& msg, const String& dataJson = String());
+  void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false) const;
+  bool publish(const char* topic, const String& payload, bool retained = false) const;
 
-  void pollReaders(uint32_t nowMs);
-  void pollReader(uint8_t idx);
+  void pollReaders(uint32_t nowMs);     // kept for compatibility; NOT used now
+  void pollReader(uint8_t idx);         // used ONLY from evaluateSolveAttempt()
   bool uidEquals(const byte* a, const byte* b, uint8_t len) const;
   bool isCurrentPatternCorrect() const;
   void evaluateSolveAttempt();
@@ -58,7 +60,7 @@ private:
   bool btnPrevState_ = true;
   bool btnWasPressed_ = false;
   uint32_t btnLastChangeMs_ = 0;
-  uint32_t lastPollMs_ = 0;
+  uint32_t lastPollMs_ = 0;         // kept (unused now; button-only evaluation)
   uint32_t lastMetricMs_ = 0;
-  uint32_t errorCount_ = 0;
+  mutable uint32_t errorCount_ = 0;
 };

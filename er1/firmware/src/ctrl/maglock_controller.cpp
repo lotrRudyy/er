@@ -177,7 +177,7 @@ void MaglockController::publishLockState(const LockState& lk, const char* reason
   payload += ",\"pulses\":";
   payload += String(lk.pulseCount);
   payload += "}";
-  ctx_->publish(topic.c_str(), payload);
+  publish(topic.c_str(), payload);
   publishStateSnapshot();
 }
 
@@ -276,7 +276,7 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
   payload += "]}";
 
   // Emit as DBG log so it can be suppressed with <node>/log/level.
-  ctx_->log("DBG", "maglock_metrics", payload);
+  log("DBG", "maglock_metrics", payload);
 }
 
 void MaglockController::publishStateSnapshot() {
@@ -303,7 +303,10 @@ void MaglockController::publishStateSnapshot() {
     data += "}";
   }
   data += "]}";
-  ctx_->publishState(data, true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  }
 }
 
 void MaglockController::handleLockCommand(LockState& lk, const String& cmd) {
@@ -336,14 +339,25 @@ void MaglockController::handleLockCommand(LockState& lk, const String& cmd) {
   log("WRN", String("Unknown lock cmd for ") + lk.id + ": " + cmd);
 }
 
-void MaglockController::log(const char* level, const String& msg) {
+void MaglockController::log(const char* level, const String& msg) const {
   if (!ctx_) return;
   ctx_->log(level, msg);
 }
 
-void MaglockController::log(const char* level, const String& msg, const String& dataJson) {
+void MaglockController::log(const char* level, const String& msg, const String& dataJson) const {
   if (!ctx_) return;
   ctx_->log(level, msg, dataJson);
+}
+
+bool MaglockController::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                                const char* id, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool MaglockController::publish(const char* topic, const String& payload, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void MaglockController::handleLockCommandTopicInternal(const String& topic, const String& payload) {
