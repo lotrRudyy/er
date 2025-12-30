@@ -33,11 +33,6 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static CandlesRiddle candles;
 
-static bool logFilter(const char* level, void* user) {
-  auto* module = static_cast<CandlesRiddle*>(user);
-  return module ? module->shouldAllowLog(level) : true;
-}
-
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   auto* module = static_cast<CandlesRiddle*>(user);
   ErrorInfo err{};
@@ -75,8 +70,6 @@ void setup() {
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
-  cfg.log.filter = logFilter;
-  cfg.log.filterUser = &candles;
 
   cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
@@ -84,7 +77,6 @@ void setup() {
 
   cfg.commands.levelEnable = "INF";
   cfg.commands.levelDisable = "INF";
-  cfg.commands.levelReboot = "INF";
   cfg.commands.allowReboot = true;
   cfg.commands.logPing = false;
   cfg.commands.levelPing = "DBG";

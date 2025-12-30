@@ -29,7 +29,7 @@ struct ErrorInfo {
   String msg;
 };
 struct HeartbeatConfig {
-  uint32_t intervalMs = 5000;
+  uint32_t intervalMs = 20000;
   using Builder = void (*)(String& out, const class NodeContext& ctx, void* userData);
   Builder builder = nullptr;
   void* user = nullptr;
@@ -57,7 +57,7 @@ struct CommandConfig {
   const char* levelUnknown = "WRN";
   const char* unknownPrefix = "Unknown CMD: ";
 
-  const char* cmdLogLevel = nullptr;  // e.g., "DBG"
+  const char* cmdLogLevel = "DBG";  // e.g., "DBG"
 };
 
 struct NodeCoreConfig {
