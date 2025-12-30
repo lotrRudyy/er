@@ -43,10 +43,8 @@ er1/data/**/*.log.*
 
 # ---- Local helper scripts not tracked in repo ----
 deploy.sh
-er1/firmware/.vscode/launch.json
 er1/firmware/.vscode/c_cpp_properties.json
 er1/firmware/.vscode/c_cpp_properties.json
-er1/firmware/.vscode/launch.json
 
 # Global outputs
 out/
@@ -56,5 +54,3 @@ out/
 er1/firmware/.vscode/c_cpp_properties.json
 er1/firmware/.vscode/launch.json
 er1/tools/compile_commands.json
-er1/firmware/.vscode/launch.json
-er1/firmware/.vscode/launch.json
