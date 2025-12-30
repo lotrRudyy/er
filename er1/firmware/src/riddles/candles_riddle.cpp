@@ -346,7 +346,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   }
   payload += "]}";
 
-  log("DBG", "candles_metrics", payload);
+  ctx_->publish(payload, true);
 
   // Reset accumulation for the next interval.
   for (int i = 0; i < 4; i++) {
