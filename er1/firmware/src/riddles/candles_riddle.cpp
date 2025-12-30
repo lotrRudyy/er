@@ -12,7 +12,71 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
     setLed(i, true);
   }
   initState();
+  // Configure ADC range for the microphone pins (helps prevent saturation)
+  // and calibrate a fixed baseline once at boot.
+  for (int i = 0; i < 4; i++) {
+    // 11dB extends measurable voltage range (Arduino-ESP32).
+    analogSetPinAttenuation(kMicPins[i], ADC_11db);
+  }
+  calibrateBases();
   lastMetricMs_ = millis();
+}
+
+void CandlesRiddle::calibrateBases() {
+  // One-time calibration at boot: sample each mic for a short window and
+  // set a fixed DC baseline. This is NOT adaptive: it never changes again
+  // until reboot.
+  //
+  // This prevents constant false triggers when mic modules output a biased
+  // analog DC level (often mid-rail) or when ADC ranges differ per channel.
+  const int samples = 300;   // ~600ms per channel with delay(2)
+  const int delayMs = 2;
+
+  uint16_t calAvg[4] = {0, 0, 0, 0};
+  uint16_t calMax[4] = {0, 0, 0, 0};
+  uint16_t calMin[4] = {4095, 4095, 4095, 4095};
+
+  for (int i = 0; i < 4; i++) {
+    uint32_t sum = 0;
+    uint16_t mx = 0;
+    uint16_t mn = 4095;
+    for (int k = 0; k < samples; k++) {
+      uint16_t v = uint16_t(analogRead(kMicPins[i]));
+      sum += v;
+      if (v > mx) mx = v;
+      if (v < mn) mn = v;
+      delay(delayMs);
+    }
+    uint16_t avg = uint16_t(sum / uint32_t(samples));
+    base_[i] = int(avg);
+    calAvg[i] = avg;
+    calMax[i] = mx;
+    calMin[i] = mn;
+  }
+
+  // Log calibration results once. DBG so you can enable via <node>/log/level.
+  if (ctx_) {
+    String payload;
+    payload.reserve(220);
+    payload = String("{\"samples\":") + samples + ",\"delay_ms\":" + delayMs + ",\"b\":[" +
+              calAvg[0] + "," + calAvg[1] + "," + calAvg[2] + "," + calAvg[3] +
+              "],\"min\":[" + calMin[0] + "," + calMin[1] + "," + calMin[2] + "," + calMin[3] +
+              "],\"max\":[" + calMax[0] + "," + calMax[1] + "," + calMax[2] + "," + calMax[3] +
+              "]}";
+    ctx_->log("DBG", "candles_cal", payload);
+
+    // Warn if any channel is likely floating or saturated.
+    for (int i = 0; i < 4; i++) {
+      if (calAvg[i] <= 50 || calAvg[i] >= 4045 || calMax[i] >= 4090) {
+        String w = String("{\"i\":") + i +
+                   ",\"avg\":" + calAvg[i] +
+                   ",\"min\":" + calMin[i] +
+                   ",\"max\":" + calMax[i] +
+                   "}";
+        ctx_->log("WRN", "candles_adc_suspect", w);
+      }
+    }
+  }
 }
 
 void CandlesRiddle::tick(uint32_t nowMs) {
@@ -63,7 +127,11 @@ bool CandlesRiddle::shouldAllowLog(const char* level) {
     errorCount_++;
     return true;
   }
-  return kDevLog;
+  // Do not hard-disable logs here.
+  // The core already controls verbosity via runtime MQTT log level
+  // (<node>/log/level). If we return false here, DBG/INF logs will never
+  // be published regardless of the configured log level.
+  return true;
 }
 
 void CandlesRiddle::log(const char* level, const String& msg) {
@@ -93,9 +161,7 @@ void CandlesRiddle::initState() {
     metrics_[i].avg = 0;
     metrics_[i].base = 0;
     metrics_[i].maxVal = 0;
-    metrics_[i].lastRaw = 0;
-    lastTrig_[i] = 0;
-    progress_[i] = -1;
+    metrics_[i].lastRaw = 0;    progress_[i] = -1;
   }
   progressed_ = 0;
   lastAction_ = millis();
@@ -105,22 +171,59 @@ void CandlesRiddle::initState() {
 }
 
 bool CandlesRiddle::detectBlow(int idx) {
+  // Short window, but require a strong majority of samples over threshold.
+  // This reduces false "blow" triggers from mic noise / ADC drift.
   const int samples = 80;
-  const int needed = samples / 3;
-  uint32_t now = millis();
-  if (now - lastTrig_[idx] < kRefractMs) return false;
+  const int needed = (samples * 3) / 5;  // 60%
+
+  // Fixed baseline (no adaptive tracking)
+  const uint16_t baseFixed = uint16_t(base_[idx]);
 
   int over = 0;
+  int maxWindow = 0;
+  uint32_t sumWindow = 0;
+  int lastRaw = 0;
   for (int k = 0; k < samples; k++) {
     int v = analogRead(kMicPins[idx]);
-    if (abs(v - base_[idx]) > delta_[idx]) over++;
+
+    sumWindow += uint32_t(v);
+    if (v > maxWindow) maxWindow = v;
+    lastRaw = v;
+
+    // Metrics: collected continuously for debug/telemetry + baseline tracking.
+    MicMetric& mm = metrics_[idx];
+    mm.sum += uint32_t(v);
+    mm.samples++;
+    mm.lastRaw = uint16_t(v);
+    if (uint16_t(v) > mm.maxVal) mm.maxVal = uint16_t(v);
+
+    if (abs(v - int(baseFixed)) > delta_[idx]) over++;
     delay(2);
   }
-
+  uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
+  lastRaw_[idx] = uint16_t(lastRaw);
+  lastAvgWin_[idx] = avgWindow;
+  lastMaxWin_[idx] = uint16_t(maxWindow);
+  lastOver_[idx] = uint8_t(min(over, 255));
+  lastNeeded_[idx] = uint8_t(needed);
   bool hit = over >= needed;
+  lastHit_[idx] = hit ? 1 : 0;
   if (hit) {
-    lastTrig_[idx] = millis();
-  }
+    // Detailed trigger debug (always DBG; controllable via <node>/log/level).
+    // Values are for the detection window that caused the trigger.
+    String payload = String("{\"i\":") + idx +
+                     ",\"raw\":" + lastRaw +
+                     ",\"avg_win\":" + avgWindow +
+                     ",\"max_win\":" + maxWindow +
+                     ",\"base\":" + baseFixed +
+                     ",\"thr\":" + delta_[idx] +
+                     ",\"over\":" + over +
+                     ",\"need\":" + needed +
+                     ",\"m_avg\":" + metrics_[idx].avg +
+                     ",\"m_base\":" + metrics_[idx].base +
+                     ",\"m_max\":" + metrics_[idx].maxVal +
+                     "}";
+    if (ctx_) ctx_->log("DBG", "candles_blow", payload);  }
   return hit;
 }
 
@@ -206,33 +309,47 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   if (!ctx_) return;
   if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
   lastMetricMs_ = nowMs;
-  uint32_t uptime = nowMs / 1000;
 
+  // Compute per-mic rolling stats (from samples gathered during detectBlow scans),
+  // but keep the baseline fixed (base_[i]) as requested.
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
-    if (mm.samples > 0) {
-      mm.avg = mm.sum / mm.samples;
-    } else {
-      mm.avg = 0;
-    }
-    if (mm.base == 0) {
-      mm.base = mm.avg;
-    } else {
-      mm.base = (mm.base * 15 + mm.avg) / 16;
-    }
+    if (mm.samples > 0) mm.avg = mm.sum / mm.samples;
+    else mm.avg = 0;
+  }
 
-    String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
-                     "\",\"up\":" + uptime +
-                     ",\"k\":\"candles\"" +
-                     ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
-                     ",\"i\":" + i +
-                     ",\"avg\":" + mm.avg +
-                     ",\"max\":" + mm.maxVal +
-                     ",\"base\":" + mm.base +
-                     ",\"d\":" + (int(mm.avg) - int(mm.base)) +
-                     ",\"thr\":" + delta_[i] +
-                     "}";
-    ctx_->log("DBG", "candles_metrics", payload);
+  // One merged, readable log every second (even if no blow is detected).
+  // This is intentionally DBG so you can enable/disable via <node>/log/level.
+  String payload;
+  payload.reserve(320);
+  payload = String("{\"k\":\"candles\",\"en\":") + (ctx_->enabled() ? "1" : "0") +
+            ",\"sol\":" + (solved_ ? "1" : "0") +
+            ",\"prog\":" + progressed_ +
+            ",\"seq_to_ms\":" + kSeqTimeoutMs +
+            ",\"m\":[";
+  for (int i = 0; i < 4; i++) {
+    MicMetric& mm = metrics_[i];
+    if (i) payload += ",";
+    payload += String("{\"i\":") + i +
+               ",\"lit\":" + (lit_[i] ? "1" : "0") +
+               ",\"raw\":" + lastRaw_[i] +
+               ",\"avg_win\":" + lastAvgWin_[i] +
+               ",\"max_win\":" + lastMaxWin_[i] +
+               ",\"over\":" + lastOver_[i] +
+               ",\"need\":" + lastNeeded_[i] +
+               ",\"hit\":" + lastHit_[i] +
+               ",\"avg\":" + mm.avg +
+               ",\"max\":" + mm.maxVal +
+               ",\"base\":" + base_[i] +
+               ",\"thr\":" + delta_[i] +
+               "}";
+  }
+  payload += "]}";
+  ctx_->log("DBG", "candles_mics", payload);
+
+  // Reset accumulation for the next interval.
+  for (int i = 0; i < 4; i++) {
+    MicMetric& mm = metrics_[i];
     mm.sum = 0;
     mm.samples = 0;
     mm.maxVal = 0;
