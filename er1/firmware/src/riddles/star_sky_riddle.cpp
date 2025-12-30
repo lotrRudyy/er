@@ -59,23 +59,23 @@ void StarSkyRiddle::handleCandlesEvent(const String& payload) {
   }
 }
 
-void StarSkyRiddle::log(const char* level, const String& msg) {
+void StarSkyRiddle::log(const char* level, const String& msg) const {
   if (!ctx_) return;
   ctx_->log(level, msg);
 }
 
-void StarSkyRiddle::log(const char* level, const String& msg, const String& dataJson) {
+void StarSkyRiddle::log(const char* level, const String& msg, const String& dataJson) const {
   if (!ctx_) return;
   ctx_->log(level, msg, dataJson);
 }
 
 bool StarSkyRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
-                            const char* id, bool retained) {
+                            const char* id, bool retained) const {
   if (!ctx_) return false;
   return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
 }
 
-bool StarSkyRiddle::publish(const char* topic, const String& payload, bool retained) {
+bool StarSkyRiddle::publish(const char* topic, const String& payload, bool retained) const {
   if (!ctx_) return false;
   return ctx_->publish(topic, payload, retained);
 }

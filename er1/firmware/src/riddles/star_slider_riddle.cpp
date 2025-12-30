@@ -59,7 +59,7 @@ bool StarSliderRiddle::onCmd(const char* cmd, const char* payload) {
   return false;
 }
 
-void StarSliderRiddle::log(const char* level, const String& msg) {
+void StarSliderRiddle::log(const char* level, const String& msg) const {
   if (!ctx_) return;
   if (strcmp(level, "ERR") == 0) {
     errorCount_++;
@@ -67,7 +67,7 @@ void StarSliderRiddle::log(const char* level, const String& msg) {
   ctx_->log(level, msg);
 }
 
-void StarSliderRiddle::log(const char* level, const String& msg, const String& dataJson) {
+void StarSliderRiddle::log(const char* level, const String& msg, const String& dataJson) const {
   if (!ctx_) return;
   if (strcmp(level, "ERR") == 0) {
     errorCount_++;
@@ -76,12 +76,12 @@ void StarSliderRiddle::log(const char* level, const String& msg, const String& d
 }
 
 bool StarSliderRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
-                               const char* id, bool retained) {
+                               const char* id, bool retained) const {
   if (!ctx_) return false;
   return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
 }
 
-bool StarSliderRiddle::publish(const char* topic, const String& payload, bool retained) {
+bool StarSliderRiddle::publish(const char* topic, const String& payload, bool retained) const {
   if (!ctx_) return false;
   return ctx_->publish(topic, payload, retained);
 }

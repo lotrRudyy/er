@@ -43,11 +43,11 @@ private:
     uint16_t bucketMax[kBuckets];
   };
 
-  void log(const char* level, const String& msg);
-  void log(const char* level, const String& msg, const String& dataJson);
+  void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
-               const char* id = nullptr, bool retained = false);
-  bool publish(const char* topic, const String& payload, bool retained = false);
+               const char* id = nullptr, bool retained = false) const;
+  bool publish(const char* topic, const String& payload, bool retained = false) const;
 
   void initPiezo();
   void updatePiezoSamples(uint32_t nowMs);
@@ -86,6 +86,6 @@ private:
   int seqLen_ = 0;
   uint32_t lastSeqActivityMs_ = 0;
 
-  uint32_t errorCount_ = 0;
+  mutable uint32_t errorCount_ = 0;
   bool solved_ = false;
 };
