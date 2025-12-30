@@ -206,7 +206,10 @@ void PianoRiddle::publishState() {
   String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
                 ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
                 ",\"progress\":" + String(seqPos_) + "}";
-  ctx_->publishState(withSrc(data, srcId_), true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, withSrc(data, srcId_), nullptr, true);
+  }
 }
 
 void PianoRiddle::publishSolvedEvent() {
@@ -217,12 +220,15 @@ void PianoRiddle::publishSolvedEvent() {
     payload += kSequence[i];
   }
   payload += "\"}";
-  ctx_->publishEvent("riddle_solved", withSrc(payload, srcId_));
+  const auto& topics = ctx_->config().topics;
+  if (topics.evt.length() > 0) {
+    publish(topics.evt.c_str(), "riddle_solved", 1, withSrc(payload, srcId_));
+  }
 }
 
 void PianoRiddle::openLock() const {
   if (!ctx_) return;
-  ctx_->publish(topicLockCmd_.c_str(), "OPEN");
+  publish(topicLockCmd_.c_str(), "OPEN");
 }
 
 void PianoRiddle::resetProgress(const char* reason) {
@@ -232,6 +238,17 @@ void PianoRiddle::resetProgress(const char* reason) {
     String data = String("{\"reason\":\"") + reason + "\"}";
     log("DBG", "PIANO_PROGRESS_RESET", data);
   }
+}
+
+bool PianoRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                          const char* id, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool PianoRiddle::publish(const char* topic, const String& payload, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void PianoRiddle::log(const char* level, const String& msg) const {

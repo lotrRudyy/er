@@ -62,12 +62,15 @@ void StarSliderRiddle::log(const char* level, const String& msg, const String& d
   ctx_->log(level, msg, dataJson);
 }
 
-void StarSliderRiddle::logErr(const String& msg, const String& dataJson) {
-  if (dataJson.length() > 0) {
-    log("ERR", msg, dataJson);
-  } else {
-    log("ERR", msg);
-  }
+bool StarSliderRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                               const char* id, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool StarSliderRiddle::publish(const char* topic, const String& payload, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void StarSliderRiddle::pollReaders(uint32_t nowMs) {
@@ -180,7 +183,10 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
   String payload = String("{\"id\":\"star_slider\",\"attempt\":") + attemptIdx + "}";
-  ctx_->publishEvent("riddle_solved", payload);
+  const auto& topics = ctx_->config().topics;
+  if (topics.evt.length() > 0) {
+    publish(topics.evt.c_str(), "riddle_solved", 1, payload);
+  }
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
@@ -195,7 +201,7 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"attempts\":" + String(solveAttempts_) +
                    ",\"success\":" + String(solveSuccess_) +
                    "}";
-  ctx_->log("DBG", "star_slider_metrics", payload);
+  log("DBG", "star_slider_metrics", payload);
 }
 
 void StarSliderRiddle::publishState() {
@@ -203,5 +209,8 @@ void StarSliderRiddle::publishState() {
   String data = String("{\"solved\":") + (solvedFlag_ ? "true" : "false") +
                 ",\"attempts\":" + solveAttempts_ +
                 ",\"success\":" + solveSuccess_ + "}";
-  ctx_->publishState(data, true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  }
 }

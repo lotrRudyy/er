@@ -186,7 +186,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       ",\"state\":" + (b.cur ? 1 : 0) +
                       ",\"presses\":" + b.presses +
                       "}";
-  ctx_->log("DBG", "images_btn", withSrc(payloadBtn, nodeId_));
+  log("DBG", "images_btn", withSrc(payloadBtn, nodeId_));
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
@@ -203,7 +203,7 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->log("DBG", "images_all", withSrc(payloadAll, nodeId_));
+  log("DBG", "images_all", withSrc(payloadAll, nodeId_));
 }
 
 void ImagesRiddle::publishMetricsIfDue() {
@@ -222,7 +222,7 @@ void ImagesRiddle::publishMetricsIfDue() {
                      ",\"state\":" + (b.cur ? 1 : 0) +
                      ",\"presses\":" + b.presses +
                      "}";
-    ctx_->log("DBG", "images_metrics", withSrc(payload, nodeId_));
+    log("DBG", "images_metrics", withSrc(payload, nodeId_));
   }
 
   bool allPressedNow = true;
@@ -237,26 +237,43 @@ void ImagesRiddle::publishMetricsIfDue() {
                       "\",\"up\":" + uptime +
                       ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
                       "}";
-  ctx_->log("DBG", "images_all", withSrc(payloadAll, nodeId_));
+  log("DBG", "images_all", withSrc(payloadAll, nodeId_));
 }
 
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
   String data = String("{\"id\":\"") + rid + "\"}";
-  ctx_->publishEvent("riddle_solved", withSrc(data, nodeId_));
+  const auto& topics = ctx_->config().topics;
+  if (topics.evt.length() > 0) {
+    publish(topics.evt.c_str(), "riddle_solved", 1, withSrc(data, nodeId_));
+  }
   publishState();
   log("INF", String("SOLVED event sent for rid=") + rid);
 }
 
 void ImagesRiddle::openImagesMaglock() {
-  ctx_->publish(topicLockImagesCmd_.c_str(), "OPEN");
+  publish(topicLockImagesCmd_.c_str(), "OPEN");
   log("INF", "Sent OPEN to images maglock");
 }
 
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
   String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
-  ctx_->publishState(withSrc(data, nodeId_), true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, withSrc(data, nodeId_), nullptr, true);
+  }
+}
+
+bool ImagesRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                           const char* id, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool ImagesRiddle::publish(const char* topic, const String& payload, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void ImagesRiddle::log(const char* level, const String& msg) {

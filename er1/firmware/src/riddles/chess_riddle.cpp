@@ -251,10 +251,13 @@ void ChessRiddle::publishSolvedEvent() {
 
   // 1) Emit canonical riddle solved event
   const String payload = "{\"id\":\"chess\"}";
-  ctx_->publishEvent("riddle_solved", payload);
+  const auto& topics = ctx_->config().topics;
+  if (topics.evt.length() > 0) {
+    publish(topics.evt.c_str(), "riddle_solved", 1, payload);
+  }
 
   // 2) Directly command maglock to open r3 (legacy supported command topic)
-  ctx_->publish("maglock/lock/r3/cmd", "OPEN", false);
+  publish("maglock/lock/r3/cmd", "OPEN", false);
 }
 
 void ChessRiddle::publishState() {
@@ -273,7 +276,10 @@ void ChessRiddle::publishState() {
       "\",\"solved_count\":" + solvedCount_ +
       ",\"enabled\":" + (ctx_->enabled() ? "true" : "false") + "}";
 
-  ctx_->publishState(data, true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  }
 }
 
 // ===== Required FULL TABLE formatting =====
@@ -355,15 +361,21 @@ void ChessRiddle::logFullTable() const {
     if (i + 1 < kReaderCount) msg += "\n";
   }
 
-  ctx_->log("INF", msg);
+  log("INF", msg);
 }
 
-void ChessRiddle::log(const char* level, const String& msg) {
+void ChessRiddle::log(const char* level, const String& msg) const {
   if (!ctx_) return;
   ctx_->log(level, msg);
 }
 
-void ChessRiddle::logErr(const String& msg) {
-  errorCount_++;
-  log("ERR", msg);
+bool ChessRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                          const char* id, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool ChessRiddle::publish(const char* topic, const String& payload, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }

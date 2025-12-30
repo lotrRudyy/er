@@ -69,9 +69,15 @@ void StarSkyRiddle::log(const char* level, const String& msg, const String& data
   ctx_->log(level, msg, dataJson);
 }
 
-void StarSkyRiddle::logErr(const String& msg) {
-  errorCount_++;
-  log("ERR", msg);
+bool StarSkyRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                            const char* id, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool StarSkyRiddle::publish(const char* topic, const String& payload, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void StarSkyRiddle::applyPattern(uint32_t nowMs) {
@@ -121,7 +127,7 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"candles\":" + (candlesSolved_ ? "1" : "0") +
                    ",\"phase\":\"" + phase + "\"" +
                    "}";
-  ctx_->log("DBG", "star_sky_metrics", payload);
+  log("DBG", "star_sky_metrics", payload);
 }
 
 void StarSkyRiddle::persistState() {
@@ -145,5 +151,8 @@ void StarSkyRiddle::loadState() {
 void StarSkyRiddle::publishState() {
   if (!ctx_) return;
   String data = String("{\"candles\":") + (candlesSolved_ ? "true" : "false") + "}";
-  ctx_->publishState(data, true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  }
 }

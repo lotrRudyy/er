@@ -10,7 +10,7 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
     dfPlayer_.volume(kDfVolume);
   } else {
     dfOk_ = false;
-    logErr("DFPlayer init failed");
+    log("ERR", "DFPlayer init failed");
   }
 
   for (int i = 0; i < kSensorCount; i++) {
@@ -61,17 +61,29 @@ bool KnockingRiddle::shouldAllowLog(const char* level) {
 
 void KnockingRiddle::log(const char* level, const String& msg) {
   if (!ctx_) return;
+  if (strcmp(level, "ERR") == 0) {
+    errorCount_++;
+  }
   ctx_->log(level, msg);
 }
 
 void KnockingRiddle::log(const char* level, const String& msg, const String& dataJson) {
   if (!ctx_) return;
+  if (strcmp(level, "ERR") == 0) {
+    errorCount_++;
+  }
   ctx_->log(level, msg, dataJson);
 }
 
-void KnockingRiddle::logErr(const String& msg, const String& dataJson) {
-  errorCount_++;
-  log("ERR", msg, dataJson);
+bool KnockingRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                             const char* id, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool KnockingRiddle::publish(const char* topic, const String& payload, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void KnockingRiddle::updatePiezoSamples(uint32_t nowMs) {
@@ -286,12 +298,18 @@ void KnockingRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   solved_ = true;
   String data = "{\"id\":\"knocking\"}";
-  ctx_->publishEvent("riddle_solved", data);
+  const auto& topics = ctx_->config().topics;
+  if (topics.evt.length() > 0) {
+    publish(topics.evt.c_str(), "riddle_solved", 1, data);
+  }
   publishState();
 }
 
 void KnockingRiddle::publishState() {
   if (!ctx_) return;
   String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
-  ctx_->publishState(data, true);
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() > 0) {
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  }
 }

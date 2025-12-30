@@ -82,8 +82,8 @@ void CandlesRiddle::calibrateBases() {
            ",\"eff_base\":" + effBase_[i] +
            ",\"sat\":" + micSaturated_[i] +
            "}";
-      ctx_->log("DBG", "candles_idle_cal", js);
-      if (micSaturated_[i]) ctx_->log("WRN", "candles_adc_saturated", js);
+      log("DBG", "candles_idle_cal", js);
+      if (micSaturated_[i]) log("WRN", "candles_adc_saturated", js);
     }
   }
 }
@@ -154,9 +154,15 @@ void CandlesRiddle::log(const char* level, const String& msg, const String& data
   ctx_->log(level, msg, dataJson);
 }
 
-void CandlesRiddle::logErr(const String& msg, const String& dataJson) {
-  errorCount_++;
-  log("ERR", msg, dataJson);
+bool CandlesRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+                            const char* id, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publishEnvelope(topic, type, version, dataJson, id, retained);
+}
+
+bool CandlesRiddle::publish(const char* topic, const String& payload, bool retained) {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void CandlesRiddle::setLed(int idx, bool on) {
@@ -241,7 +247,10 @@ bool CandlesRiddle::detectBlow(int idx) {
                      ",\"m_base\":" + metrics_[idx].base +
                      ",\"m_max\":" + metrics_[idx].maxVal +
                      "}";
-    if (ctx_) ctx_->log("DBG", "candles_blow", payload);  }
+    if (ctx_) {
+      log("DBG", "candles_blow", payload);
+    }
+  }
   return hit;
 }
 
@@ -317,9 +326,9 @@ void CandlesRiddle::publishSolvedEvent() {
   if (solvedEventSent_) return;
   if (!ctx_) return;
   String payload = "{\"event\":\"SOLVED\",\"rid\":\"candles\"}";
-  ctx_->publish(topicEvent_.c_str(), payload);
-  ctx_->publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
-  ctx_->publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
+  publish(topicEvent_.c_str(), payload);
+  publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
+  publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
   solvedEventSent_ = true;
 }
 
@@ -370,7 +379,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   // MQTT topic `<node>/log/level`.
   // If DBG isn't enabled, this will be filtered out; the direct publish below
   // still guarantees visibility at least once per second as INF.
-  ctx_->log("DBG", "candles_mics", payload);
+  log("DBG", "candles_mics", payload);
 
   // Bypass log-level filtering by publishing directly to the log topic.
   const auto& topic = ctx_->config().topics.log;
@@ -386,7 +395,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
           "\"time_valid\":" + (ts.timeValid ? "true" : "false") +
           ",\"lv\":\"INF\",\"msg\":\"candles_mics\",\"d_type\":\"object\",\"d\":" +
           payload + "}";
-    ctx_->publish(topic.c_str(), env, false);
+    publish(topic.c_str(), env, false);
   }
 
   // Reset accumulation for the next interval.

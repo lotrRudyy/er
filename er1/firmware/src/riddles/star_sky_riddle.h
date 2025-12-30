@@ -26,7 +26,9 @@ private:
 
   void log(const char* level, const String& msg);
   void log(const char* level, const String& msg, const String& dataJson);
-  void logErr(const String& msg);
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false);
+  bool publish(const char* topic, const String& payload, bool retained = false);
 
   void applyPattern(uint32_t nowMs);
   void setStripRaw(int idx, uint8_t duty);

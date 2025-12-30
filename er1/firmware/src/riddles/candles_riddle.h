@@ -33,7 +33,9 @@ private:
 
   void log(const char* level, const String& msg);
   void log(const char* level, const String& msg, const String& dataJson);
-  void logErr(const String& msg, const String& dataJson = String());
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false);
+  bool publish(const char* topic, const String& payload, bool retained = false);
 
   void setLed(int idx, bool on);
   void initState();
