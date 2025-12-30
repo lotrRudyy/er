@@ -346,7 +346,28 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   }
   payload += "]}";
 
-  ctx_->publish(payload, true);
+  // Emit through the standard logger too. This is the DBG path controlled by
+  // MQTT topic `<node>/log/level`.
+  // If DBG isn't enabled, this will be filtered out; the direct publish below
+  // still guarantees visibility at least once per second as INF.
+  ctx_->log("DBG", "candles_mics", payload);
+
+  // Bypass log-level filtering by publishing directly to the log topic.
+  const auto& topic = ctx_->config().topics.log;
+  if (topic.length() > 0) {
+    Core::TimestampSource* tsSrc = ctx_->timestampSource();
+    Core::TimestampFields ts{};
+    if (tsSrc) ts = tsSrc->currentTimestamp();
+
+    String env;
+    env.reserve(80 + payload.length());
+    env = String("{\"t\":") + String((int64_t)ts.epoch) +
+          ",\"ts\":\"" + String(ts.ts) + "\"," +
+          "\"time_valid\":" + (ts.timeValid ? "true" : "false") +
+          ",\"lv\":\"INF\",\"msg\":\"candles_mics\",\"d_type\":\"object\",\"d\":" +
+          payload + "}";
+    ctx_->publish(topic.c_str(), env, false);
+  }
 
   // Reset accumulation for the next interval.
   for (int i = 0; i < 4; i++) {

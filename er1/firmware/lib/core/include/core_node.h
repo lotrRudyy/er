@@ -57,7 +57,7 @@ struct CommandConfig {
   const char* levelUnknown = "WRN";
   const char* unknownPrefix = "Unknown CMD: ";
 
-  const char* cmdLogLevel = "DBG";  // e.g., "DBG"
+  const char* cmdLogLevel = nullptr;  // e.g., "DBG"
 };
 
 struct NodeCoreConfig {

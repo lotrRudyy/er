@@ -273,9 +273,6 @@ void NodeCore::handleLogLevelMessage(const String& payload) {
   }
   minLogRank_ = newRank;
   logger_.publish("INF", String("log_level set to ") + p);
-  // Emit a DBG probe so it's obvious in MQTT logs that DBG is actually active.
-  // This should only appear when the runtime log level is set to DBG.
-  logger_.publish("DBG", "log_level probe (DBG active)");
 }
 
 void NodeCore::loop() {
