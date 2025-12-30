@@ -174,7 +174,7 @@ void NodeContext::setHeartbeatInterval(uint32_t intervalMs) {
 }
 
 uint32_t NodeContext::heartbeatInterval() const {
-  return core_ ? core_->heartbeatInterval() : 0;
+  return core_ ? core_->heartbeatInterval() : 20000;
 }
 
 // -------- NodeCore --------

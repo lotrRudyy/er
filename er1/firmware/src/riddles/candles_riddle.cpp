@@ -197,7 +197,10 @@ bool CandlesRiddle::detectBlow(int idx) {
     mm.lastRaw = uint16_t(v);
     if (uint16_t(v) > mm.maxVal) mm.maxVal = uint16_t(v);
 
-    if (abs(v - int(baseFixed)) > delta_[idx]) over++;
+    const int base = base_[idx];
+    const int thr  = delta_[idx];   // 120
+    if ((int)v > base && ((int)v - base) > thr) over++;
+
     delay(2);
   }
   uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
