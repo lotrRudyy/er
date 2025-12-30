@@ -13,22 +13,29 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   }
   initState();
   // Configure ADC range for the microphone pins (helps prevent saturation)
-  // and calibrate a fixed baseline once at boot.
+  // and take a one-time idle probe (for logs only).
   for (int i = 0; i < 4; i++) {
     // 11dB extends measurable voltage range (Arduino-ESP32).
     analogSetPinAttenuation(kMicPins[i], ADC_11db);
   }
+  // Many mic boards have a bias network that takes a moment to settle.
+  // If we sample immediately at boot, the readings can be very low and then
+  // jump later (e.g. ~300 -> ~3000). We therefore wait briefly, then only
+  // *log* the idle level. The detection baseline itself stays fixed to the
+  // configured base_[].
+  delay(1500);
   calibrateBases();
   lastMetricMs_ = millis();
 }
 
 void CandlesRiddle::calibrateBases() {
-  // One-time calibration at boot: sample each mic for a short window and
-  // set a fixed DC baseline. This is NOT adaptive: it never changes again
-  // until reboot.
+  // One-time *idle probe* at boot: sample each mic for a short window and
+  // log the observed DC level.
   //
-  // This prevents constant false triggers when mic modules output a biased
-  // analog DC level (often mid-rail) or when ADC ranges differ per channel.
+  // IMPORTANT: Per your request, the detection baseline is FIXED and must
+  // NOT be adapted or auto-calibrated. So this function does not modify
+  // base_[]. It only logs what the ADC is doing so you can spot wiring/
+  // saturation issues.
   const int samples = 300;   // ~600ms per channel with delay(2)
   const int delayMs = 2;
 
@@ -48,7 +55,7 @@ void CandlesRiddle::calibrateBases() {
       delay(delayMs);
     }
     uint16_t avg = uint16_t(sum / uint32_t(samples));
-    base_[i] = int(avg);
+    metrics_[i].base = avg;
     calAvg[i] = avg;
     calMax[i] = mx;
     calMin[i] = mn;
@@ -197,10 +204,11 @@ bool CandlesRiddle::detectBlow(int idx) {
     mm.lastRaw = uint16_t(v);
     if (uint16_t(v) > mm.maxVal) mm.maxVal = uint16_t(v);
 
-    const int base = base_[idx];
-    const int thr  = delta_[idx];   // 120
-    if ((int)v > base && ((int)v - base) > thr) over++;
-
+    // Trigger condition (per your request):
+    // 1) signal must be ABOVE the fixed base floor
+    // 2) and it must exceed the delta threshold (120)
+    // i.e. v > base + delta
+    if (v > int(baseFixed) && (v - int(baseFixed)) > delta_[idx]) over++;
     delay(2);
   }
   uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
