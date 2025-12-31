@@ -142,7 +142,24 @@ void CandlesRiddle::tick(uint32_t nowMs) {
 }
 
 bool CandlesRiddle::onCmd(const char* cmd, const char* payload) {
-  String message(cmd ? cmd : "");
+  if (!cmd) return false;
+
+  // NOTE: Core normalizes commands to uppercase before calling onCmd().
+  // Keep comparisons uppercase.
+  if (strcmp(cmd, "RESET") == 0 || strcmp(cmd, "RELIGHT") == 0) {
+    resetAll();
+    log("INF", "CMD RESET -> relight+reset");
+    return true;
+  }
+
+  if (strcmp(cmd, "CAL") == 0 || strcmp(cmd, "CALIB") == 0 || strcmp(cmd, "CALIBRATE") == 0) {
+    calibrateBases();
+    log("INF", "CMD CALIBRATE -> recalibrated idle baselines");
+    return true;
+  }
+
+  // Keep legacy behavior: log unknown commands as WRN but consume them.
+  String message(cmd);
   if (payload && payload[0]) {
     message += " ";
     message += payload;

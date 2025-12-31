@@ -390,6 +390,10 @@ void NodeCore::handleCommandMessage(const String& raw) {
     arg = "";
   }
 
+  // Commands are case-insensitive.
+  // Normalize to uppercase before dispatching to core/module handlers.
+  cmd.toUpperCase();
+
   size_t cmdLen = min(static_cast<size_t>(cmd.length()), kCmdBufSize - 1);
   cmd.toCharArray(cmdBuf_, cmdLen + 1);
   size_t argLen = min(static_cast<size_t>(arg.length()), kPayloadBufSize - 1);
