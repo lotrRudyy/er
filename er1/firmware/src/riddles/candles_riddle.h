@@ -16,7 +16,7 @@ public:
 private:
   static constexpr bool kDevLog = false;
   static constexpr uint32_t kMetricIntervalMs = 1000;
-  static constexpr uint32_t kSeqTimeoutMs = 3000;
+  static constexpr uint32_t kSeqTimeoutMs = 4500;
   // LED pins (candle LEDs) in order: 1..4
   static constexpr int kLedPins[4] = {12, 14, 26, 25};
   static constexpr int kMicPins[4] = {33, 32, 35, 34};
@@ -40,7 +40,7 @@ private:
   void setLed(int idx, bool on);
   void initState();
   void calibrateBases();
-  bool detectBlow(int idx);
+  bool detectBlow(int idx, int thrAbs);
   void evaluateSequence();
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
@@ -69,9 +69,9 @@ private:
   uint8_t lastOver_[4] = {0,0,0,0};
   uint8_t lastNeeded_[4] = {0,0,0,0};
   uint8_t lastHit_[4] = {0,0,0,0};
-  int base_[4] = {1530, 1540, 1500, 1500};
-  static constexpr int kBaseMin[4] = {1530, 1540, 1500, 1500};
-  int effBase_[4] = {1530, 1540, 1500, 1500};
+  int base_[4] = {1500, 1500, 1500, 1500};
+  static constexpr int kBaseMin[4] = {1500, 1500, 1500, 1500};
+  int effBase_[4] = {1500, 1500, 1500, 1500};
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
   int delta_[4] = {120, 120, 120, 120};
   uint32_t errorCount_ = 0;

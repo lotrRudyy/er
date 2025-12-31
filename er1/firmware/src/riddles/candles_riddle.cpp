@@ -82,12 +82,11 @@ void CandlesRiddle::calibrateBases() {
            ",\"eff_base\":" + effBase_[i] +
            ",\"sat\":" + micSaturated_[i] +
            "}";
-      log("DBG", "candles_idle_cal", js);
+      log("INF", "candles_idle_cal", js);
       if (micSaturated_[i]) log("WRN", "candles_adc_saturated", js);
     }
   }
 }
-
 
 void CandlesRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
@@ -96,7 +95,28 @@ void CandlesRiddle::tick(uint32_t nowMs) {
     if (!solved_) {
       for (int i = 0; i < 4; i++) {
         if (!lit_[i]) continue;
-        if (detectBlow(i)) {
+
+        // --- NEW FLOW ---
+        // Only call detectBlow() AFTER we saw threshold exceeded once.
+        // Threshold is per-mic: effBase + delta (delta is your 120).
+        const int thrAbs = effBase_[i] + delta_[i];
+        const int v0 = analogRead(kMicPins[i]);
+        // Live telemetry (so candles_mic always shows current values even before first blow)
+        lastRaw_[i] = (uint16_t)v0;
+        lastAvgWin_[i] = (uint16_t)v0;
+        lastMaxWin_[i] = (uint16_t)v0;
+        lastOver_[i] = 0;
+        lastNeeded_[i] = 0;
+        lastHit_[i] = 0;
+
+        // Keep rolling metrics meaningful even when no blow windows run
+        MicMetric& mmLive = metrics_[i];
+        mmLive.sum += (uint32_t)v0;
+        mmLive.samples++;
+        mmLive.lastRaw = (uint16_t)v0;
+        if ((uint16_t)v0 > mmLive.maxVal) mmLive.maxVal = (uint16_t)v0;
+
+        if (v0 > thrAbs && detectBlow(i, thrAbs)) {
           lastAction_ = nowMs;
           lastSeqActivityMs_ = nowMs;
           setLed(i, false);
@@ -177,7 +197,8 @@ void CandlesRiddle::initState() {
     metrics_[i].avg = 0;
     metrics_[i].base = 0;
     metrics_[i].maxVal = 0;
-    metrics_[i].lastRaw = 0;    progress_[i] = -1;
+    metrics_[i].lastRaw = 0;
+    progress_[i] = -1;
   }
   progressed_ = 0;
   lastAction_ = millis();
@@ -186,82 +207,72 @@ void CandlesRiddle::initState() {
   solvedEventSent_ = false;
 }
 
-bool CandlesRiddle::detectBlow(int idx) {
-  // Windowed majority vote (per mic):
-  // - baseline is per-mic effBase_[idx]
-  // - threshold is baseline + delta_[idx] (default 120)
-  // - evaluate over a 50ms window
-  // - require >= 60% of samples over threshold
-  const uint32_t windowMs = 50;
-  const int baseEff = effBase_[idx];
-  const int thrAbs = baseEff + delta_[idx];
+/**
+ * Called only after we saw one sample exceed thrAbs in tick().
+ * Now grab the next 50 samples (no delay). If >=60% are above thrAbs -> hit.
+ */
+bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
+  static uint32_t lastTrig[4] = {0, 0, 0, 0};
+  static constexpr uint32_t kRefractMs = 250;
+
+  uint32_t now = millis();
+  if (now - lastTrig[idx] < kRefractMs) return false;
+
+  static constexpr int samples = 50;
+  static constexpr int needed = (samples * 60 + 99) / 100;  // ceil(0.60*samples) => 30
 
   int over = 0;
-  int samples = 0;
-  int maxWindow = 0;
-  uint32_t sumWindow = 0;
+  int minV = 4096;
+  int maxV = 0;
+  uint32_t sum = 0;
   int lastRaw = 0;
 
-  uint32_t t0 = millis();
-  while (uint32_t(millis() - t0) < windowMs) {
-    int v = int(analogRead(kMicPins[idx]));
-    sumWindow += uint32_t(v);
-    samples++;
-    if (v > maxWindow) maxWindow = v;
+  for (int k = 0; k < samples; k++) {
+    int v = analogRead(kMicPins[idx]);
     lastRaw = v;
+    sum += (uint32_t)v;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+    if (v > thrAbs) over++;
 
-    // Metrics: collected continuously for debug/telemetry + baseline tracking.
+    // Accumulate metrics so publishMetricsIfDue() remains meaningful.
     MicMetric& mm = metrics_[idx];
-    mm.sum += uint32_t(v);
+    mm.sum += (uint32_t)v;
     mm.samples++;
-    mm.lastRaw = uint16_t(v);
-    if (uint16_t(v) > mm.maxVal) mm.maxVal = uint16_t(v);
-
-    // Trigger: value must be >= absolute threshold (baseline + delta)
-    if (v >= thrAbs) over++;
-
-    delay(2);
+    mm.lastRaw = (uint16_t)v;
+    if ((uint16_t)v > mm.maxVal) mm.maxVal = (uint16_t)v;
   }
 
-  if (samples <= 0) samples = 1;
-  // 60% majority, rounded up.
-  const int needed = (samples * 60 + 99) / 100;
+  bool hit = (over >= needed);
+  if (hit) lastTrig[idx] = now;
 
-  uint16_t avgWindow = uint16_t(sumWindow / uint32_t(samples));
-  lastRaw_[idx] = uint16_t(lastRaw);
-  lastAvgWin_[idx] = avgWindow;
-  lastMaxWin_[idx] = uint16_t(maxWindow);
-  lastOver_[idx] = uint8_t(min(over, 255));
-  lastNeeded_[idx] = uint8_t(min(needed, 255));
-
-  bool hit = over >= needed;
+  // Save last window stats for your existing per-mic telemetry
+  lastRaw_[idx] = (uint16_t)lastRaw;
+  lastAvgWin_[idx] = (uint16_t)(sum / (uint32_t)samples);
+  lastMaxWin_[idx] = (uint16_t)maxV;
+  lastOver_[idx] = (uint8_t)min(over, 255);
+  lastNeeded_[idx] = (uint8_t)needed;
   lastHit_[idx] = hit ? 1 : 0;
 
+  // Log only on hit to avoid spam (you still get 10s telemetry in candles_mic)
   if (hit) {
-    // Detailed trigger debug (always DBG; controllable via <node>/log/level).
+    const int baseEff = effBase_[idx];
     String payload = String("{\"i\":") + idx +
-                     ",\"raw\":" + lastRaw +
-                     ",\"avg_win\":" + avgWindow +
-                     ",\"max_win\":" + maxWindow +
-                     ",\"base_min\":" + base_[idx] +
                      ",\"base_eff\":" + baseEff +
-                     ",\"sat\":" + micSaturated_[idx] +
-                     ",\"thr\":" + delta_[idx] +
+                     ",\"delta\":" + delta_[idx] +
                      ",\"thr_abs\":" + thrAbs +
-                     ",\"win_ms\":" + windowMs +
+                     ",\"samples\":" + samples +
+                     ",\"needed\":" + needed +
                      ",\"over\":" + over +
-                     ",\"need\":" + needed +
-                     ",\"m_avg\":" + metrics_[idx].avg +
-                     ",\"m_base\":" + metrics_[idx].base +
-                     ",\"m_max\":" + metrics_[idx].maxVal +
+                     ",\"avg\":" + lastAvgWin_[idx] +
+                     ",\"min\":" + minV +
+                     ",\"max\":" + maxV +
                      "}";
-    if (ctx_) {
-      log("DBG", "candles_blow", payload);
-    }
+    log("INF", "candles_blow", payload);
   }
+
   return hit;
 }
-
 
 void CandlesRiddle::evaluateSequence() {
   if (progressed_ == 0) return;
