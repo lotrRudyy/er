@@ -41,7 +41,7 @@ private:
   void initState();
   void calibrateBases();
   bool detectBlow(int idx, int thrAbs);
-  void evaluateSequence();
+  void evaluateSequence(uint32_t nowMs);
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
   // Default flicker duration is ~50% longer than before:

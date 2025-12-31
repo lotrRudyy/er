@@ -138,7 +138,7 @@ void CandlesRiddle::tick(uint32_t nowMs) {
       evaluateSequenceIfDue(nowMs);
       // If we have a delayed reset armed (wrong full sequence), execute it after the same
       // timeout used for sequence inactivity.
-      if (resetArmed_ && (nowMs - resetArmMs_ >= kSeqTimeoutMs)) {
+      if (resetArmed_ && (nowMs - resetArmMs_ >= 3000)) {
         resetArmed_ = false;
         log("INF", "SEQUENCE FAIL (delayed) -> reset");
         resetAll();
@@ -351,7 +351,7 @@ void CandlesRiddle::evaluateSequenceIfDue(uint32_t nowMs) {
   // If a delayed reset is armed, don't re-evaluate.
   if (progressed_ >= 4 || resetArmed_) return;
   if (nowMs - lastSeqActivityMs_ < kSeqTimeoutMs) return;
-  evaluateSequence();
+  evaluateSequence(nowMs);
 }
 
 void CandlesRiddle::resetPuzzleState() {
@@ -368,12 +368,22 @@ void CandlesRiddle::resetPuzzleState() {
 }
 
 void CandlesRiddle::flickerRelight(int cycles, int onMs, int offMs) {
+  // Alternate LEDs (0,2) and (1,3) instead of flickering all at once.
+  // This makes the relight feel less like a "hard reset" and more like a wave.
   for (int c = 0; c < cycles; c++) {
-    for (int i = 0; i < 4; i++) setLed(i, true);
+    setLed(0, true);
+    setLed(2, true);
+    setLed(1, false);
+    setLed(3, false);
     delay(onMs);
-    for (int i = 0; i < 4; i++) setLed(i, false);
+
+    setLed(0, false);
+    setLed(2, false);
+    setLed(1, true);
+    setLed(3, true);
     delay(offMs);
   }
+  // Final state: all candles lit.
   for (int i = 0; i < 4; i++) setLed(i, true);
 }
 
