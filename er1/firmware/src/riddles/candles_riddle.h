@@ -44,7 +44,9 @@ private:
   void evaluateSequence();
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
-  void flickerRelight(int cycles = 9, int onMs = 80, int offMs = 60);
+  // Default flicker duration is ~50% longer than before:
+  // 6*(120+90)=1260ms vs 6*(80+60)=840ms.
+  void flickerRelight(int cycles = 6, int onMs = 120, int offMs = 90);
   void resetAll();
   void publishSolvedEvent();
   void publishMetricsIfDue(uint32_t nowMs);
