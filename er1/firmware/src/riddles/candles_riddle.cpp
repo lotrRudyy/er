@@ -129,7 +129,9 @@ void CandlesRiddle::tick(uint32_t nowMs) {
             }
           }
           if (progressed_ >= 4) {
-            evaluateSequence();
+            // IMPORTANT: pass nowMs, not millis(), to avoid unsigned underflow
+            // when computing (nowMs - resetArmMs_) later in this tick.
+            evaluateSequence(nowMs);
           }
         }
       }
@@ -298,7 +300,7 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   return hit;
 }
 
-void CandlesRiddle::evaluateSequence() {
+void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
   if (progressed_ == 0) return;
 
   if (kDevLog) {
@@ -332,7 +334,9 @@ void CandlesRiddle::evaluateSequence() {
       // Full sequence entered but wrong: give players a moment before resetting,
       // matching the normal sequence-timeout wait.
       resetArmed_ = true;
-      resetArmMs_ = millis();
+      // Use the same timestamp domain as tick(nowMs) to avoid unsigned underflow
+      // when checking (nowMs - resetArmMs_) later in the same tick.
+      resetArmMs_ = nowMs;
       log("INF", "SEQUENCE FAIL (full) -> reset pending");
     } else {
       log("INF", "SEQUENCE FAIL -> reset");
