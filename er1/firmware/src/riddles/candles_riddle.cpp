@@ -134,6 +134,13 @@ void CandlesRiddle::tick(uint32_t nowMs) {
         }
       }
       evaluateSequenceIfDue(nowMs);
+      // If we have a delayed reset armed (wrong full sequence), execute it after the same
+      // timeout used for sequence inactivity.
+      if (resetArmed_ && (nowMs - resetArmMs_ >= kSeqTimeoutMs)) {
+        resetArmed_ = false;
+        log("INF", "SEQUENCE FAIL (delayed) -> reset");
+        resetAll();
+      }
     } else {
       publishSolvedEvent();
     }
@@ -316,22 +323,35 @@ void CandlesRiddle::evaluateSequence() {
   }
 
   if (ok) {
+    resetArmed_ = false;
     solved_ = true;
     log("INF", "SEQUENCE OK -> SOLVED");
     publishSolvedEvent();
   } else {
-    log("INF", "SEQUENCE FAIL -> reset");
-    resetAll();
+    if (progressed_ >= 4) {
+      // Full sequence entered but wrong: give players a moment before resetting,
+      // matching the normal sequence-timeout wait.
+      resetArmed_ = true;
+      resetArmMs_ = millis();
+      log("INF", "SEQUENCE FAIL (full) -> reset pending");
+    } else {
+      log("INF", "SEQUENCE FAIL -> reset");
+      resetAll();
+    }
   }
 }
 
 void CandlesRiddle::evaluateSequenceIfDue(uint32_t nowMs) {
   if (solved_ || progressed_ == 0) return;
+  // If we've already collected a full 4-step sequence, evaluation happens immediately.
+  // If a delayed reset is armed, don't re-evaluate.
+  if (progressed_ >= 4 || resetArmed_) return;
   if (nowMs - lastSeqActivityMs_ < kSeqTimeoutMs) return;
   evaluateSequence();
 }
 
 void CandlesRiddle::resetPuzzleState() {
+  resetArmed_ = false;
   for (int i = 0; i < 4; i++) {
     setLed(i, true);
     progress_[i] = -1;
@@ -354,6 +374,7 @@ void CandlesRiddle::flickerRelight(int cycles, int onMs, int offMs) {
 }
 
 void CandlesRiddle::resetAll() {
+  resetArmed_ = false;
   flickerRelight();
   resetPuzzleState();
   log("INF", "Reset (relight all)");

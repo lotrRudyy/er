@@ -44,7 +44,7 @@ private:
   void evaluateSequence();
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
-  void flickerRelight(int cycles = 6, int onMs = 80, int offMs = 60);
+  void flickerRelight(int cycles = 9, int onMs = 80, int offMs = 60);
   void resetAll();
   void publishSolvedEvent();
   void publishMetricsIfDue(uint32_t nowMs);
@@ -60,6 +60,10 @@ private:
   uint32_t lastSeqActivityMs_ = 0;
   bool solved_ = false;
   bool solvedEventSent_ = false;
+  // When all 4 candles are blown but sequence is wrong, we delay the reset
+  // to match the normal sequence timeout behavior.
+  bool resetArmed_ = false;
+  uint32_t resetArmMs_ = 0;
   MicMetric metrics_[4]{};
   uint32_t lastMetricMs_ = 0;
   // Last scan window stats per mic (updated whenever detectBlow() runs)
