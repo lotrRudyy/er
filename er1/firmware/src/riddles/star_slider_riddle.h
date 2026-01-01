@@ -23,9 +23,10 @@ private:
   static constexpr uint32_t kPollIntervalMs = 150;      // kept (unused now; button-only evaluation)
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint8_t kUidExpected[kReaderCount][4] = {
-      {0xDE, 0xAD, 0xBE, 0x01},
-      {0xDE, 0xAD, 0xBE, 0x02},
-      {0xDE, 0xAD, 0xBE, 0x03}};
+    {0x4A, 0x72, 0x4E, 0xD2}, // r0
+    {0x9A, 0x71, 0x4C, 0xD2}, // r1
+    {0x4A, 0x8F, 0x4E, 0xD2}  // r2
+  };
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;

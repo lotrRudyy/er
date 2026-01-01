@@ -256,7 +256,7 @@ void ChessRiddle::publishSolvedEvent() {
     publish(topics.evt.c_str(), "riddle_solved", 1, payload);
   }
 
-  // 2) Directly command maglock to open r3 (legacy supported command topic)
+  // 2) Directly command maglock to open r3
   publish("maglock/lock/r3/cmd", "OPEN", false);
 }
 

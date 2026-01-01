@@ -17,7 +17,6 @@ public:
   void handleCandlesEvent(const String& payload);
 
 private:
-  static constexpr uint32_t kHbIntervalMs = 5000;
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint32_t kStepMs = 4000;
   static constexpr uint32_t kPauseMs = 15000;

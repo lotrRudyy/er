@@ -40,10 +40,14 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
 
   for (uint8_t i = 0; i < kReaderCount; i++) {
     readers_[i].PCD_Init();
+
+    // 🔥 Max antenna gain (largest read radius)
+    readers_[i].PCD_SetAntennaGain(MFRC522::RxGain_max);
+
     tagValid_[i] = false;
     tagSize_[i] = 0;
-    tagUid_[i][0] = tagUid_[i][1] = tagUid_[i][2] = tagUid_[i][3] = 0;
   }
+
 
   bool hasStoredSolve = prefs_ && prefs_->isKey("solved");
   solvedFlag_ = prefs_ ? prefs_->getBool("solved", false) : false;
@@ -237,6 +241,8 @@ void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (topics.evt.length() > 0) {
     publish(topics.evt.c_str(), "riddle_solved", 1, payload);
   }
+  // Directly command maglock to open the slider lock
+  publish("maglock/lock/slider/cmd", "OPEN");
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {

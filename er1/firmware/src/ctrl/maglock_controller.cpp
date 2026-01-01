@@ -102,27 +102,10 @@ void MaglockController::onGameModeMessage(const String& msg) {
   }
 }
 
-void MaglockController::onKnockingEvent(const String& msg) {
-  if (msg.indexOf("\"type\":\"riddle_solved\"") < 0 || msg.indexOf("\"id\":\"knocking\"") < 0) return;
-  LockState* lk = findLockById("knocking");
-  if (!lk) {
-    log("ERR", "Knocking SOLVED event but lock 'knocking' not found");
-    return;
-  }
-  log("INF", "Knocking SOLVED -> OPEN knocking lock");
-  handleLockCommand(*lk, "OPEN");
-}
 
 void MaglockController::onLockCommandTopic(const char* topic, const String& payload) {
-  // DEPRECATION: Legacy maglock/lock/+/cmd topic is supported for backward compatibility.
-  // Rate-limit the warning to avoid log spam (once per 60 seconds).
-  uint32_t nowMs = millis();
-  if (nowMs - lastLegacyCmdWrnMs_ >= 60000) {
-    lastLegacyCmdWrnMs_ = nowMs;
-    String topicStr(topic ? topic : "");
-    log("WRN", String("legacy_cmd_used topic=") + topicStr +
-               " (migrate to maglock/cmd with PING, UPDATE, REBOOT)");
-  }
+  // Canonical lock control interface:
+  //   maglock/lock/<id>/cmd  payload: OPEN | CLOSE
   handleLockCommandTopicInternal(String(topic ? topic : ""), payload);
 }
 

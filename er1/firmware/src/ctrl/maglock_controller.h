@@ -12,7 +12,6 @@ public:
   bool onCmd(const char* cmd, const char* payload);
 
   void onGameModeMessage(const String& msg);
-  void onKnockingEvent(const String& msg);
   void onLockCommandTopic(const char* topic, const String& payload);
 
   uint32_t errorCount() const { return errorCount_; }
@@ -81,7 +80,6 @@ private:
   MaglockDriver driver_;
   GameMode gameMode_ = GameMode::Off;
   uint32_t lastMetricMs_ = 0;
-  uint32_t lastLegacyCmdWrnMs_ = 0;  // Rate limit for legacy command deprecation warning
   uint32_t errorCount_ = 0;
   String topicDbg_;
 };

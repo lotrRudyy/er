@@ -302,6 +302,8 @@ void KnockingRiddle::publishSolvedEvent() {
   if (topics.evt.length() > 0) {
     publish(topics.evt.c_str(), "riddle_solved", 1, data);
   }
+  // Directly command maglock to open the knocking lock
+  publish("maglock/lock/knocking/cmd", "OPEN");
   publishState();
 }
 

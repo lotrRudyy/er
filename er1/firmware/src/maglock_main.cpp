@@ -24,7 +24,6 @@ static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
 static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_KNOCK_EVENT = "knocking/evt";
 static const char* TOPIC_LOCK_CMD = "maglock/lock/+/cmd";
 
 // ======================= OTA CONFIG ==========================
@@ -63,11 +62,6 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   if (module) module->onGameModeMessage(payload);
 }
 
-static void knockingSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<MaglockController*>(user);
-  if (module) module->onKnockingEvent(payload);
-}
 
 static void lockCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
@@ -124,7 +118,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &maglock);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &maglock);
-  nodeCore.registerSubscription(TOPIC_KNOCK_EVENT, knockingSubscription, &maglock);
   nodeCore.registerSubscription(TOPIC_LOCK_CMD, lockCommandSubscription, &maglock);
 
   NodeContext& ctx = nodeCore.context();
