@@ -16,7 +16,7 @@ public:
 
 private:
   static constexpr uint8_t kReaderCount = 3;
-  static constexpr uint8_t kRc522RstPin = 22;
+  static constexpr uint8_t kRc522RstPins[kReaderCount] = {26, 32, 33};
   static constexpr uint8_t kRc522SsPins[kReaderCount] = {5, 17, 16};
   static constexpr uint8_t kButtonPin = 25;
   static constexpr uint32_t kBtnDebounceMs = 50;
@@ -46,9 +46,10 @@ private:
   Core::NodeContext* ctx_ = nullptr;
   Preferences* prefs_ = nullptr;
   MFRC522 readers_[kReaderCount] = {
-      MFRC522(kRc522SsPins[0], kRc522RstPin),
-      MFRC522(kRc522SsPins[1], kRc522RstPin),
-      MFRC522(kRc522SsPins[2], kRc522RstPin)};
+    MFRC522(kRc522SsPins[0], kRc522RstPins[0]),
+    MFRC522(kRc522SsPins[1], kRc522RstPins[1]),
+    MFRC522(kRc522SsPins[2], kRc522RstPins[2])};
+
 
   bool tagValid_[kReaderCount] = {false, false, false};
   byte tagUid_[kReaderCount][4] = {{0}};

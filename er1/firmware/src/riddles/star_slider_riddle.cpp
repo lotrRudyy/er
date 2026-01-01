@@ -20,6 +20,18 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   pinMode(ETH_CS, OUTPUT);
   digitalWrite(ETH_CS, HIGH);
 
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    pinMode(kRc522RstPins[i], OUTPUT);
+    digitalWrite(kRc522RstPins[i], LOW);
+  }
+
+  delay(50);
+
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    digitalWrite(kRc522RstPins[i], HIGH);
+  }
+  delay(50);
+
   // Ensure all RC522 CS pins are outputs and deselected.
   for (uint8_t i = 0; i < kReaderCount; i++) {
     pinMode(kRc522SsPins[i], OUTPUT);
