@@ -23,6 +23,7 @@ private:
   void publishSolvedEvent();
   void openLock() const;
   void resetProgress(const char* reason);
+  void logCurrentSequence() const;
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool equalsCmd(const char* cmd, const char* ref) const;
@@ -46,4 +47,8 @@ private:
   static constexpr const char* const kSequence[kSequenceLen] = {
       "C4", "D4", "E4", "F4", "G4", "F4", "E4", "D4", "C4",
   };
+
+  static constexpr size_t kNoteMaxLen = 8;  // incl null terminator
+  char played_[kSequenceLen][kNoteMaxLen] = {{0}};
+  size_t playedLen_ = 0;
 };

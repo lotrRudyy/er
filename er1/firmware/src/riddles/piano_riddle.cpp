@@ -1,5 +1,6 @@
 #include "piano_riddle.h"
 
+#include <cstring>
 #include <strings.h>
 
 namespace {
@@ -165,7 +166,8 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   data += solved_ ? "true" : "false";
   data += "}";
 
-  log("INF", compat, data);
+  // Log accepted results at INF, rejected only at DBG.
+  log(isAccepted ? "INF" : "DBG", compat, data);
 
   if (!ctx_ || !moduleEnabled_ || !ctx_->enabled() || solved_) return;
   if (!isAccepted) return;
@@ -175,6 +177,11 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
   const char* expected = kSequence[seqPos_];
   if (expected && predSafe[0] != '\0' && strcasecmp(predSafe, expected) == 0) {
+    if (playedLen_ < kSequenceLen) {
+      strncpy(played_[playedLen_], predSafe, kNoteMaxLen - 1);
+      played_[playedLen_][kNoteMaxLen - 1] = '\0';
+      playedLen_++;
+    }
     seqPos_++;
     if (seqPos_ >= kSequenceLen) {
       solved_ = true;
@@ -190,6 +197,9 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     } else {
       publishState();
     }
+
+    // After each accepted note, emit the currently accepted sequence (both INF and DBG).
+    logCurrentSequence();
     return;
   }
 
@@ -197,8 +207,14 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   if (predSafe[0] != '\0' && strcasecmp(predSafe, kSequence[0]) == 0) {
     seqPos_ = 1;
     lastAcceptedMs_ = now;
+    strncpy(played_[0], predSafe, kNoteMaxLen - 1);
+    played_[0][kNoteMaxLen - 1] = '\0';
+    playedLen_ = 1;
   }
   publishState();
+
+  // After each accepted note, emit the currently accepted sequence (both INF and DBG).
+  logCurrentSequence();
 }
 
 void PianoRiddle::publishState() {
@@ -234,10 +250,26 @@ void PianoRiddle::openLock() const {
 void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;
   lastAcceptedMs_ = 0;
+  playedLen_ = 0;
+  memset(played_, 0, sizeof(played_));
   if (reason) {
     String data = String("{\"reason\":\"") + reason + "\"}";
     log("DBG", "PIANO_PROGRESS_RESET", data);
   }
+}
+
+void PianoRiddle::logCurrentSequence() const {
+  if (!ctx_) return;
+
+  String seq;
+  for (size_t i = 0; i < playedLen_; ++i) {
+    if (i > 0) seq += ",";
+    seq += played_[i];
+  }
+
+  String data = String("{\"seq\":\"") + seq + "\",\"progress\":" + String(seqPos_) + "}";
+  log("INF", "PIANO_SEQ", data);
+  log("DBG", "PIANO_SEQ", data);
 }
 
 bool PianoRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
@@ -253,13 +285,15 @@ bool PianoRiddle::publish(const char* topic, const String& payload, bool retaine
 
 void PianoRiddle::log(const char* level, const String& msg) const {
   if (ctx_) {
-    ctx_->log(level, msg, withSrc("", srcId_));
+    String tagged = String("[") + srcId_ + "] " + msg;
+    ctx_->log(level, tagged, withSrc("", srcId_));
   }
 }
 
 void PianoRiddle::log(const char* level, const String& msg, const String& dataJson) const {
   if (ctx_) {
-    ctx_->log(level, msg, withSrc(dataJson, srcId_));
+    String tagged = String("[") + srcId_ + "] " + msg;
+    ctx_->log(level, tagged, withSrc(dataJson, srcId_));
   }
 }
 
