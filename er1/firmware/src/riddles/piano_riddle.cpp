@@ -24,7 +24,7 @@ String withSrc(const String& dataJson, const String& src) {
   }
   return String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
 }
-} // namespace
+}  // namespace
 
 constexpr const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen];
 
@@ -32,14 +32,15 @@ extern "C" void piano_detector_on_result(int accepted, const char* pred, float s
                                          float hps_ratio, int harmonic_ok, const char* t1, float t1s,
                                          const char* t2, float t2s, const char* t3, float t3s) {
   if (gPianoRiddle) {
-    gPianoRiddle->handleDetectorResult(accepted, pred, s1, s2, margin, hps_ratio, harmonic_ok, t1, t1s, t2, t2s,
-                                       t3, t3s);
+    gPianoRiddle->handleDetectorResult(accepted, pred, s1, s2, margin, hps_ratio, harmonic_ok,
+                                       t1, t1s, t2, t2s, t3, t3s);
   }
 }
 
 void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   ctx_ = &ctx;
   prefs_ = &ctx.prefs();
+
   srcId_ = (srcId && srcId[0]) ? srcId : "piano";
   topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
 
@@ -52,14 +53,16 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
     detectorStarted_ = true;
   }
 
+  // Start fresh progress on boot (no timeout tracking exists anymore)
   resetProgress("boot");
   publishState();
 }
 
-void PianoRiddle::tick(uint32_t /*nowMs*/) {
+void PianoRiddle::tick(uint32_t nowMs) {
   if (detectorStarted_) {
     piano_detector_loop_once();
   }
+  (void)nowMs;
   // NO TIMEOUT. Ever.
 }
 
@@ -131,17 +134,15 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
   log("INF", compat, data);
 
+  // Still allow replay even if already solved (so it can re-open lock).
   if (!ctx_ || !moduleEnabled_ || !ctx_->enabled()) return;
   if (!isAccepted) return;
   if (predSafe[0] == '\0') return;
 
-  onAcceptedNote(predSafe);
-}
+  const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 
-void PianoRiddle::onAcceptedNote(const char* predSafe) {
-  // Expected note is kSequence[seqPos_] (if not complete yet)
-  if (seqPos_ < kSequenceLen && strcasecmp(predSafe, kSequence[seqPos_]) == 0) {
-    // correct next note -> append + advance
+  // Correct next note -> append and advance
+  if (expected && strcasecmp(predSafe, expected) == 0) {
     if (playedLen_ < kSequenceLen) {
       strncpy(played_[playedLen_], predSafe, kNoteMaxLen - 1);
       played_[playedLen_][kNoteMaxLen - 1] = '\0';
@@ -149,36 +150,40 @@ void PianoRiddle::onAcceptedNote(const char* predSafe) {
     }
     seqPos_++;
 
+    // Emit sequence after every accepted note
     logCurrentSequence();
     publishState();
 
     if (seqPos_ >= kSequenceLen) {
+      // Always open lock on full match (even if already solved)
       openLock();
 
+      // Persist solved once
       if (!solved_) {
         solved_ = true;
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
+      // Publish solved event once
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
       }
 
-      // After solve, reset progress completely (ready to play again)
+      // Rearm for replay
       resetProgress("solved");
       publishState();
     }
     return;
   }
 
-  // mismatch: reset completely, then start from this note IF it can start the sequence
+  // Mismatch: reset completely, then if this note can start the sequence,
+  // start with it (progress=1).
   resetProgress("mismatch");
-
   if (strcasecmp(predSafe, kSequence[0]) == 0) {
+    seqPos_ = 1;
     strncpy(played_[0], predSafe, kNoteMaxLen - 1);
     played_[0][kNoteMaxLen - 1] = '\0';
     playedLen_ = 1;
-    seqPos_ = 1;
   }
 
   logCurrentSequence();
@@ -233,6 +238,7 @@ void PianoRiddle::logCurrentSequence() const {
     if (i > 0) seq += ",";
     seq += played_[i];
   }
+
   String data = String("{\"seq\":\"") + seq + "\",\"progress\":" + String(seqPos_) + "}";
   log("INF", "PIANO_SEQ", data);
   log("DBG", "PIANO_SEQ", data);
