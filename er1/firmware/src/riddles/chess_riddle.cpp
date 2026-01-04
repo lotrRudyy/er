@@ -392,6 +392,11 @@ void ChessRiddle::log(const char* level, const String& msg) const {
   ctx_->log(level, msg);
 }
 
+void ChessRiddle::log(const char* level, const String& msg, const String& dataJson) const {
+  if (!ctx_) return;
+  ctx_->log(level, msg, dataJson);
+}
+
 bool ChessRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
                           const char* id, bool retained) const {
   if (!ctx_) return false;

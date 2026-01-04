@@ -65,6 +65,7 @@ $er1Commands = [ordered]@{
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
     "status" = "One-shot health summary"
     "doctor" = "Collect diagnostic bundle to logs/"
+    "reset"  = "Reset riddles (all or one): er1 reset all | er1 reset <riddle>"
     "push"   = "Git add/commit/push from repo root"
     "commit" = "Legacy alias for 'er1 push'"
 }
@@ -455,6 +456,84 @@ function Invoke-Er1LogExtract {
 # MAIN DISPATCHER
 # =========================================================
 
+
+
+function Get-Er1RiddleResetMap {
+    # Key = riddle name you type after `er1 reset <name>`
+    # Value = @{ dev = "<mqtt device>"; cmd = "<command>" }
+    return @{
+        "images"      = @{ dev = "images_piano"; cmd = "RESET_IMAGES" }
+        "piano"       = @{ dev = "images_piano"; cmd = "RESET_PIANO" }
+        "chess"       = @{ dev = "chess";        cmd = "RESET_CHESS" }
+        "knocking"    = @{ dev = "knocking";     cmd = "RESET_KNOCKING" }
+        "candles"     = @{ dev = "candles";      cmd = "RESET_CANDLES" }
+        "star_sky"    = @{ dev = "star_sky";     cmd = "RESET_STAR_SKY" }
+        "starsky"     = @{ dev = "star_sky";     cmd = "RESET_STAR_SKY" }
+        "star_slider" = @{ dev = "star_slider";  cmd = "RESET_STAR_SLIDER" }
+        "starslider"  = @{ dev = "star_slider";  cmd = "RESET_STAR_SLIDER" }
+        "stop_timer"  = @{ dev = "stop_timer";   cmd = "RESET_STOP_TIMER" }
+        "stoptimer"   = @{ dev = "stop_timer";   cmd = "RESET_STOP_TIMER" }
+    }
+}
+
+function Invoke-Er1ResetRiddle {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Name
+    )
+
+    $nameKey = $Name.ToLowerInvariant()
+    $map = Get-Er1RiddleResetMap
+
+    if (-not $map.ContainsKey($nameKey)) {
+        $valid = ($map.Keys | Sort-Object) -join ", "
+        throw "Unknown riddle '$Name'. Valid: $valid"
+    }
+
+    $a = $map[$nameKey]
+    $topic = "$($a.dev)/cmd"
+    $msg   = $a.cmd
+
+    $prefix = "[er1 reset $nameKey]"
+    Write-Host "$prefix -> $topic  $msg" -ForegroundColor Cyan
+
+    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$topic' -m '$msg'"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to publish $msg to $topic (exit $LASTEXITCODE)."
+    }
+
+    Write-Host "$prefix done." -ForegroundColor Green
+}
+
+function Invoke-Er1ResetRiddles {
+    $prefix = "[er1 reset all]"
+
+    # Order matters; keep it consistent and simple.
+    $actions = @(
+        @{ dev = "images_piano"; cmd = "RESET_IMAGES" },
+        @{ dev = "images_piano"; cmd = "RESET_PIANO"  },
+        @{ dev = "chess";        cmd = "RESET_CHESS"  },
+        @{ dev = "knocking";     cmd = "RESET_KNOCKING" },
+        @{ dev = "candles";      cmd = "RESET_CANDLES" },
+        @{ dev = "star_sky";     cmd = "RESET_STAR_SKY" },
+        @{ dev = "star_slider";  cmd = "RESET_STAR_SLIDER" },
+        @{ dev = "stop_timer";   cmd = "RESET_STOP_TIMER" }
+    )
+
+    foreach ($a in $actions) {
+        $topic = "$($a.dev)/cmd"
+        $msg   = $a.cmd
+        Write-Host "$prefix -> $topic  $msg" -ForegroundColor Cyan
+        ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$topic' -m '$msg'"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to publish $msg to $topic (exit $LASTEXITCODE)."
+        }
+        Start-Sleep -Milliseconds 120
+    }
+
+    Write-Host "$prefix done." -ForegroundColor Green
+}
+
 function er1 {
     param(
         [Parameter(Position=0)]
@@ -490,6 +569,9 @@ function er1 {
             Write-Host "  er1 status"
             Write-Host "  er1 doctor"
 
+
+            Write-Host \"`nReset examples:\" -ForegroundColor Cyan
+            Write-Host \"  er1 reset all\"
             Write-Host "`nMQTT examples:" -ForegroundColor Cyan
             Write-Host "  er1 mqtt status"
             Write-Host "  er1 mqtt restart"
@@ -523,6 +605,21 @@ function er1 {
 
         "doctor" {
             Invoke-Er1Doctor
+            return
+        }
+
+        "reset" {
+            if (-not $cmdArgs -or $cmdArgs.Count -lt 1) {
+                throw "Usage: er1 reset all | er1 reset <riddle> (e.g. er1 reset chess)"
+            }
+
+            $target = $cmdArgs[0].ToLowerInvariant()
+            if ($target -eq "all" -or $target -eq "riddles") {
+                Invoke-Er1ResetRiddles
+                return
+            }
+
+            Invoke-Er1ResetRiddle -Name $target
             return
         }
 

@@ -43,6 +43,7 @@ private:
 
   // Logging helpers
   void log(const char* level, const String& msg) const;
+  void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
                const char* id = nullptr, bool retained = false) const;
   bool publish(const char* topic, const String& payload, bool retained = false) const;
