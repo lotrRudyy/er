@@ -38,8 +38,8 @@ static constexpr float RMS_EMA_ALPHA_IDLE = 0.02f;
 static constexpr float RMS_MULT = 4.0f;
 static constexpr float RMS_ADD  = 0.002f;
 
-static constexpr int   CAND_DEBOUNCE_MS = 160;      // debounce candidate triggers
-static constexpr uint32_t NOTE_DEBOUNCE_MS = 150;   // debounce only after ACCEPTED notes
+static constexpr int   CAND_DEBOUNCE_MS = 50;      // debounce candidate triggers
+static constexpr uint32_t NOTE_DEBOUNCE_MS = 100;   // debounce only after ACCEPTED notes
 
 // QC onset (match qc_captures.py defaults)
 static constexpr float QC_ONSET_F_LO = 80.0f;
