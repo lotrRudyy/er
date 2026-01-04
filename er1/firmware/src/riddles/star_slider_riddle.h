@@ -41,8 +41,8 @@ private:
   void evaluateSolveAttempt();
   void handleButton(uint32_t nowMs);
   void publishSolvedEvent(uint32_t attemptIdx);
-  void publishState();
   void resetState(const char* reason);
+  void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
   Core::NodeContext* ctx_ = nullptr;
