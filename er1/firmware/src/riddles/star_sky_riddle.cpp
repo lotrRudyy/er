@@ -32,6 +32,19 @@ void StarSkyRiddle::tick(uint32_t nowMs) {
 }
 
 bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
+  if (cmd && String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
+    if (!candlesSolved_) {
+      candlesSolved_ = true;
+      persistState();
+      cycleStartMs_ = millis();
+      log("INF", "CANDLES_SOLVED CMD received, enabling pattern");
+      publishState();
+    } else {
+      log("DBG", "CANDLES_SOLVED CMD (already enabled)");
+    }
+    return true;
+  }
+
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
     message += " ";
