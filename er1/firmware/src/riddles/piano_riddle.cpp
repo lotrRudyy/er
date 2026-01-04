@@ -82,7 +82,7 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
     publishState();
     return true;
   }
-  if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET")) {
+  if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET_PIANO") || equalsCmd(cmd, "RESET")) {
     solved_ = false;
     solvedPublished_ = false;
     if (prefs_) {
@@ -166,8 +166,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   data += solved_ ? "true" : "false";
   data += "}";
 
-  // Log accepted results at INF, rejected only at DBG.
-  log(isAccepted ? "INF" : "DBG", compat, data);
+  log("INF", compat, data);
 
   if (!ctx_ || !moduleEnabled_ || !ctx_->enabled() || solved_) return;
   if (!isAccepted) return;

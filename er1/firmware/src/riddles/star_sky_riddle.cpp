@@ -1,4 +1,5 @@
 #include "star_sky_riddle.h"
+#include <cstring>
 
 namespace {
 constexpr uint32_t kLedcFreq = 1000;
@@ -32,6 +33,17 @@ void StarSkyRiddle::tick(uint32_t nowMs) {
 }
 
 bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
+  if (cmd && strcasecmp(cmd, "RESET_STAR_SKY") == 0) {
+    bool wasSolved = candlesSolved_;
+    candlesSolved_ = false;
+    persistState();
+    cycleStartMs_ = millis();
+    String data = String("{\"src\":\"reset_star_sky\",\"was_on\":") + (wasSolved ? "1" : "0") + "}";
+    log("INF", "STAR_SKY_STATE_RESET", data);
+    publishState();
+    return true;
+  }
+
   if (cmd && String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
     if (!candlesSolved_) {
       candlesSolved_ = true;
@@ -44,7 +56,7 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
     }
     return true;
   }
-
+  
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
     message += " ";

@@ -59,6 +59,7 @@ private:
   void evaluatePattern();
   void publishSolvedEvent();
   void publishState();
+  void resetState(const char* reason);
 
   // Event logging format (FULL TABLE)
   static const char* expectedLabelForReader(uint8_t i);

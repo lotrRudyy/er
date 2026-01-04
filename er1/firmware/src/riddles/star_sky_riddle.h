@@ -18,8 +18,8 @@ public:
 
 private:
   static constexpr uint32_t kMetricIntervalMs = 10000;
-  static constexpr uint32_t kStepMs = 7000;
-  static constexpr uint32_t kPauseMs = 5000;
+  static constexpr uint32_t kStepMs = 4000;
+  static constexpr uint32_t kPauseMs = 15000;
   static constexpr uint32_t kCycleMs = kStepMs * 3 + kPauseMs;
   static constexpr int kLedPins[4] = {26, 25, 19, 32};
 

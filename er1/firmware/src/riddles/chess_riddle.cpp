@@ -1,4 +1,5 @@
 #include "chess_riddle.h"
+#include <cstring>
 
 // W5500 CS pin used by core ethernet bring-up.
 // Keep it HIGH whenever touching RFID readers.
@@ -61,6 +62,12 @@ void ChessRiddle::tick(uint32_t nowMs) {
 }
 
 bool ChessRiddle::onCmd(const char* cmd, const char* payload) {
+  if (!cmd) return false;
+  if (strcasecmp(cmd, "RESET_CHESS") == 0) {
+    resetState("reset_chess");
+    publishState();
+    return true;
+  }
   // Keep same behavior: log unknown commands, but don't crash.
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
@@ -258,6 +265,22 @@ void ChessRiddle::publishSolvedEvent() {
 
   // 2) Directly command maglock to open r3
   publish("maglock/lock/r3/cmd", "OPEN", false);
+}
+
+void ChessRiddle::resetState(const char* reason) {
+  bool wasSolved = (riddleState_ == RiddleState::Solved);
+  for (int i = 0; i < kReaderCount; i++) {
+    readerUid_[i] = "NONE";
+    lastSeenMs_[i] = 0;
+  }
+  currentReader_ = 0;
+  perReaderMs_ = kPollSlowMs;
+  riddleState_ = RiddleState::Idle;
+  lastSolvedMs_ = 0;
+  solvedCount_ = 0;
+  const char* src = (reason && reason[0]) ? reason : "reset";
+  String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
+  log("INF", "CHESS_STATE_RESET", data);
 }
 
 void ChessRiddle::publishState() {

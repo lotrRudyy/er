@@ -19,9 +19,13 @@ void StopTimerRiddle::tick(uint32_t nowMs) {
   (void)nowMs;
 }
 
-bool StopTimerRiddle::onCmd(const char* cmd, const char* payload) {
-  (void)cmd;
-  (void)payload;
+bool StopTimerRiddle::onCmd(const char* cmd, const char* /*payload*/) {
+  if (!cmd) return false;
+  if (strcasecmp(cmd, "RESET_STOP_TIMER") == 0) {
+    log("INF", "STOP_TIMER_STATE_RESET", "{\"src\":\"reset_stop_timer\"}");
+    publishState("idle");
+    return true;
+  }
   return false;
 }
 

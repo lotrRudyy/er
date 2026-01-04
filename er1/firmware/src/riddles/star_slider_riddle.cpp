@@ -69,9 +69,13 @@ void StarSliderRiddle::tick(uint32_t nowMs) {
   publishMetricsIfDue(nowMs);
 }
 
-bool StarSliderRiddle::onCmd(const char* cmd, const char* payload) {
-  (void)cmd;
-  (void)payload;
+bool StarSliderRiddle::onCmd(const char* cmd, const char* /*payload*/) {
+  if (!cmd) return false;
+  if (strcasecmp(cmd, "RESET_STAR_SLIDER") == 0) {
+    resetState("reset_star_slider");
+    publishState();
+    return true;
+  }
   return false;
 }
 
@@ -258,6 +262,18 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
                    ",\"success\":" + String(solveSuccess_) +
                    "}";
   log("DBG", "star_slider_metrics", payload);
+}
+
+void StarSliderRiddle::resetState(const char* reason) {
+  bool wasSolved = solved_;
+  solved_ = false;
+  solvedPublished_ = false;
+  if (prefs_) {
+    prefs_->putBool(kPrefsSolvedKey, false);
+  }
+  const char* src = (reason && reason[0]) ? reason : "reset";
+  String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
+  log("INF", "STAR_SLIDER_STATE_RESET", data);
 }
 
 void StarSliderRiddle::publishState() {
