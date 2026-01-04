@@ -62,8 +62,9 @@ void PianoRiddle::tick(uint32_t nowMs) {
   if (detectorStarted_) {
     piano_detector_loop_once();
   }
-  (void)nowMs;
-  // NO TIMEOUT. Ever.
+
+  if (!ctx_) return;
+  if (solved_) return;
 }
 
 bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
