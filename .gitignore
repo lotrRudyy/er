@@ -54,3 +54,7 @@ out/
 er1/firmware/.vscode/c_cpp_properties.json
 er1/firmware/.vscode/launch.json
 er1/tools/compile_commands.json
+
+#node
+node_modules/
+npm-debug.log
