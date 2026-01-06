@@ -49,6 +49,7 @@ private:
   void flickerRelight(int cycles = 6, int onMs = 120, int offMs = 90);
   void resetAll();
   void publishSolvedEvent();
+  void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
   Core::NodeContext* ctx_ = nullptr;

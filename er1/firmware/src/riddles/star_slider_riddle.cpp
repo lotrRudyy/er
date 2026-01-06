@@ -70,9 +70,46 @@ void StarSliderRiddle::tick(uint32_t nowMs) {
 }
 
 bool StarSliderRiddle::onCmd(const char* cmd, const char* payload) {
-  (void)cmd;
   (void)payload;
+  if (!cmd) return false;
+
+  // Images-style dedicated reset command (case-insensitive).
+  if (strcasecmp(cmd, "RESET_STAR_SLIDER") == 0) {
+    resetState("reset_star_slider");
+    publishState();
+    return true;
+  }
+
   return false;
+}
+
+void StarSliderRiddle::resetState(const char* reason) {
+  const bool wasSolved = solvedFlag_;
+
+  // Reset puzzle state.
+  solvedFlag_ = false;
+  solveAttempts_ = 0;
+  solveSuccess_ = 0;
+
+  // Clear last read snapshot.
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    tagValid_[i] = false;
+    tagSize_[i] = 0;
+    tagUid_[i][0] = tagUid_[i][1] = tagUid_[i][2] = tagUid_[i][3] = 0;
+  }
+
+  // Reset button edge state.
+  btnPrevState_ = digitalRead(kButtonPin);
+  btnWasPressed_ = false;
+  btnLastChangeMs_ = millis();
+
+  if (prefs_) {
+    prefs_->putBool("solved", false);
+  }
+
+  const char* src = (reason && reason[0]) ? reason : "reset";
+  String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
+  log("INF", "STAR_SLIDER_STATE_RESET", data);
 }
 
 void StarSliderRiddle::log(const char* level, const String& msg) const {

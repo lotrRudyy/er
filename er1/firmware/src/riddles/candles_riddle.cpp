@@ -1,5 +1,7 @@
 #include "candles_riddle.h"
 
+#include <cstring>
+
 void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
@@ -26,6 +28,7 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   delay(1500);
   calibrateBases();
   lastMetricMs_ = millis();
+  publishState();
 }
 
 void CandlesRiddle::calibrateBases() {
@@ -153,8 +156,18 @@ void CandlesRiddle::tick(uint32_t nowMs) {
 bool CandlesRiddle::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
 
-  // NOTE: Core normalizes commands to uppercase before calling onCmd().
-  // Keep comparisons uppercase.
+  // Images-style dedicated reset command (case-insensitive).
+  if (strcasecmp(cmd, "RESET_CANDLES") == 0) {
+    bool wasSolved = solved_;
+    resetAll();
+    String data = String("{\"src\":\"reset_candles\",\"was_solved\":") + (wasSolved ? "1" : "0") + "}";
+    log("INF", "CANDLES_STATE_RESET", data);
+    publishState();
+    return true;
+  }
+
+  // NOTE: Core may normalize commands to uppercase before calling onCmd().
+  // Keep legacy comparisons uppercase.
   if (strcmp(cmd, "RESET") == 0 || strcmp(cmd, "RELIGHT") == 0) {
     resetAll();
     log("INF", "CMD RESET -> relight+reset");
@@ -454,4 +467,19 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
     mm.samples = 0;
     mm.maxVal = 0;
   }
+}
+
+
+void CandlesRiddle::publishState() {
+  if (!ctx_) return;
+  const auto& topics = ctx_->config().topics;
+  if (topics.state.length() == 0) return;
+  String data;
+  data.reserve(200);
+  data = String("{\"solved\":") + (solved_ ? "1" : "0") +
+         ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
+         ",\"lit\":[" + (lit_[0] ? "1" : "0") + "," + (lit_[1] ? "1" : "0") + "," + (lit_[2] ? "1" : "0") + "," + (lit_[3] ? "1" : "0") + "]" +
+         ",\"progressed\":" + progressed_ +
+         "}";
+  publish(topics.state.c_str(), "state", 1, data, nullptr, true);
 }

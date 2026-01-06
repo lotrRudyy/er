@@ -64,6 +64,7 @@ private:
   void resetSequence();
   void publishSolvedEvent();
   void publishState();
+  void resetState(const char* reason);
 
   Core::NodeContext* ctx_ = nullptr;
   HardwareSerial* dfSerial_ = nullptr;

@@ -1,4 +1,5 @@
 #include "knocking_riddle.h"
+#include <cstring>
 
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
@@ -47,7 +48,13 @@ void KnockingRiddle::tick(uint32_t nowMs) {
   serviceSound(nowMs);
 }
 
-bool KnockingRiddle::onCmd(const char* /*cmd*/, const char* /*payload*/) {
+bool KnockingRiddle::onCmd(const char* cmd, const char* /*payload*/) {
+  if (!cmd) return false;
+  if (strcasecmp(cmd, "RESET_KNOCKING") == 0) {
+    resetState("reset_knocking");
+    publishState();
+    return true;
+  }
   return false;
 }
 
@@ -305,6 +312,26 @@ void KnockingRiddle::publishSolvedEvent() {
   // Directly command maglock to open the knocking lock
   publish("maglock/lock/knocking/cmd", "OPEN");
   publishState();
+}
+
+void KnockingRiddle::resetState(const char* reason) {
+  bool wasSolved = solved_;
+  knockWindowActive_ = false;
+  lastKnockMsGlobal_ = 0;
+  seqLen_ = 0;
+  lastSeqActivityMs_ = 0;
+  soundHead_ = soundTail_ = 0;
+  soundPlaying_ = false;
+  lastSoundStartMs_ = 0;
+  currentTrack_ = 0;
+  solved_ = false;
+  // Stop any DFPlayer audio immediately on reset.
+  if (dfOk_) {
+    dfPlayer_.stop();
+  }
+  const char* src = (reason && reason[0]) ? reason : "reset";
+  String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
+  log("INF", "KNOCKING_STATE_RESET", data);
 }
 
 void KnockingRiddle::publishState() {

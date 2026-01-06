@@ -23,9 +23,9 @@ private:
   static constexpr uint32_t kPollIntervalMs = 150;      // kept (unused now; button-only evaluation)
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint8_t kUidExpected[kReaderCount][4] = {
-    {0x4A, 0x72, 0x4E, 0xD2}, // r0
-    {0x9A, 0x71, 0x4C, 0xD2}, // r1
-    {0x4A, 0x8F, 0x4E, 0xD2}  // r2
+    {0x3A, 0x55, 0x55, 0xD2}, // r0 scorpio (gonz rechts)
+    {0x9A, 0x71, 0x4C, 0xD2}, // r1 aquarius
+    {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (gonz links)
   };
 
   void log(const char* level, const String& msg) const;
@@ -41,6 +41,7 @@ private:
   void evaluateSolveAttempt();
   void handleButton(uint32_t nowMs);
   void publishSolvedEvent(uint32_t attemptIdx);
+  void resetState(const char* reason);
   void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 

@@ -1,3 +1,4 @@
+// piano_riddle.cpp
 #include "piano_riddle.h"
 
 #include <cstring>
@@ -15,18 +16,15 @@ String withSrc(const String& dataJson, const String& src) {
   if (looksObject) {
     String out = dataJson;
     out.remove(out.length() - 1);
-    if (out.length() > 1) {
-      out += ",";
-    }
+    if (out.length() > 1) out += ",";
     out += "\"src\":\"";
     out += srcVal;
     out += "\"}";
     return out;
   }
-  String out = String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
-  return out;
+  return String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
 }
-}
+}  // namespace
 
 constexpr const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen];
 
@@ -34,16 +32,18 @@ extern "C" void piano_detector_on_result(int accepted, const char* pred, float s
                                          float hps_ratio, int harmonic_ok, const char* t1, float t1s,
                                          const char* t2, float t2s, const char* t3, float t3s) {
   if (gPianoRiddle) {
-    gPianoRiddle->handleDetectorResult(accepted, pred, s1, s2, margin, hps_ratio, harmonic_ok, t1, t1s, t2, t2s,
-                                       t3, t3s);
+    gPianoRiddle->handleDetectorResult(accepted, pred, s1, s2, margin, hps_ratio, harmonic_ok,
+                                       t1, t1s, t2, t2s, t3, t3s);
   }
 }
 
 void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   ctx_ = &ctx;
   prefs_ = &ctx.prefs();
+
   srcId_ = (srcId && srcId[0]) ? srcId : "piano";
   topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
+
   solved_ = prefs_ ? prefs_->getBool(kPrefsSolvedKey, false) : false;
   solvedPublished_ = solved_;
 
@@ -53,6 +53,8 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
     detectorStarted_ = true;
   }
 
+  // Start fresh progress on boot (no timeout tracking exists anymore)
+  resetProgress("boot");
   publishState();
 }
 
@@ -60,18 +62,13 @@ void PianoRiddle::tick(uint32_t nowMs) {
   if (detectorStarted_) {
     piano_detector_loop_once();
   }
-
-  if (!ctx_) return;
-  if (solved_) return;
-
-  if (seqPos_ > 0 && (nowMs - lastAcceptedMs_ > kNoteTimeoutMs)) {
-    resetProgress("timeout");
-    publishState();
-  }
+  (void)nowMs;
+  // NO TIMEOUT. Ever.
 }
 
 bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
+
   if (equalsCmd(cmd, "PIANO_ENABLE") || equalsCmd(cmd, "ENABLE")) {
     setModuleEnabled(true);
     publishState();
@@ -82,12 +79,10 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
     publishState();
     return true;
   }
-  if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET")) {
+  if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET_PIANO") || equalsCmd(cmd, "RESET")) {
     solved_ = false;
     solvedPublished_ = false;
-    if (prefs_) {
-      prefs_->putBool(kPrefsSolvedKey, false);
-    }
+    if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
     resetProgress("cmd");
     publishState();
     return true;
@@ -109,112 +104,90 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   bool isAccepted = accepted != 0;
 
   String compat = String(isAccepted ? "NOTE_COMPAT " : "REJ_COMPAT ");
-  compat += "pred=";
-  compat += predSafe;
-  compat += " s1=";
-  compat += String(s1, 4);
-  compat += " s2=";
-  compat += String(s2, 4);
-  compat += " m=";
-  compat += String(margin, 4);
-  compat += " hps=";
-  compat += String(hps_ratio, 2);
-  compat += " harm=";
-  compat += (harmonic_ok ? "1" : "0");
+  compat += "pred="; compat += predSafe;
+  compat += " s1="; compat += String(s1, 4);
+  compat += " s2="; compat += String(s2, 4);
+  compat += " m=";  compat += String(margin, 4);
+  compat += " hps="; compat += String(hps_ratio, 2);
+  compat += " harm="; compat += (harmonic_ok ? "1" : "0");
   compat += " top3=[";
-  compat += t1Safe;
-  compat += " ";
-  compat += String(t1s, 4);
+  compat += t1Safe; compat += " "; compat += String(t1s, 4);
   compat += ", ";
-  compat += t2Safe;
-  compat += " ";
-  compat += String(t2s, 4);
+  compat += t2Safe; compat += " "; compat += String(t2s, 4);
   compat += ", ";
-  compat += t3Safe;
-  compat += " ";
-  compat += String(t3s, 4);
+  compat += t3Safe; compat += " "; compat += String(t3s, 4);
   compat += "]";
 
   String data = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
-  data += "\"pred\":\"";
-  data += predSafe;
-  data += "\",\"s1\":";
-  data += String(s1, 6);
-  data += ",\"s2\":";
-  data += String(s2, 6);
-  data += ",\"margin\":";
-  data += String(margin, 6);
-  data += ",\"hps\":";
-  data += String(hps_ratio, 6);
-  data += ",\"harm\":";
-  data += harmonic_ok ? "1" : "0";
-  data += ",\"top\":[{\"p\":\"";
-  data += t1Safe;
-  data += "\",\"s\":";
-  data += String(t1s, 6);
-  data += "},{\"p\":\"";
-  data += t2Safe;
-  data += "\",\"s\":";
-  data += String(t2s, 6);
-  data += "},{\"p\":\"";
-  data += t3Safe;
-  data += "\",\"s\":";
-  data += String(t3s, 6);
-  data += "}],\"pos\":";
-  data += String(seqPos_);
-  data += ",\"solved\":";
-  data += solved_ ? "true" : "false";
+  data += "\"pred\":\""; data += predSafe; data += "\",";
+  data += "\"s1\":"; data += String(s1, 6); data += ",";
+  data += "\"s2\":"; data += String(s2, 6); data += ",";
+  data += "\"margin\":"; data += String(margin, 6); data += ",";
+  data += "\"hps\":"; data += String(hps_ratio, 6); data += ",";
+  data += "\"harm\":"; data += harmonic_ok ? "1" : "0";
+  data += ",\"top\":[{\"p\":\""; data += t1Safe; data += "\",\"s\":"; data += String(t1s, 6); data += "},";
+  data += "{\"p\":\""; data += t2Safe; data += "\",\"s\":"; data += String(t2s, 6); data += "},";
+  data += "{\"p\":\""; data += t3Safe; data += "\",\"s\":"; data += String(t3s, 6); data += "}],";
+  data += "\"pos\":"; data += String(seqPos_); data += ",";
+  data += "\"solved\":"; data += solved_ ? "true" : "false";
   data += "}";
 
-  // Log accepted results at INF, rejected only at DBG.
-  log(isAccepted ? "INF" : "DBG", compat, data);
+  log("INF", compat, data);
 
-  if (!ctx_ || !moduleEnabled_ || !ctx_->enabled() || solved_) return;
+  // Still allow replay even if already solved (so it can re-open lock).
+  if (!ctx_ || !moduleEnabled_ || !ctx_->enabled()) return;
   if (!isAccepted) return;
+  if (predSafe[0] == '\0') return;
 
-  uint32_t now = ctx_->nowMs();
-  lastAcceptedMs_ = now;
+  const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 
-  const char* expected = kSequence[seqPos_];
-  if (expected && predSafe[0] != '\0' && strcasecmp(predSafe, expected) == 0) {
+  // Correct next note -> append and advance
+  if (expected && strcasecmp(predSafe, expected) == 0) {
     if (playedLen_ < kSequenceLen) {
       strncpy(played_[playedLen_], predSafe, kNoteMaxLen - 1);
       played_[playedLen_][kNoteMaxLen - 1] = '\0';
       playedLen_++;
     }
     seqPos_++;
+
+    // Emit sequence after every accepted note
+    logCurrentSequence();
+    publishState();
+
     if (seqPos_ >= kSequenceLen) {
-      solved_ = true;
-      if (prefs_) {
-        prefs_->putBool(kPrefsSolvedKey, true);
+      // Always open lock on full match (even if already solved)
+      openLock();
+
+      // Persist solved once
+      if (!solved_) {
+        solved_ = true;
+        if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
+      // Publish solved event once
       if (!solvedPublished_) {
         publishSolvedEvent();
-        openLock();
         solvedPublished_ = true;
       }
-      publishState();
-    } else {
+
+      // Rearm for replay
+      resetProgress("solved");
       publishState();
     }
-
-    // After each accepted note, emit the currently accepted sequence (both INF and DBG).
-    logCurrentSequence();
     return;
   }
 
-  resetProgress("wrong_note");
-  if (predSafe[0] != '\0' && strcasecmp(predSafe, kSequence[0]) == 0) {
+  // Mismatch: reset completely, then if this note can start the sequence,
+  // start with it (progress=1).
+  resetProgress("mismatch");
+  if (strcasecmp(predSafe, kSequence[0]) == 0) {
     seqPos_ = 1;
-    lastAcceptedMs_ = now;
     strncpy(played_[0], predSafe, kNoteMaxLen - 1);
     played_[0][kNoteMaxLen - 1] = '\0';
     playedLen_ = 1;
   }
-  publishState();
 
-  // After each accepted note, emit the currently accepted sequence (both INF and DBG).
   logCurrentSequence();
+  publishState();
 }
 
 void PianoRiddle::publishState() {
@@ -249,7 +222,6 @@ void PianoRiddle::openLock() const {
 
 void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;
-  lastAcceptedMs_ = 0;
   playedLen_ = 0;
   memset(played_, 0, sizeof(played_));
   if (reason) {
