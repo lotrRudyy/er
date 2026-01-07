@@ -17,6 +17,7 @@ $deployments = @{
         Dev          = "maglock"
         CmdNode      = "maglock"
         FirmwareName = "maglock.bin"
+        VerifyNodes  = @("maglock")
     }
     "images_piano" = @{
         Env          = "images_piano"
@@ -30,36 +31,42 @@ $deployments = @{
         Dev          = "chess"
         CmdNode      = "chess"
         FirmwareName = "chess.bin"
+        VerifyNodes  = @("chess")
     }
     "knocking" = @{
         Env          = "knocking"
         Dev          = "knocking"
         CmdNode      = "knocking"
         FirmwareName = "knocking.bin"
+        VerifyNodes  = @("knocking")
     }
     "candles" = @{
         Env          = "candles"
         Dev          = "candles"
         CmdNode      = "candles"
         FirmwareName = "candles.bin"
+        VerifyNodes  = @("candles")
     }
     "star_sky" = @{
         Env          = "star_sky"
         Dev          = "star_sky"
         CmdNode      = "star_sky"
         FirmwareName = "star_sky.bin"
+        VerifyNodes  = @("star_sky")
     }
     "star_slider" = @{
         Env          = "star_slider"
         Dev          = "star_slider"
         CmdNode      = "star_slider"
         FirmwareName = "star_slider.bin"
+        VerifyNodes  = @("star_slider")
     }
     "stop_timer" = @{
         Env          = "stop_timer"
         Dev          = "stop_timer"
         CmdNode      = "stop_timer"
         FirmwareName = "stop_timer.bin"
+        VerifyNodes  = @("stop_timer")
     }
 }
 
