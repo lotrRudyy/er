@@ -198,7 +198,6 @@ def parse_args() -> argparse.Namespace:
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
     )
-    parser.add_argument("--id", dest="ota_id", help="OTA update id (nonce); defaults to random UUID")
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
     return parser.parse_args()
 
@@ -232,7 +231,6 @@ def main() -> int:
     default_path = f"/node_firmware/{firmware_name}"
     url = normalize_url(args.url or default_path, args.http_host)
 
-    ota_id = args.ota_id or uuid.uuid4().hex
 
     try:
         sha_hex = sha256_file(firmware_path)
@@ -245,7 +243,6 @@ def main() -> int:
 
         topic = f"{cmd_node}/cmd"
         payload_obj = {
-            "id": ota_id,
             "version": version,
             "target": target,
             "url": url,
@@ -267,7 +264,6 @@ def main() -> int:
         print(f"Build    : {args.build}")
         print(f"IncludeBuildInJson : {bool(args.include_build)}")
         print(f"Target   : {target}")
-        print(f"OtaId    : {ota_id}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
         print(f"Payload  : {payload}")

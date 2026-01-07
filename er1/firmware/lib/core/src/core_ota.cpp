@@ -210,7 +210,7 @@ bool parseJsonCommand(const char* payload, CommandFields& out) {
   if (version) {
     copyBounded(version, out.version, sizeof(out.version));
   }
-  const char* id = obj["id"] | obj["nonce"];
+  const char* id = obj["build"] | obj["id"] | obj["nonce"];
   if (id) {
     copyBounded(id, out.id, sizeof(out.id));
   }
@@ -262,7 +262,7 @@ bool parseLegacyTokens(const String& payload, CommandFields& out) {
       out.hasUrlPort = out.urlPort > 0;
     } else if (key == "version" || key == "ver") {
       value.toCharArray(out.version, kMaxVersionLen + 1);
-    } else if (key == "id" || key == "nonce") {
+    } else if (key == "build" || key == "id" || key == "nonce") {
       value.toCharArray(out.id, kMaxIdLen + 1);
     } else if (key == "target" || key == "node" || key == "dev") {
       value.toCharArray(out.target, kMaxTargetLen + 1);
