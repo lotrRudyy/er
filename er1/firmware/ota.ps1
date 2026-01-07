@@ -263,6 +263,12 @@ $piHost        = "100.108.1.80"
 $piFirmwareDir = "/home/rudyy/er1/node_firmware"
 $topicUpdate   = "$cmdNode/cmd"
 
+# Emit stable fields for er1_profile.ps1 parsers (and for copy/paste).
+Write-Host ("Firmware : {0}" -f ("$piFirmwareDir/$firmwareName"))
+Write-Host ("URL      : {0}" -f ("http://192.168.0.10/node_firmware/$firmwareName"))
+Write-Host ("Version  : {0}" -f $otaVersion)
+Write-Host ("Build    : {0}" -f $otaBuild)
+
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $firmwareName =="
 

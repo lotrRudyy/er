@@ -2,10 +2,14 @@
 """
 hb_pretty.py — Human-friendly ER1 heartbeat viewer.
 
-- Subscribes ONLY to: +/hb and time/state
+- Subscribes to: +/hb, +/ota, and time/state
 - Prints a heartbeat dashboard exactly on each HB interval boundary (default 20s).
 - Ctrl+C exits immediately.
 - Dashboard cadence aligns to HB_INTERVAL_SEC (not minute-only).
+
+Flags:
+  BOOT: node recently rebooted and is not time-synced yet (time_valid=false)
+  OTA : BOOT + reboot likely caused by a recent OTA success event
 
 Env:
   HB_INTERVAL_SEC (default 20)
@@ -32,6 +36,11 @@ except ImportError as exc:  # pragma: no cover
 HB_INTERVAL_SEC = int(os.environ.get("HB_INTERVAL_SEC", "20"))
 TIME_STALE_SEC = 90
 RESTART_DELTA = 5  # seconds of slack when detecting uptime drops
+
+# If an OTA "success-ish" status is seen within this window before a reboot is detected,
+# treat the reboot as OTA-caused.
+OTA_REBOOT_WINDOW_SEC = 180
+
 SEPARATOR = "-" * 68
 
 
@@ -74,6 +83,21 @@ def int_or_none(value: Any, default: Optional[int] = None) -> Optional[int]:
         return default
 
 
+def is_ota_success_status(st: str) -> bool:
+    """
+    Heuristic: mark OTA as "success-ish" when status contains typical success tokens.
+    Your project may use different exact strings; this is designed to be resilient.
+    """
+    s = (st or "").strip().upper()
+    if not s:
+        return False
+    # Explicit failures should not qualify
+    if "FAIL" in s or "ERROR" in s:
+        return False
+    # Common success-ish tokens
+    return any(tok in s for tok in ("OK", "DONE", "SUCCESS", "END", "COMPLETE", "APPLY"))
+
+
 @dataclass
 class Heartbeat:
     node: str
@@ -92,7 +116,14 @@ class Heartbeat:
     err_since_up: Optional[int] = None
     err_msg: Optional[str] = None
     last_seen: float = field(default_factory=now_ts)
+
+    # Restart detection (uptime drop)
     restart_seen_at: Optional[float] = None
+
+    # Last OTA status seen for this node (from +/ota)
+    ota_last_status: Optional[str] = None
+    ota_last_seen_at: Optional[float] = None
+    ota_last_success_at: Optional[float] = None
 
 
 QueueItem = Tuple[str, str, float]
@@ -134,6 +165,7 @@ class HeartbeatViewer:
             self.running = False
             return
         client.subscribe("+/hb")
+        client.subscribe("+/ota")
         client.subscribe("time/state")
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> None:
@@ -189,10 +221,11 @@ class HeartbeatViewer:
     def handle_message(self, topic: str, payload: str, recv_ts: float) -> None:
         if topic.endswith("/hb"):
             self.handle_hb(topic, payload, recv_ts)
+        elif topic.endswith("/ota"):
+            self.handle_ota(topic, payload, recv_ts)
         elif topic == "time/state":
             self.handle_time_state(payload, recv_ts)
         else:
-            # Shouldn't happen due to subscriptions, but keep quiet if it does
             pass
 
     def handle_time_state(self, payload: str, recv_ts: float) -> None:
@@ -201,6 +234,26 @@ class HeartbeatViewer:
             return
         self.time_state = data
         self.time_state_seen_at = recv_ts
+
+    def handle_ota(self, topic: str, payload: str, recv_ts: float) -> None:
+        data = self.safe_json(payload)
+        if not isinstance(data, dict):
+            return
+        node = topic.split("/")[0].strip() or "?"
+        rec = self.hb_cache.get(node, Heartbeat(node=node))
+
+        st = str(data.get("st") or data.get("state") or data.get("status") or "").strip()
+        if st:
+            rec.ota_last_status = st
+            rec.ota_last_seen_at = recv_ts
+            if is_ota_success_status(st):
+                rec.ota_last_success_at = recv_ts
+
+        self.hb_cache[node] = rec
+
+        # During burst, refresh quickly
+        if self.burst_active and self.burst_end_ts and recv_ts <= self.burst_end_ts:
+            self.print_dashboard(interval_floor(recv_ts, HB_INTERVAL_SEC), force=False)
 
     def handle_hb(self, topic: str, payload: str, recv_ts: float) -> None:
         data = self.safe_json(payload)
@@ -212,6 +265,8 @@ class HeartbeatViewer:
 
         prev_up = rec.up if rec.up else rec.prev_up
         new_up = int_or_none(data.get("up"), rec.up)
+
+        # Detect reboot via uptime drop
         if prev_up is not None and new_up is not None and new_up >= 0 and (new_up + RESTART_DELTA) < prev_up:
             rec.restart_seen_at = recv_ts
 
@@ -277,6 +332,19 @@ class HeartbeatViewer:
             return msg
         return f"ok cnt={err_cnt}"
 
+    def _reboot_is_ota(self, hb: Heartbeat, now: float) -> bool:
+        """
+        Consider reboot "OTA-caused" if:
+          - we detected a reboot (restart_seen_at), and
+          - we saw an OTA success-ish status recently before that reboot.
+        """
+        if hb.restart_seen_at is None:
+            return False
+        if hb.ota_last_success_at is None:
+            return False
+        # Compare against the reboot detection timestamp (more stable than 'now')
+        return 0.0 <= (hb.restart_seen_at - hb.ota_last_success_at) <= OTA_REBOOT_WINDOW_SEC
+
     def print_dashboard(self, boundary_ts: float, force: bool = False) -> None:
         bucket = int(boundary_ts // max(1, HB_INTERVAL_SEC))
         if not force and self.last_dashboard_bucket is not None and bucket == self.last_dashboard_bucket:
@@ -321,10 +389,18 @@ class HeartbeatViewer:
                 warnings.append(f"time invalid: {hb.node}")
 
             flags = []
-            if hb.restart_seen_at and (now - hb.restart_seen_at) < 180:
-                flags.append("RES")
+
+            # BOOT: show only while time is not valid yet (no more fixed 180s window)
+            if hb.restart_seen_at and (not hb.time_valid):
+                flags.append("BOOT")
+
+                # OTA: if reboot likely caused by OTA (recent success status)
+                if self._reboot_is_ota(hb, now):
+                    flags.append("OTA")
+
             if stale:
                 flags.append("STL")
+
             flag_str = f" ({', '.join(flags)})" if flags else ""
             up_field = f"{format_uptime(hb.up)}{flag_str}"
 

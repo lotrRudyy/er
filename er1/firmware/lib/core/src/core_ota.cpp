@@ -171,8 +171,6 @@ bool parseSize(const JsonVariantConst& var, size_t& out) {
 
 bool parseJsonCommand(const char* payload, CommandFields& out) {
   if (!payload || payload[0] == '\0') return false;
-  // Be tolerant to callers accidentally passing the full command line,
-  // e.g. "UPDATE {...}" instead of only the JSON argument.
   while (*payload == ' ' || *payload == '\t' || *payload == '\r' || *payload == '\n') {
     payload++;
   }
@@ -181,7 +179,6 @@ bool parseJsonCommand(const char* payload, CommandFields& out) {
     if (brace) payload = brace;
   }
 
-  // JsonDocument grows as needed; defaults are sufficient for URLs + sha256.
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) return false;
@@ -426,7 +423,9 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   bootReportPending_ = true;
   bootReportOk_ = false;
 
+  // FIX: clear retained FAIL before START so old ghosts don’t show up on new sessions
   publishStart();
+
   logger_->publish(cfg_.infoLevel, String("OTA_START id=") + currentId_ + " ver=" + currentVersion_);
 
   EthernetClient client;
@@ -514,8 +513,7 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   }
 
   if (remoteVersion.length() > 0 && cmd.version[0] != '\0' && !remoteVersion.equals(String(cmd.version))) {
-    String extra = String("\"reason\":\"version_mismatch\",\"cmd\":\"") + cmd.version + "\",\"hdr\":\"" + remoteVersion +
-                   "\"";
+    String extra = String("\"reason\":\"version_mismatch\",\"cmd\":\"") + cmd.version + "\",\"hdr\":\"" + remoteVersion + "\"";
     logger_->publish(cfg_.errLevel, "OTA header version mismatch");
     publishFail("hdr", -1, "version_mismatch", 0, extra.c_str());
     client.stop();
@@ -716,7 +714,10 @@ void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t b
     data += extraJson;
   }
   data += "}";
-  publishStatus("OTA_FAIL", data, true);
+
+  // FIX: FAILS MUST NOT BE RETAINED
+  publishStatus("OTA_FAIL", data, false);
+
   clearPending();
   bootReportPending_ = false;
   bootReportOk_ = false;
@@ -739,6 +740,9 @@ void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
 }
 
 void OtaUpdater::publishStart() {
+  // FIX: clear any retained FAIL before a new session starts
+  publishStatus("OTA_FAIL", "{}", true);
+
   String data = buildBaseJson();
   data += "}";
   publishStatus("OTA_START", data, true);
@@ -791,7 +795,10 @@ void OtaUpdater::onMqttConnected() {
     if (logger_) logger_->publish(cfg_.infoLevel, String("OTA_OK id=") + currentId_);
   } else {
     data += ",\"reason\":\"version_mismatch_boot\"}";
-    publishStatus("OTA_FAIL", data, true);
+
+    // FIX: boot-report FAIL MUST NOT BE RETAINED
+    publishStatus("OTA_FAIL", data, false);
+
     if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch id=") + currentId_);
   }
   clearPending();
