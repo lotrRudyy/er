@@ -696,7 +696,7 @@ function er1 {
             #  - fail fast on OTA_FAIL
             #  - detect reboot via "MQTT connected"
             #  - verify build via hb.build
-            $hbTimeoutSec = 8
+            $hbTimeoutSec = 20
             Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' + '$target/log' (up to ${hbTimeoutSec}s) =="
 
             $cmdTopic = "$target/cmd"
@@ -705,7 +705,7 @@ function er1 {
             $bash = @"
 sent=0
 timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/hb' -t '$target/ota' -t '$target/log' 2>/dev/null | while IFS= read -r line; do
-  echo "$line"
+    if ($line) { echo "$line" }
   if [ $sent -eq 0 ]; then
     case "$line" in
       "$target/log "*)
