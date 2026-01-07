@@ -37,7 +37,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "images_piano",
         "cmd_node": "images_piano",
         "firmware": "images_piano.bin",
-        "verify_nodes": ("images_piano"),
+        "verify_nodes": ("images_piano",),
     },
     "chess": {
         "env": "chess",

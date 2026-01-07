@@ -691,16 +691,25 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-            # PC-side verify (fast): spam "SEND HB" while subscribing so we don't wait for the periodic heartbeat.
-            # We subscribe to both hb + ota so we can fail fast on OTA_FAIL.
+
+            # PC-side verify (fast): watch hb+ota+log. When the node reconnects ("MQTT connected"),
+            # request one immediate heartbeat via "SEND HB" so we don't wait for the periodic hb interval.
             $hbTimeoutSec = 10
-            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' (up to ${hbTimeoutSec}s) =="
+            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' + '$target/log' (up to ${hbTimeoutSec}s) =="
 
-            $cmdTopic = "$target/cmd"
-            $spam = "for i in \$(seq 1 40); do mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m 'SEND HB' >/dev/null 2>&1; sleep 0.25; done"
-            $subCmd = "bash -lc '$spam & timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/hb' -t '$target/ota' 2>/dev/null || true'"
+            $subCmd = @'
+bash -lc 'timeout {0}s mosquitto_sub -h 127.0.0.1 -v -t "{1}/hb" -t "{1}/ota" -t "{1}/log" 2>/dev/null |
+while IFS= read -r line; do
+  topic="${{line%% *}}"
+  payload="${{line#* }}"
+  if [ "$topic" = "{1}/log" ] && echo "$payload" | grep -q "MQTT connected"; then
+    mosquitto_pub -h 127.0.0.1 -t "{1}/cmd" -m "SEND HB" >/dev/null 2>&1 || true
+  fi
+  echo "$line"
+done || true''
+'@ -f $hbTimeoutSec, $target
+
             $lines = ssh $er1Pi $subCmd
-
             $rebooted = $false
             $prevUp = $null
             $lastSeen = $null
@@ -727,6 +736,16 @@ function er1 {
                     }
                     continue
                 }
+
+                if ($topic -eq "$target/log") {
+                  if ($payload -like '*"MQTT connected"*') {
+                      $rebooted = $true
+                      # Request one immediate heartbeat (no spam)
+                      ssh $er1Pi ("bash -lc 'mosquitto_pub -h 127.0.0.1 -t ""$target/cmd"" -m ""SEND HB"" >/dev/null 2>&1 || true'")
+                      continue
+                  }
+              }
+
 
                 # hb topic
                 if ($payload.ToLowerInvariant() -eq "offline") {

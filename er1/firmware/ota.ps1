@@ -209,12 +209,8 @@ if (-not $otaVersion) {
 }
 
 $buildSeed = Get-FirmwareBuildSeed $null
-$env:FW_BUILD_SEED = $buildSeed
-$env:FW_BUILD_ID = ""
 
 $otaBuild = Get-FirmwareBuildId $buildSeed
-$env:FW_BUILD_ID = $otaBuild
-
 Write-Host "== Version = $otaVersion  Build=$otaBuild  Seed='$buildSeed'  =="
 
 # ============ Locate platformio.exe ============
@@ -241,16 +237,19 @@ if ($NoBuild) {
 } else {
     Write-Host "== Building environment '$Env' =="
 
-    # Inject build id into firmware so hb.build matches what we print and verify.
-    # This avoids relying on platformio.ini interpolation.
-    $buildFlags = "-DFW_BUILD_SEED=\"$buildSeed\" -DFW_BUILD_ID=\"$otaBuild\""
+    # Inject build id/seed via environment variables (platformio.ini pulls these via ${sysenv.*})
+    $env:FW_BUILD_SEED = $buildSeed
+    $env:FW_BUILD_ID   = $otaBuild
 
-    # Windows can sometimes race/lock build artifacts; build single-threaded for stability.
-    & $pioFull run -e $Env --jobs 1 -O "build_flags=$buildFlags"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed"
-        exit 1
+    try {
+      & $pioFull run --jobs 1 -e $Env
+      if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)" }
     }
+    finally {
+      Remove-Item Env:FW_BUILD_SEED -ErrorAction SilentlyContinue
+      Remove-Item Env:FW_BUILD_ID   -ErrorAction SilentlyContinue
+    }
+
 }
 
 Write-Host "== Build = $otaBuild =="
