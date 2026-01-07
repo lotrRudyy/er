@@ -59,10 +59,11 @@ bool MqttClient::subscribe(const char* topic, uint8_t qos) {
 }
 
 void MqttClient::startEthernet() {
-  pinMode(ETH_RST, OUTPUT);
-  digitalWrite(ETH_RST, LOW);
+  const int rstPin = (cfg_.ethRstPin >= 0) ? cfg_.ethRstPin : ETH_RST;
+  pinMode(rstPin, OUTPUT);
+  digitalWrite(rstPin, LOW);
   delay(10);
-  digitalWrite(ETH_RST, HIGH);
+  digitalWrite(rstPin, HIGH);
   delay(50);
 
   SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI, ETH_CS);

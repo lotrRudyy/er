@@ -17,6 +17,10 @@ struct NetConfig {
   uint16_t mqttPort = 1883;
   const char* clientId = nullptr;
   const char* topicLwt = nullptr;
+
+  // Optional per-node Ethernet reset pin override.
+  // If < 0, the library default (ETH_RST macro) is used.
+  int8_t ethRstPin = -1;
 };
 
 class MqttDelegate {

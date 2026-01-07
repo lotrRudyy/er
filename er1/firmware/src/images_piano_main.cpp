@@ -69,6 +69,7 @@ void setup() {
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
   cfg.net.clientId = NODE_ID;
+  cfg.net.ethRstPin = 17;  // images_piano only: Ethernet reset on GPIO21
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
