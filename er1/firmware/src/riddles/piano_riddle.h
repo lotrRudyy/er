@@ -55,7 +55,7 @@ private:
   // Sequence (case-insensitive compare)
   static constexpr size_t kSequenceLen = 15;
   static constexpr const char* const kSequence[kSequenceLen] = {
-      "e4", "e4", "f4", "g4", "g4", "f4", "e3", "d2", "c4", "c4", "d4", "e4", "e4", "d4", "d4",
+      "e4", "e4", "f4", "g4", "g4", "f4", "e4", "d4", "c4", "c4", "d4", "e4", "e4", "d4", "d4",
   };
 
   static constexpr size_t kNoteMaxLen = 8;  // incl null terminator

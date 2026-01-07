@@ -531,6 +531,17 @@ function Invoke-Er1ResetRiddles {
         Start-Sleep -Milliseconds 120
     }
 
+    # Also lock R2 + R3 (these are fail-open / need explicit close on reset)
+    foreach ($lockId in @("r2", "r3")) {
+        $lockTopic = "maglock/lock/$lockId/cmd"
+        Write-Host "$prefix -> $lockTopic  CLOSE" -ForegroundColor Cyan
+        ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$lockTopic' -m 'CLOSE'"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to publish CLOSE to $lockTopic (exit $LASTEXITCODE)."
+        }
+        Start-Sleep -Milliseconds 120
+    }
+
     Write-Host "$prefix done." -ForegroundColor Green
 }
 

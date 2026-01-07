@@ -13,7 +13,7 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.23";
+static const char* FW_VERSION = "1.24";
 static const char* FW_DESC = "Single MQTT node for images+piano; OTA JSON, src-tagged logs";
 
 // ======================= NETWORK CONFIG ======================
@@ -69,7 +69,7 @@ void setup() {
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
   cfg.net.clientId = NODE_ID;
-  cfg.net.ethRstPin = 17;  // images_piano only: Ethernet reset on GPIO21
+  cfg.net.ethRstPin = 16;  // images_piano only: Ethernet reset on GPIO21
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
