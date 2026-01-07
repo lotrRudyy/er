@@ -291,10 +291,7 @@ Write-Host "== Triggering OTA on $topicUpdate =="
 
 $sha256 = ssh "$piUser@$piHost" "sha256sum '$piFirmwareDir/$firmwareName' | cut -d' ' -f1"
 $sha256 = $sha256.Trim()
-if (-not $sha256 -or $sha256.Length -ne 64) {
-    throw "Failed to compute valid sha256 on Pi (got '$sha256')"
-    exit 1
-}
+if ($sha256.Length -ne 64) { throw "Invalid sha256" }
 
 # IMPORTANT: quote build/version on the remote shell in case they contain spaces
 $otaPublishCmd = @(
