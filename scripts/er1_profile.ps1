@@ -691,22 +691,37 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-            # PC-side verify (fast, no spam):
-            # - Wait for reboot/reconnect signal via "<node>/log" containing "MQTT connected"
-            # - Then request ONE immediate heartbeat via "SEND HB"
-            # - Verify the returned heartbeat has the expected build id
-            # - Also watch <node>/ota and fail fast on OTA_FAIL
-            $hbTimeoutSec = 30
+            # PC-side verify (fast, no spam): watch log for "MQTT connected", then request one immediate heartbeat.
+            # We subscribe to hb + ota + log so we can:
+            #  - fail fast on OTA_FAIL
+            #  - detect reboot via "MQTT connected"
+            #  - verify build via hb.build
+            $hbTimeoutSec = 8
             Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' + '$target/log' (up to ${hbTimeoutSec}s) =="
 
             $cmdTopic = "$target/cmd"
 
-            # Run subscription on the Pi (bash) to avoid Windows quoting/tooling issues.
-            $subCmd = "bash -lc `"timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t `"$target/hb`" -t `"$target/ota`" -t `"$target/log`" 2>/dev/null || true`""
+            # Run everything on the Pi so we can react (publish SEND HB) while the subscription is live.
+            $bash = @"
+sent=0
+timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/hb' -t '$target/ota' -t '$target/log' 2>/dev/null | while IFS= read -r line; do
+  echo "$line"
+  if [ $sent -eq 0 ]; then
+    case "$line" in
+      "$target/log "*)
+        echo "$line" | grep -q '"MQTT connected"' && { mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m 'SEND HB' >/dev/null 2>&1 || true; sent=1; }
+        ;;
+    esac
+  fi
+done
+"@
+
+            # Use bash -lc with a here-string piped to avoid quote hell.
+            $subCmd = "bash -lc " + [char]34 + "cat <<'ER1EOF' | bash" + [char]10 + $bash + [char]10 + "ER1EOF" + [char]34
             $lines = ssh $er1Pi $subCmd
 
+
             $rebooted = $false
-            $hbRequested = $false
             $prevUp = $null
             $lastSeen = $null
             $ok = $false
@@ -722,16 +737,17 @@ function er1 {
                     $payload = $Matches[2]
                 }
 
-                # Reboot detection: when the node reconnects, it logs "MQTT connected"
-                if ($topic -eq "$target/log") {
-                    if (-not $rebooted -and $payload -like '*MQTT connected*') {
-                        $rebooted = $true
+                if ($topic -and $topic.EndsWith('/log')) {
+                    # Fail fast on common OTA auth/truncation errors that may not emit OTA_FAIL reliably
+                    if ($payload -like '*OTA missing/invalid sha256*' -or $payload -like '*invalid_sha256*') {
+                        throw "== OTA VERIFY: FAIL (invalid_sha256) =="
                     }
-                    if ($rebooted -and -not $hbRequested -and $payload -like '*MQTT connected*') {
-                        $hbRequested = $true
-                        # Request one immediate heartbeat to verify build quickly
-                        $pubCmd = "bash -lc `"mosquitto_pub -h 127.0.0.1 -t `"$cmdTopic`" -m `"SEND HB`" >/dev/null 2>&1 || true`""
-                        ssh $er1Pi $pubCmd | Out-Null
+                    if ($payload -like '*OTA payload too large*' -or $payload -like '*payload too large*') {
+                        throw "== OTA VERIFY: FAIL (payload_too_large) =="
+                    }
+                    if ($payload -like '*"MQTT connected"*') {
+                        $rebooted = $true
+                        continue
                     }
                 }
 
@@ -747,8 +763,6 @@ function er1 {
                 }
 
                 # hb topic
-                if ($topic -ne "$target/hb") { continue }
-
                 if ($payload.ToLowerInvariant() -eq "offline") {
                     $rebooted = $true
                     continue

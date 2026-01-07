@@ -193,6 +193,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
     parser.add_argument("--build", required=True, help="Firmware build timestamp/string")
+    parser.add_argument("--include-build", action="store_true", help="Include build in UPDATE JSON (larger payload; only after all nodes support larger MQTT packets)")
     parser.add_argument(
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
@@ -246,12 +247,14 @@ def main() -> int:
         payload_obj = {
             "id": ota_id,
             "version": version,
-            "build": build,
             "target": target,
             "url": url,
             "sha256": sha_hex,
             "size": size_bytes,
         }
+        # Keep payload small for legacy nodes (PubSubClient default buffer). Add build only if explicitly requested.
+        if args.include_build:
+            payload_obj["build"] = build
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
         payload = f"UPDATE {payload_json}"
 
@@ -262,6 +265,7 @@ def main() -> int:
         print(f"Dev      : {args.dev}")
         print(f"Version  : {version}")
         print(f"Build    : {args.build}")
+        print(f"IncludeBuildInJson : {bool(args.include_build)}")
         print(f"Target   : {target}")
         print(f"OtaId    : {ota_id}")
         print(f"CmdNode  : {cmd_node}")
