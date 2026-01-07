@@ -691,26 +691,22 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-
-            # PC-side verify (fast): watch hb+ota+log. When the node reconnects ("MQTT connected"),
-            # request one immediate heartbeat via "SEND HB" so we don't wait for the periodic hb interval.
-            $hbTimeoutSec = 10
+            # PC-side verify (fast, no spam):
+            # - Wait for reboot/reconnect signal via "<node>/log" containing "MQTT connected"
+            # - Then request ONE immediate heartbeat via "SEND HB"
+            # - Verify the returned heartbeat has the expected build id
+            # - Also watch <node>/ota and fail fast on OTA_FAIL
+            $hbTimeoutSec = 30
             Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' + '$target/log' (up to ${hbTimeoutSec}s) =="
 
-            $subCmd = @'
-bash -lc 'timeout {0}s mosquitto_sub -h 127.0.0.1 -v -t "{1}/hb" -t "{1}/ota" -t "{1}/log" 2>/dev/null |
-while IFS= read -r line; do
-  topic="${{line%% *}}"
-  payload="${{line#* }}"
-  if [ "$topic" = "{1}/log" ] && echo "$payload" | grep -q "MQTT connected"; then
-    mosquitto_pub -h 127.0.0.1 -t "{1}/cmd" -m "SEND HB" >/dev/null 2>&1 || true
-  fi
-  echo "$line"
-done || true''
-'@ -f $hbTimeoutSec, $target
+            $cmdTopic = "$target/cmd"
 
+            # Run subscription on the Pi (bash) to avoid Windows quoting/tooling issues.
+            $subCmd = "bash -lc `"timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t `"$target/hb`" -t `"$target/ota`" -t `"$target/log`" 2>/dev/null || true`""
             $lines = ssh $er1Pi $subCmd
+
             $rebooted = $false
+            $hbRequested = $false
             $prevUp = $null
             $lastSeen = $null
             $ok = $false
@@ -726,6 +722,19 @@ done || true''
                     $payload = $Matches[2]
                 }
 
+                # Reboot detection: when the node reconnects, it logs "MQTT connected"
+                if ($topic -eq "$target/log") {
+                    if (-not $rebooted -and $payload -like '*MQTT connected*') {
+                        $rebooted = $true
+                    }
+                    if ($rebooted -and -not $hbRequested -and $payload -like '*MQTT connected*') {
+                        $hbRequested = $true
+                        # Request one immediate heartbeat to verify build quickly
+                        $pubCmd = "bash -lc `"mosquitto_pub -h 127.0.0.1 -t `"$cmdTopic`" -m `"SEND HB`" >/dev/null 2>&1 || true`""
+                        ssh $er1Pi $pubCmd | Out-Null
+                    }
+                }
+
                 if ($topic -and $topic.EndsWith('/ota')) {
                     try { $ota = $payload | ConvertFrom-Json } catch { continue }
                     $st = [string]$ota.st
@@ -737,17 +746,9 @@ done || true''
                     continue
                 }
 
-                if ($topic -eq "$target/log") {
-                  if ($payload -like '*"MQTT connected"*') {
-                      $rebooted = $true
-                      # Request one immediate heartbeat (no spam)
-                      ssh $er1Pi ("bash -lc 'mosquitto_pub -h 127.0.0.1 -t ""$target/cmd"" -m ""SEND HB"" >/dev/null 2>&1 || true'")
-                      continue
-                  }
-              }
-
-
                 # hb topic
+                if ($topic -ne "$target/hb") { continue }
+
                 if ($payload.ToLowerInvariant() -eq "offline") {
                     $rebooted = $true
                     continue
