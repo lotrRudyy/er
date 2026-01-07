@@ -90,6 +90,25 @@ def fmt_local_ts(ts: float) -> str:
     return time.strftime("%H:%M:%S", lt) + " - " + time.strftime("%Y.%m.%d", lt)
 
 
+def strip_ms_from_device_ts(ts: str) -> str:
+    """Normalize device timestamp strings by removing milliseconds.
+
+    Accepts:
+      - "HH:MM:SS.mmm - YYYY.MM.DD"
+      - "HH:MM:SS - YYYY.MM.DD"
+    Returns:
+      - "HH:MM:SS - YYYY.MM.DD" (or original if not matching)
+    """
+    if not isinstance(ts, str):
+        return ""
+    if " - " not in ts:
+        return ts
+    time_part, date_part = ts.split(" - ", 1)
+    if "." in time_part:
+        time_part = time_part.split(".", 1)[0]
+    return f"{time_part} - {date_part}"
+
+
 @dataclass
 class PianoNoteCompat:
     ts: str
@@ -321,8 +340,8 @@ class LogsAllPretty:
                 delta = msg.split("delta_s=", 1)[1].strip()
             except Exception:
                 pass
-            # prefer device timestamp string if present
-            when = ts_str if ts_str else ts_recv
+            # prefer device timestamp string if present (but remove milliseconds)
+            when = strip_ms_from_device_ts(ts_str) if ts_str else fmt_local_ts(ts_recv)
             line = f"{when} | time_resync: {delta}"
             if line not in sess.printed_lines:
                 sess.printed_lines.add(line)
@@ -356,8 +375,16 @@ class LogsAllPretty:
                 delta = msg.split("delta_s=", 1)[1].strip()
             except Exception:
                 pass
-            when = ts if ts else fmt_local_ts(recv_ts)
+            when = strip_ms_from_device_ts(ts) if ts else fmt_local_ts(recv_ts)
             self._p(f"{when} | time_resync: {delta}")
+            return
+
+        # Normalize log level announcements into a clean single-line event
+        # Example: "log_level set to INF" -> "HH:MM:SS - YYYY.MM.DD | log_level: INF"
+        if msg.startswith("log_level set to"):
+            lv_set = msg.split("log_level set to", 1)[1].strip()
+            when = strip_ms_from_device_ts(ts) if ts else fmt_local_ts(recv_ts)
+            self._p(f"{when} | log_level: {lv_set}")
             return
 
         # Suppress noisy OTA-related logs that duplicate OTA block
