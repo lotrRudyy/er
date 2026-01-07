@@ -3,7 +3,7 @@
 Compute OTA sha256 on the Pi and publish the UPDATE command with a JSON payload.
 
 - Reads firmware from /home/rudyy/er1/node_firmware by default
-- Publishes: UPDATE {"id":...,"version":...,"build":...,"target":...,"url":...,"sha256":...,"size":...}
+- Publishes: UPDATE {"version":...,"build":...,"target":...,"url":...,"sha256":...,"size":...}
 - Default URL matches ota_http.py: http://<http-host>/node_firmware/<firmware>.bin
 
 Dependencies:
@@ -16,7 +16,6 @@ import argparse
 import hashlib
 import json
 import sys
-import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -179,7 +178,6 @@ def parse_args() -> argparse.Namespace:
              "Defaults to /node_firmware/<firmware>.",
     )
 
-    # Preferred flag
     parser.add_argument(
         "--firmware-name",
         dest="firmware_name",
@@ -192,8 +190,7 @@ def parse_args() -> argparse.Namespace:
         help="Firmware file path on the Pi (defaults to /home/rudyy/er1/node_firmware/<firmware_name>)",
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
-    parser.add_argument("--build", required=True, help="Firmware build timestamp/string")
-    parser.add_argument("--include-build", action="store_true", help="Include build in UPDATE JSON (larger payload; only after all nodes support larger MQTT packets)")
+    parser.add_argument("--build", required=True, help="Firmware build string to announce")
     parser.add_argument(
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
@@ -230,7 +227,6 @@ def main() -> int:
 
     default_path = f"/node_firmware/{firmware_name}"
     url = normalize_url(args.url or default_path, args.http_host)
-
 
     try:
         sha_hex = sha256_file(firmware_path)
