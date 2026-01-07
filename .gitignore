@@ -58,3 +58,4 @@ er1/tools/compile_commands.json
 #node
 node_modules/
 npm-debug.log
+web/
