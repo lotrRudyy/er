@@ -20,7 +20,7 @@ constexpr size_t kSha256HexBufLen = kSha256HexLen + 1;
 constexpr size_t kMaxHostLen = 63;
 constexpr size_t kMaxPathLen = 127;
 constexpr size_t kMaxVersionLen = 47;
-constexpr size_t kMaxIdLen = 47;
+constexpr size_t kMaxBuildLen = 47;
 constexpr size_t kMaxTargetLen = 47;
 constexpr const char* kDefaultPathPrefix = "/node_firmware/";
 constexpr uint32_t kPendingMagic = 0xC05A4E2A;
@@ -30,20 +30,20 @@ using CommandFields = OtaUpdateCommand;
 RTC_DATA_ATTR struct {
   uint32_t magic = 0;
   char version[kMaxVersionLen + 1]{};
-  char id[kMaxIdLen + 1]{};
+  char build[kMaxBuildLen + 1]{};
 } g_pending;
 
 void clearPending() {
   g_pending.magic = 0;
   g_pending.version[0] = '\0';
-  g_pending.id[0] = '\0';
+  g_pending.build[0] = '\0';
 }
 
-void persistPending(const char* id, const char* version) {
+void persistPending(const char* build, const char* version) {
   clearPending();
-  if (!id || !version) return;
-  std::strncpy(g_pending.id, id, kMaxIdLen);
-  g_pending.id[kMaxIdLen] = '\0';
+  if (!build || !version) return;
+  std::strncpy(g_pending.build, build, kMaxBuildLen);
+  g_pending.build[kMaxBuildLen] = '\0';
   std::strncpy(g_pending.version, version, kMaxVersionLen);
   g_pending.version[kMaxVersionLen] = '\0';
   g_pending.magic = kPendingMagic;
@@ -145,7 +145,7 @@ void copyBounded(const char* src, char* dst, size_t dstLen) {
 
 void refreshPresenceFlags(CommandFields& out) {
   out.hasVersion = out.version[0] != '\0';
-  out.hasId = out.id[0] != '\0';
+  out.hasBuild = out.build[0] != '\0';
   out.hasTarget = out.target[0] != '\0';
 }
 
@@ -210,9 +210,9 @@ bool parseJsonCommand(const char* payload, CommandFields& out) {
   if (version) {
     copyBounded(version, out.version, sizeof(out.version));
   }
-  const char* id = obj["build"] | obj["id"] | obj["nonce"];
-  if (id) {
-    copyBounded(id, out.id, sizeof(out.id));
+  const char* build = obj["build"] | obj["build_id"];
+  if (build) {
+    copyBounded(build, out.build, sizeof(out.build));
   }
   const char* target = obj["target"] | obj["node"] | obj["dev"];
   if (target) {
@@ -262,8 +262,8 @@ bool parseLegacyTokens(const String& payload, CommandFields& out) {
       out.hasUrlPort = out.urlPort > 0;
     } else if (key == "version" || key == "ver") {
       value.toCharArray(out.version, kMaxVersionLen + 1);
-    } else if (key == "build" || key == "id" || key == "nonce") {
-      value.toCharArray(out.id, kMaxIdLen + 1);
+    } else if (key == "build" || key == "build_id") {
+      value.toCharArray(out.build, kMaxBuildLen + 1);
     } else if (key == "target" || key == "node" || key == "dev") {
       value.toCharArray(out.target, kMaxTargetLen + 1);
     } else if (key == "size" || key == "bytes") {
@@ -292,7 +292,7 @@ void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
   cfg_ = cfg;
   logger_ = logger;
   statusCtx_ = cfg_.statusCtx;
-  currentId_ = "";
+  currentBuild_ = "";
   currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
   currentUrl_ = "";
   expectedSize_ = 0;
@@ -304,7 +304,7 @@ void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
 
   if (g_pending.magic == kPendingMagic) {
     pendingVersion_ = String(g_pending.version);
-    currentId_ = String(g_pending.id);
+    currentBuild_ = String(g_pending.build);
     bootReportPending_ = true;
     bootReportOk_ = (pendingVersion_.length() > 0 && cfg_.targetFw && pendingVersion_ == String(cfg_.targetFw));
   }
@@ -313,7 +313,7 @@ void OtaUpdater::begin(const OtaConfig& cfg, Logger* logger) {
 bool OtaUpdater::perform(const char* cmdPayload) {
   if (!logger_) return false;
 
-  currentId_ = "";
+  currentBuild_ = "";
   currentUrl_ = "";
   expectedSize_ = 0;
   pendingVersion_ = "";
@@ -333,7 +333,6 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  currentId_ = cmd.hasId ? String(cmd.id) : (cmd.hasVersion ? String(cmd.version) : String("?"));
   currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
   if (cmd.hasTarget) {
     currentTarget_ = cmd.target;
@@ -357,6 +356,16 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     }
     return false;
   }
+
+  if (!cmd.hasBuild) {
+    logger_->publish(cfg_.errLevel, "OTA missing build");
+    publishFail("auth", -1, "missing_build", 0, "\"reason\":\"missing_build\"");
+    return false;
+  }
+
+  currentBuild_ = String(cmd.build);
+
+
   const char* expectedTarget = cfg_.targetId;
   if (expectedTarget && expectedTarget[0]) {
     if (!cmd.hasTarget) {
@@ -404,7 +413,7 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  currentId_ = cmd.id;
+  currentBuild_ = cmd.build;
   currentUrl_ = String("http://") + host;
   if (port != 0 && port != 80) {
     currentUrl_ += ":";
@@ -412,14 +421,14 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   }
   currentUrl_ += path;
 
-  persistPending(currentId_.c_str(), currentVersion_.c_str());
+  persistPending(currentBuild_.c_str(), currentVersion_.c_str());
   bootReportPending_ = true;
   bootReportOk_ = false;
 
   // FIX: clear retained FAIL before START so old ghosts don’t show up on new sessions
   publishStart();
 
-  logger_->publish(cfg_.infoLevel, String("OTA_START id=") + currentId_ + " ver=" + currentVersion_);
+  logger_->publish(cfg_.infoLevel, String("OTA_START build=") + currentBuild_ + " ver=" + currentVersion_);
 
   EthernetClient client;
   client.setTimeout(kHeaderTimeoutMs);
@@ -749,7 +758,7 @@ void OtaUpdater::publishProgress(int pct) {
 }
 
 String OtaUpdater::buildBaseJson() const {
-  String data = String("{\"id\":\"") + (currentId_.length() ? currentId_ : "?") + "\"";
+  String data = String("{\"build\":\"") + (currentBuild_.length() ? currentBuild_ : "?") + "\"";
   if (currentVersion_.length()) {
     data += ",\"version\":\"";
     data += currentVersion_;
@@ -765,7 +774,6 @@ String OtaUpdater::buildBaseJson() const {
     data += currentUrl_;
     data += "\"";
   }
-    data += "}";
   return data;
 }
 
@@ -783,14 +791,14 @@ void OtaUpdater::onMqttConnected() {
   if (bootReportOk_) {
     data += "}";
     publishStatus("OTA_OK", data, true);
-    if (logger_) logger_->publish(cfg_.infoLevel, String("OTA_OK id=") + currentId_);
+    if (logger_) logger_->publish(cfg_.infoLevel, String("OTA_OK build=") + currentBuild_);
   } else {
     data += ",\"reason\":\"version_mismatch_boot\"}";
 
     // FIX: boot-report FAIL MUST NOT BE RETAINED
     publishStatus("OTA_FAIL", data, false);
 
-    if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch id=") + currentId_);
+    if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch build=") + currentBuild_);
   }
   clearPending();
   bootReportPending_ = false;

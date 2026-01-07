@@ -450,6 +450,20 @@ bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
     return true;
   }
 
+
+  // One-shot heartbeat request used by the PC-side OTA verifier.
+  // Accept: SEND HB
+  if (strcmp(cmd, "SEND") == 0) {
+    if (arg && strcmp(arg, "HB") == 0) {
+      publishHeartbeatNow();
+      if (cfg_.commands.logPing) {
+        const char* lvl = cfg_.commands.levelPing ? cfg_.commands.levelPing : "DBG";
+        logger_.publish(lvl, "CMD SEND HB");
+      }
+      return true;
+    }
+  }
+
   if (cfg_.commands.allowUpdate && strcmp(cmd, "UPDATE") == 0) {
     if (cfg_.commands.logUpdate) {
       const char* lvl = cfg_.commands.levelUpdate ? cfg_.commands.levelUpdate : "INF";
