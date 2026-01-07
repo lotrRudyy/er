@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -30,13 +31,17 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "maglock",
         "cmd_node": "maglock",
         "firmware": "maglock.bin",
+        "legacy": ("maglock_ctrl.bin",),
         "verify_nodes": ("maglock",),
     },
     "images_piano": {
         "env": "images_piano",
         "dev": "images_piano",
+        # Single combined node (topics: images_piano/*). Modules publish under images/* and piano/*,
+        # but the OTA command topic must be the node id.
         "cmd_node": "images_piano",
         "firmware": "images_piano.bin",
+        "legacy": (),
         "verify_nodes": ("images_piano",),
     },
     "chess": {
@@ -44,6 +49,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "chess",
         "cmd_node": "chess",
         "firmware": "chess.bin",
+        "legacy": (),
         "verify_nodes": ("chess",),
     },
     "knocking": {
@@ -51,6 +57,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "knocking",
         "cmd_node": "knocking",
         "firmware": "knocking.bin",
+        "legacy": (),
         "verify_nodes": ("knocking",),
     },
     "candles": {
@@ -58,6 +65,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "candles",
         "cmd_node": "candles",
         "firmware": "candles.bin",
+        "legacy": (),
         "verify_nodes": ("candles",),
     },
     "star_sky": {
@@ -65,6 +73,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "star_sky",
         "cmd_node": "star_sky",
         "firmware": "star_sky.bin",
+        "legacy": (),
         "verify_nodes": ("star_sky",),
     },
     "star_slider": {
@@ -72,6 +81,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "star_slider",
         "cmd_node": "star_slider",
         "firmware": "star_slider.bin",
+        "legacy": (),
         "verify_nodes": ("star_slider",),
     },
     "stop_timer": {
@@ -79,6 +89,7 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "stop_timer",
         "cmd_node": "stop_timer",
         "firmware": "stop_timer.bin",
+        "legacy": (),
         "verify_nodes": ("stop_timer",),
     },
 }
@@ -86,6 +97,30 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
 
 class OtaPublishError(Exception):
     pass
+
+
+def _run_stdout(cmd: list[str]) -> str:
+    """Run a command and return stdout (stripped). Raises on non-zero."""
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+        return out.decode("utf-8", errors="replace").strip()
+    except FileNotFoundError as exc:
+        raise OtaPublishError(f"Required tool not found: {cmd[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        msg = exc.output.decode("utf-8", errors="replace").strip()
+        raise OtaPublishError(f"Command failed: {' '.join(cmd)}\n{msg}") from exc
+
+
+def sha256_of_http(url: str, timeout_s: int = 20) -> str:
+    """Compute sha256 of the exact bytes served by HTTP GET.
+
+    This catches a common OTA pitfall: the file on disk has one hash, but the
+    HTTP server is serving something else (404 HTML, an old file, gzip wrapper,
+    etc.).
+    """
+    # curl prints raw body to stdout; sha256sum hashes stdin.
+    cmd = ["bash", "-lc", f"curl -fsSL --max-time {int(timeout_s)} '{url}' | sha256sum | awk '{{print $1}}'"]
+    return _run_stdout(cmd)
 
 
 def sha256_file(path: Path) -> str:
@@ -204,6 +239,11 @@ def parse_args() -> argparse.Namespace:
         help="Expected target node id (defaults from deployment map or dev)",
     )
     parser.add_argument("--id", dest="ota_id", help="OTA update id (nonce); defaults to random UUID")
+    parser.add_argument(
+        "--skip-http-hash-check",
+        action="store_true",
+        help="Skip verifying that HTTP GET bytes match the local firmware hash",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
     return parser.parse_args()
 
@@ -242,6 +282,17 @@ def main() -> int:
 
     try:
         sha_hex = sha256_file(firmware_path)
+        # Make sure the HTTP server is serving the exact same bytes we hashed.
+        if not args.skip_http_hash_check:
+            http_sha = sha256_of_http(url)
+            if http_sha.lower() != sha_hex.lower():
+                raise OtaPublishError(
+                    "HTTP hash mismatch. The URL is not serving the same bytes as the local firmware file.\n"
+                    f"  local_sha256={sha_hex}\n"
+                    f"  http_sha256 ={http_sha}\n"
+                    f"  url        ={url}"
+                )
+
         try:
             size_bytes = firmware_path.stat().st_size
         except OSError as exc:
@@ -253,13 +304,22 @@ def main() -> int:
         payload_obj = {
             "id": ota_id,
             "version": version,
-            "build": build,
-            "target": target,
+"target": target,
             "url": url,
             "sha256": sha_hex,
             "size": size_bytes,
         }
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
+
+        # Legacy nodes (older Core::Node) truncate cmd payloads at ~256 bytes.
+        # Keep UPDATE JSON small enough to pass through until those nodes are updated.
+        legacy_limit = 256
+        total_len = len("UPDATE ") + len(payload_json)
+        if total_len >= legacy_limit:
+            raise OtaPublishError(
+                f"UPDATE payload too large for legacy nodes: {total_len} bytes (limit {legacy_limit-1}). "
+                "Upgrade node core payload buffer (kPayloadBufSize) or shorten fields."
+            )
         payload = f"UPDATE {payload_json}"
 
         print(f"Firmware : {firmware_path}")

@@ -369,8 +369,11 @@ class HeartbeatViewer:
             except Exception:
                 pass
 
+        clean_time = header_ts.split(".")[0]
+        clean_date = date_str.split()[0]
+
         self._safe_print(SEPARATOR)
-        self._safe_print(f"HB | {header_ts} - {date_str}  (every {HB_INTERVAL_SEC}s)")
+        self._safe_print(f"HB | {clean_time} - {clean_date} (every {HB_INTERVAL_SEC}s)")
         self._safe_print(SEPARATOR)
 
         now = now_ts()

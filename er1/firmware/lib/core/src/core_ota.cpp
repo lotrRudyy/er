@@ -740,9 +740,6 @@ void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
 }
 
 void OtaUpdater::publishStart() {
-  // FIX: clear any retained FAIL before a new session starts
-  publishStatus("OTA_FAIL", "{}", true);
-
   String data = buildBaseJson();
   data += "}";
   publishStatus("OTA_START", data, true);
