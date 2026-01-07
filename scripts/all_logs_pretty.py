@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-logs_all_pretty.py — Pretty ER1 log + OTA streamer (all nodes).
+all_logs_pretty.py — Pretty ER1 log viewer (all nodes) with piano + OTA pretty blocks.
 
-- Subscribes to: +/log and +/ota
-- Pretty-prints ALL logs from ALL nodes (multiline preserved)
-- Piano formatting:
-    - Cache NOTE_COMPAT details (pred/margin/top3 + ACC/REJ verdict from detector)
-    - Print ONLY when PIANO_SEQ arrives (no wait time)
-      using the cached NOTE_COMPAT that arrived immediately before it
-    - Explicit REJ_COMPAT prints immediately as "<note> rejected"
-      with progress "?" and seq "(no seq)" (never shows previous seq/progress)
-      and resets internal seq/progress caches
+Current behavior:
 - OTA:
-    - Prints compact OTA event lines (deduped), avoids repeating giant tables
-- Ctrl+C exits immediately
+  - Prints nice OTA timeline for live sessions.
+  - Retained OTA messages at startup are allowed,
+    BUT retained OTA_PROGRESS / OTA_FLASHED are suppressed to avoid the startup spam lines.
 
-Env:
-  LOCAL_BROKER (default 127.0.0.1)
-  LOCAL_BROKER_PORT (default 1883)
+- time_resync:
+  - Prints whenever it happens (normal periodic resyncs).
+  - If it happens within the OTA reboot window, it is attached to the OTA block (and ends the block).
+
+- paho-mqtt:
+  - Compatible with callback signature including 'properties' (paho v2).
+  - Uses classic mqtt.Client() (no callback_api_version) to avoid API mismatch crashes.
 """
 
 import json
@@ -27,7 +24,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List, Set
 
 try:
     import paho.mqtt.client as mqtt  # type: ignore
@@ -37,7 +34,9 @@ except ImportError as exc:
 
 
 SEPARATOR = "-" * 80
-QueueItem = Tuple[str, str, float]
+OTA_SEP = "-" * 97
+
+QueueItem = Tuple[str, str, float, bool]  # topic, payload, recv_ts, retain
 
 
 def now_ts() -> float:
@@ -80,20 +79,15 @@ def parse_seq_string(seq: Any) -> List[str]:
     return []
 
 
-@dataclass
-class OtaSession:
-    node: str
-    id: str
-    status: str = ""
-    pct: Optional[int] = None
-    version: Optional[str] = None
-    target: Optional[str] = None
-    bytes: Optional[int] = None
-    sha256: Optional[str] = None
-    url: Optional[str] = None
-    reason: Optional[str] = None
-    last_details: Dict[str, Any] = field(default_factory=dict)
-    last_update: float = field(default_factory=now_ts)
+def fmt_local_ts_ms(ts: float) -> str:
+    lt = time.localtime(ts)
+    ms = int((ts - int(ts)) * 1000)
+    return time.strftime("%H:%M:%S", lt) + f".{ms:03d}" + " - " + time.strftime("%Y.%m.%d", lt)
+
+
+def fmt_local_ts(ts: float) -> str:
+    lt = time.localtime(ts)
+    return time.strftime("%H:%M:%S", lt) + " - " + time.strftime("%Y.%m.%d", lt)
 
 
 @dataclass
@@ -103,7 +97,18 @@ class PianoNoteCompat:
     margin: str
     top3: List[Tuple[str, Any]]
     verdict: Optional[str]  # "accepted" | "rejected" | None
-    seen_at: float = field(default_factory=now_ts)
+
+
+@dataclass
+class OtaPrettySession:
+    node: str
+    ota_id: str
+    version: Optional[str] = None
+    created_at: float = field(default_factory=now_ts)
+    header_printed: bool = False
+    printed_lines: Set[str] = field(default_factory=set)
+    last_pct: Optional[int] = None
+    ended: bool = False
 
 
 class LogsAllPretty:
@@ -114,24 +119,34 @@ class LogsAllPretty:
         self.running = True
         self._STOP_TOPIC = "__STOP__"
 
-        # OTA
-        self.ota_sessions: Dict[str, Dict[str, OtaSession]] = {}
-        self.last_ota_line: Dict[Tuple[str, str], str] = {}
-
-        # Piano
-        # node -> {progress:int|None, seq_list:list[str], ts:str}
+        # Piano state
         self.piano_seq_state: Dict[str, Dict[str, Any]] = {}
-        # node -> last NOTE_COMPAT that arrived immediately before seq
         self.last_note_compat: Dict[str, PianoNoteCompat] = {}
+
+        # OTA sessions and "recent flash" window to attach reboot logs
+        self.ota_sessions: Dict[str, Dict[str, OtaPrettySession]] = {}
+        self.ota_recent_flash: Dict[str, Tuple[str, float]] = {}  # node -> (id, flashed_ts)
+
+        # Pending id=? invalid_sha256 (held briefly so we can drop if real START follows)
+        self.pending_ota_fail: Dict[str, Tuple[float, str]] = {}  # node -> (ts, reason)
+        self.PENDING_FAIL_TTL = 5.0
 
     def stop(self, *_: Any) -> None:
         self.running = False
         try:
-            self.queue.put_nowait((self._STOP_TOPIC, "", now_ts()))
+            self.queue.put_nowait((self._STOP_TOPIC, "", now_ts(), False))
         except Exception:
             pass
 
-    def _on_connect(self, client: mqtt.Client, _u: Any, _f: Any, rc: int) -> None:
+    # paho v2 calls: on_connect(client, userdata, flags, rc, properties)
+    def _on_connect(
+        self,
+        client: mqtt.Client,
+        _userdata: Any,
+        _flags: Any,
+        rc: int,
+        _properties: Any = None,
+    ) -> None:
         if rc != 0:
             print(f"[mqtt] connect failed rc={rc}", file=sys.stderr)
             self.running = False
@@ -141,8 +156,9 @@ class LogsAllPretty:
 
     def _on_message(self, _c: mqtt.Client, _u: Any, msg: mqtt.MQTTMessage) -> None:
         payload = msg.payload.decode("utf-8", errors="replace")
+        retain = bool(getattr(msg, "retain", False))
         try:
-            self.queue.put_nowait((msg.topic, payload, now_ts()))
+            self.queue.put_nowait((msg.topic, payload, now_ts(), retain))
         except Exception:
             pass
 
@@ -165,27 +181,55 @@ class LogsAllPretty:
         try:
             while self.running:
                 try:
-                    topic, payload, ts_recv = self.queue.get(timeout=0.25)
+                    topic, payload, ts_recv, retain = self.queue.get(timeout=0.25)
                     if topic == self._STOP_TOPIC:
                         break
                     if topic.endswith("/log"):
-                        self.handle_log(topic, payload)
+                        self.handle_log(topic, payload, ts_recv)
                     elif topic.endswith("/ota"):
-                        self.handle_ota(topic, payload, ts_recv)
+                        self.handle_ota(topic, payload, ts_recv, retain)
                 except queue.Empty:
                     pass
+
+                self.flush_pending_ota_fails()
         finally:
             client.loop_stop()
             client.disconnect()
 
-    # ------------------------------------------------------------------
-    # Piano helpers
-    # ------------------------------------------------------------------
+    def _p(self, s: str) -> None:
+        try:
+            print(s)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            self.stop()
+
+    # ----------------- piano helpers -----------------
+    def infer_detector_verdict(self, msg: str, d: Dict[str, Any]) -> Optional[str]:
+        t_field = d.get("t")
+        if isinstance(t_field, str):
+            t = t_field.strip().upper()
+            if t == "ACC":
+                return "accepted"
+            if t == "REJ":
+                return "rejected"
+        if "ACC_COMPAT" in msg:
+            return "accepted"
+        if "REJ_COMPAT" in msg:
+            return "rejected"
+        return None
+
+    def reset_piano_state(self) -> None:
+        reset_state = {"progress": None, "seq_list": [], "ts": ""}
+        self.piano_seq_state["piano"] = dict(reset_state)
+        self.piano_seq_state["images_piano"] = dict(reset_state)
+        self.last_note_compat.pop("piano", None)
+        self.last_note_compat.pop("images_piano", None)
+
     def print_piano_block(
         self,
         ts: str,
         pred: str,
-        verdict: str,  # accepted/rejected/?
+        verdict: str,
         progress: Optional[int],
         seq_list: List[str],
         margin: str,
@@ -207,50 +251,128 @@ class LogsAllPretty:
         for p, s in top3:
             self._p(pad_score_line(p, s, label_width))
 
-    def infer_detector_verdict(self, msg: str, d: Dict[str, Any]) -> Optional[str]:
-        # Prefer explicit structured tag if present
-        t_field = d.get("t")
-        if isinstance(t_field, str):
-            t = t_field.strip().upper()
-            if t == "ACC":
-                return "accepted"
-            if t == "REJ":
-                return "rejected"
-        # Fallback to message content
-        if "ACC_COMPAT" in msg:
-            return "accepted"
-        if "REJ_COMPAT" in msg:
-            return "rejected"
-        return None
+    # ----------------- OTA helpers -----------------
+    def get_ota_session(self, node: str, ota_id: str, created_at: float) -> OtaPrettySession:
+        sess = self.ota_sessions.get(node, {}).get(ota_id)
+        if sess is None:
+            sess = OtaPrettySession(node=node, ota_id=ota_id, created_at=created_at)
+            self.ota_sessions.setdefault(node, {})[ota_id] = sess
+        return sess
 
-    def reset_piano_state(self, ts: str) -> None:
-        # Set both nodes to empty so we never accidentally reuse older seq/progress
-        reset_state = {"progress": None, "seq_list": [], "ts": ts}
-        self.piano_seq_state["piano"] = dict(reset_state)
-        self.piano_seq_state["images_piano"] = dict(reset_state)
-        self.last_note_compat.pop("piano", None)
-        self.last_note_compat.pop("images_piano", None)
+    def print_ota_header_if_needed(self, sess: OtaPrettySession) -> None:
+        if sess.header_printed:
+            return
+        ver = sess.version or "?"
+        self._p(OTA_SEP)
+        self._p(f"{fmt_local_ts_ms(sess.created_at)} | OTA | {sess.node} | v={ver} | id={sess.ota_id}")
+        self._p(OTA_SEP)
+        sess.header_printed = True
 
-    # ------------------------------------------------------------------
-    # LOG HANDLING
-    # ------------------------------------------------------------------
-    def handle_log(self, topic: str, payload: str) -> None:
+    def ota_line(self, sess: OtaPrettySession, when_ts: float, text: str) -> None:
+        line = f"{fmt_local_ts(when_ts)} | {text}"
+        if line in sess.printed_lines:
+            return
+        sess.printed_lines.add(line)
+        self._p(line)
+
+    def ota_flashing_line(self, sess: OtaPrettySession, when_ts: float, pct: int) -> None:
+        line = f"{fmt_local_ts(when_ts)} | FLASHING - {pct:3d}%"
+        if line in sess.printed_lines:
+            return
+        sess.printed_lines.add(line)
+        self._p(line)
+
+    def ota_end_if_needed(self, sess: OtaPrettySession, when_ts: float) -> None:
+        if sess.ended:
+            return
+        self.ota_line(sess, when_ts, "END")
+        sess.ended = True
+
+    def flush_pending_ota_fails(self) -> None:
+        now = now_ts()
+        for node, (ts_fail, reason) in list(self.pending_ota_fail.items()):
+            if now - ts_fail >= self.PENDING_FAIL_TTL:
+                sess = self.get_ota_session(node, "?", ts_fail)
+                self.print_ota_header_if_needed(sess)
+                self.ota_line(sess, ts_fail, f"FAIL {reason}")
+                self.ota_end_if_needed(sess, ts_fail)
+                del self.pending_ota_fail[node]
+
+    def attach_log_to_recent_ota(self, node: str, ts_recv: float, msg: str, ts_str: str) -> bool:
+        recent = self.ota_recent_flash.get(node)
+        if not recent:
+            return False
+        ota_id, flashed_at = recent
+        if ts_recv - flashed_at > 60:
+            return False
+
+        sess = self.get_ota_session(node, ota_id, flashed_at)
+        self.print_ota_header_if_needed(sess)
+
+        if "OTA FLASHED, rebooting" in msg:
+            self.ota_line(sess, ts_recv, "REBOOT")
+            return True
+        if "MQTT connected" in msg:
+            self.ota_line(sess, ts_recv, "MQTT connected")
+            return True
+        if "time_resync delta_s=" in msg:
+            delta = "?"
+            try:
+                delta = msg.split("delta_s=", 1)[1].strip()
+            except Exception:
+                pass
+            # prefer device timestamp string if present
+            when = ts_str if ts_str else ts_recv
+            line = f"{when} | time_resync: {delta}"
+            if line not in sess.printed_lines:
+                sess.printed_lines.add(line)
+                self._p(line)
+            self.ota_end_if_needed(sess, ts_recv)
+            return True
+
+        return False
+
+    # ----------------- LOG HANDLING -----------------
+    def handle_log(self, topic: str, payload: str, recv_ts: float) -> None:
         data = self.safe_json(payload)
         if not isinstance(data, dict):
             self._p(f"[unparsed] {topic}: {payload}")
             return
 
         node = topic.split("/")[0]
-        level = data.get("lv") or data.get("level") or "?"
-        ts = data.get("ts") or ""
+        level = str(data.get("lv") or data.get("level") or "?")
+        ts = str(data.get("ts") or "")
         msg = str(data.get("msg") or "")
         d = data.get("d")
 
-        # ============================
-        # PIANO SPECIAL CASES
-        # ============================
+        # Attach reboot-tail logs to OTA block
+        if self.attach_log_to_recent_ota(node, recv_ts, msg, ts):
+            return
+
+        # Print time_resync always (outside OTA it becomes a normal single-line event)
+        if "time_resync delta_s=" in msg:
+            delta = "?"
+            try:
+                delta = msg.split("delta_s=", 1)[1].strip()
+            except Exception:
+                pass
+            when = ts if ts else fmt_local_ts(recv_ts)
+            self._p(f"{when} | time_resync: {delta}")
+            return
+
+        # Suppress noisy OTA-related logs that duplicate OTA block
+        if msg.startswith("CMD topic=") and "msg=UPDATE" in msg:
+            return
+        if msg.startswith("OTA_START id="):
+            return
+        if msg.startswith("CMD UPDATE -> HTTP OTA"):
+            return
+        if "OTA missing/invalid sha256" in msg:
+            self.pending_ota_fail[node] = (recv_ts, "invalid_sha256")
+            return
+
+        # Piano
         if node in {"images_piano", "piano"}:
-            # REJ_COMPAT: print immediately with empty seq and progress "0"
             if "REJ_COMPAT" in msg and isinstance(d, dict):
                 pred = str(d.get("pred") or "?")
                 margin = fnum(d.get("margin"), ".4f") or "?"
@@ -263,18 +385,17 @@ class LogsAllPretty:
                             top3.append((str(item.get("p")), item.get("s")))
 
                 self.print_piano_block(
-                    ts=ts,
+                    ts=ts or fmt_local_ts_ms(recv_ts),
                     pred=pred,
                     verdict="rejected",
-                    progress=None,   # MUST be "?"
-                    seq_list=[],     # MUST be "(no seq)"
+                    progress=None,
+                    seq_list=[],
                     margin=margin,
                     top3=top3,
                 )
-                self.reset_piano_state(ts)
+                self.reset_piano_state()
                 return
 
-            # NOTE_COMPAT: cache details (do not print)
             if "NOTE_COMPAT" in msg and isinstance(d, dict):
                 pred = str(d.get("pred") or "?")
                 margin = fnum(d.get("margin"), ".4f") or "?"
@@ -296,7 +417,6 @@ class LogsAllPretty:
                 )
                 return
 
-            # PIANO_SEQ: update state and print using cached NOTE_COMPAT
             if "PIANO_SEQ" in msg and isinstance(d, dict):
                 seq_list = parse_seq_string(d.get("seq"))
                 prog_raw = d.get("progress")
@@ -305,24 +425,18 @@ class LogsAllPretty:
                 except Exception:
                     prog_i = None
 
-                self.piano_seq_state[node] = {
-                    "progress": prog_i,
-                    "seq_list": seq_list,
-                    "ts": ts,
-                }
+                self.piano_seq_state[node] = {"progress": prog_i, "seq_list": seq_list, "ts": ts}
 
-                # Pick last note compat from the same node, else other
                 note = self.last_note_compat.get(node) or self.last_note_compat.get(
                     "piano" if node == "images_piano" else "images_piano"
                 )
 
-                # If no NOTE_COMPAT cached, still print something minimal
                 if note is None:
                     pred = seq_list[-1] if seq_list else "?"
                     self.print_piano_block(
-                        ts=ts,
+                        ts=ts or fmt_local_ts_ms(recv_ts),
                         pred=pred,
-                        verdict="accepted",  # reaching PIANO_SEQ implies accepted-by-detector stream
+                        verdict="accepted",
                         progress=prog_i,
                         seq_list=seq_list,
                         margin="?",
@@ -330,11 +444,9 @@ class LogsAllPretty:
                     )
                     return
 
-                # accepted/rejected ONLY from detector (if absent, default accepted because it reached seq stream)
                 verdict = note.verdict or "accepted"
-
                 self.print_piano_block(
-                    ts=note.ts or ts,
+                    ts=note.ts or ts or fmt_local_ts_ms(recv_ts),
                     pred=note.pred,
                     verdict=verdict,
                     progress=prog_i,
@@ -344,25 +456,20 @@ class LogsAllPretty:
                 )
                 return
 
-        # ============================
-        # GENERIC LOG
-        # ============================
+        # Generic log
         header = f"{node}/log {level}"
         if ts:
             header += f" {ts}"
 
-        msg_out = str(data.get("msg") or "")
-        if "\n" in msg_out:
+        if "\n" in msg:
             self._p(header)
-            for line in msg_out.splitlines():
+            for line in msg.splitlines():
                 self._p(line)
         else:
-            self._p(f"{header} {msg_out}")
+            self._p(f"{header} {msg}")
 
-    # ------------------------------------------------------------------
-    # OTA HANDLING
-    # ------------------------------------------------------------------
-    def handle_ota(self, topic: str, payload: str, recv_ts: float) -> None:
+    # ----------------- OTA HANDLING -----------------
+    def handle_ota(self, topic: str, payload: str, recv_ts: float, retain: bool) -> None:
         data = self.safe_json(payload)
         if not isinstance(data, dict):
             self._p(f"[unparsed] {topic}: {payload}")
@@ -382,54 +489,59 @@ class LogsAllPretty:
             details = {}
 
         ota_id = str(details.get("id") or "?")
-        sess = self.ota_sessions.get(node, {}).get(ota_id) or OtaSession(node=node, id=ota_id)
+        reason = str(details.get("reason") or "")
+        ver = details.get("version")
+        if ver is not None:
+            ver = str(ver)
 
-        sess.status = status
-        sess.last_update = recv_ts
-        sess.last_details = details
-        sess.version = str(details.get("version") or sess.version or "") or sess.version
-        sess.target = str(details.get("target") or sess.target or "") or sess.target
-        sess.url = str(details.get("url") or sess.url or "") or sess.url
-        sess.pct = int_or_none(details.get("pct"), sess.pct)
-        sess.bytes = int_or_none(details.get("bytes"), sess.bytes)
-        sess.sha256 = str(details.get("sha256") or sess.sha256 or "") or sess.sha256
-        sess.reason = str(details.get("reason") or "") or sess.reason
-
-        self.ota_sessions.setdefault(node, {})[ota_id] = sess
-        self.print_ota_event(sess)
-
-    def print_ota_event(self, sess: OtaSession) -> None:
-        parts = [
-            "OTA",
-            f"node={sess.node}",
-            f"id={sess.id}",
-            f"st={sess.status}",
-        ]
-        if sess.pct is not None:
-            parts.append(f"pct={sess.pct}%")
-        if sess.version:
-            parts.append(f"ver={sess.version}")
-        if sess.target:
-            parts.append(f"tgt={sess.target}")
-        if sess.reason:
-            parts.append(f"reason={sess.reason}")
-
-        line = " ".join(parts)
-        key = (sess.node, sess.id)
-        if self.last_ota_line.get(key) == line:
+        # Keep retained OTA messages at start,
+        # but suppress retained timeline spam lines:
+        if retain and status in {"OTA_PROGRESS", "OTA_FLASHED"}:
             return
-        self.last_ota_line[key] = line
 
-        ts_local = time.strftime("%H:%M:%S", time.localtime(sess.last_update))
-        self._p(f"{ts_local} | {line}")
+        # Hold id=? invalid_sha256 briefly so we can drop it if a real START follows
+        if status == "OTA_FAIL" and ota_id == "?" and "invalid_sha256" in reason:
+            self.pending_ota_fail[node] = (recv_ts, "invalid_sha256")
+            return
 
-    # ------------------------------------------------------------------
-    def _p(self, s: str) -> None:
-        try:
-            print(s)
-            sys.stdout.flush()
-        except BrokenPipeError:
-            self.stop()
+        if status == "OTA_START":
+            self.pending_ota_fail.pop(node, None)
+
+        sess = self.get_ota_session(node, ota_id, recv_ts)
+        if ver:
+            sess.version = ver
+
+        self.print_ota_header_if_needed(sess)
+
+        if status == "OTA_START":
+            self.ota_line(sess, recv_ts, "START")
+
+        elif status == "OTA_PROGRESS":
+            pct = int_or_none(details.get("pct"))
+            if pct is not None:
+                sess.last_pct = pct
+                self.ota_flashing_line(sess, recv_ts, pct)
+
+        elif status == "OTA_FLASHED":
+            if sess.last_pct is None or sess.last_pct < 100:
+                self.ota_flashing_line(sess, recv_ts, 100)
+                sess.last_pct = 100
+            self.ota_line(sess, recv_ts, "FLASHED")
+            self.ota_recent_flash[node] = (ota_id, recv_ts)
+
+        elif status == "OTA_OK":
+            self.ota_line(sess, recv_ts, "OK")
+            self.ota_end_if_needed(sess, recv_ts)
+
+        elif status == "OTA_FAIL":
+            if reason:
+                self.ota_line(sess, recv_ts, f"FAIL {reason}")
+            else:
+                self.ota_line(sess, recv_ts, "FAIL")
+            self.ota_end_if_needed(sess, recv_ts)
+
+        else:
+            self.ota_line(sess, recv_ts, status or "OTA")
 
 
 def main() -> None:
