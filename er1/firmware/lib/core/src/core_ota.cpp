@@ -357,13 +357,6 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     }
     return false;
   }
-
-  if (!cmd.hasId) {
-    // ID is optional; older publishers may omit it. We still accept the update command.
-    logger_->publish("WRN", "OTA missing id; continuing");
-  }
-
-
   const char* expectedTarget = cfg_.targetId;
   if (expectedTarget && expectedTarget[0]) {
     if (!cmd.hasTarget) {
@@ -772,6 +765,7 @@ String OtaUpdater::buildBaseJson() const {
     data += currentUrl_;
     data += "\"";
   }
+    data += "}";
   return data;
 }
 

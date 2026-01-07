@@ -716,10 +716,9 @@ done
 
             $bash = $bash.Replace("__TIMEOUT__", "$hbTimeoutSec").Replace("__TARGET__", "$target").Replace("__CMDTOPIC__", "$cmdTopic")
 
-            # Pipe the script over SSH without quote hell
-            $subCmd = "bash -lc " + [char]34 + "cat <<'ER1EOF' | bash" + [char]10 + $bash + [char]10 + "ER1EOF" + [char]34
-            $lines = ssh $er1Pi $subCmd
-$rebooted = $false
+            # Run the script on the Pi by piping it over SSH (no heredoc / quoting issues).
+            $lines = $bash | ssh $er1Pi "bash -lc 'bash -s'"
+            $rebooted = $false
             $prevUp = $null
             $lastSeen = $null
             $ok = $false
