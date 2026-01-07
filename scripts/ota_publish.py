@@ -242,16 +242,19 @@ def main() -> int:
             raise OtaPublishError(f"Firmware size invalid: {size_bytes}")
 
         topic = f"{cmd_node}/cmd"
+
+        # IMPORTANT:
+        # We intentionally DO NOT include an OTA id ("id") because legacy nodes truncate
+        # the JSON payload; id is not required for OTA correctness.
         payload_obj = {
             "version": version,
+            "build": build,
             "target": target,
             "url": url,
             "sha256": sha_hex,
             "size": size_bytes,
         }
-        # Keep payload small for legacy nodes (PubSubClient default buffer). Add build only if explicitly requested.
-        if args.include_build:
-            payload_obj["build"] = build
+
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
         payload = f"UPDATE {payload_json}"
 
@@ -261,8 +264,7 @@ def main() -> int:
         print(f"URL      : {url}")
         print(f"Dev      : {args.dev}")
         print(f"Version  : {version}")
-        print(f"Build    : {args.build}")
-        print(f"IncludeBuildInJson : {bool(args.include_build)}")
+        print(f"Build    : {build}")
         print(f"Target   : {target}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
