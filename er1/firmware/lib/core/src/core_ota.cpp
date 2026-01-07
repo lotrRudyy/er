@@ -210,7 +210,7 @@ bool parseJsonCommand(const char* payload, CommandFields& out) {
   if (version) {
     copyBounded(version, out.version, sizeof(out.version));
   }
-  const char* build = obj["build"] | obj["build_id"];
+  const char* build = obj["build"] | obj["build"] | obj["nonce"];
   if (build) {
     copyBounded(build, out.build, sizeof(out.build));
   }
@@ -262,7 +262,7 @@ bool parseLegacyTokens(const String& payload, CommandFields& out) {
       out.hasUrlPort = out.urlPort > 0;
     } else if (key == "version" || key == "ver") {
       value.toCharArray(out.version, kMaxVersionLen + 1);
-    } else if (key == "build" || key == "build_id") {
+    } else if (key == "build" || key == "build_id" || key == "nonce") {
       value.toCharArray(out.build, kMaxBuildLen + 1);
     } else if (key == "target" || key == "node" || key == "dev") {
       value.toCharArray(out.target, kMaxTargetLen + 1);
@@ -333,6 +333,7 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
+  currentBuild_ = cmd.hasBuild ? String(cmd.build) : String("?");
   currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
   if (cmd.hasTarget) {
     currentTarget_ = cmd.target;
@@ -359,11 +360,9 @@ bool OtaUpdater::perform(const char* cmdPayload) {
 
   if (!cmd.hasBuild) {
     logger_->publish(cfg_.errLevel, "OTA missing build");
-    publishFail("auth", -1, "missing_build", 0, "\"reason\":\"missing_build\"");
+    publishFail("auth", -1, "missing_build", 0, "\"reason\":\"missing_build\"" );
     return false;
   }
-
-  currentBuild_ = String(cmd.build);
 
 
   const char* expectedTarget = cfg_.targetId;

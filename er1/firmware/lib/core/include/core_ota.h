@@ -41,9 +41,7 @@ struct OtaUpdateCommand {
   bool hasVersion = false;
   bool hasBuild = false;
   bool hasTarget = false;
-  bool hasSize = false;
 };
-
 
 // Parse OTA UPDATE payload (JSON or legacy tokens). Returns false on parse failure.
 bool parseUpdateCommand(const char* payload, OtaUpdateCommand& out);

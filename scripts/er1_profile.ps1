@@ -716,8 +716,10 @@ done
 
             $bash = $bash.Replace("__TIMEOUT__", "$hbTimeoutSec").Replace("__TARGET__", "$target").Replace("__CMDTOPIC__", "$cmdTopic")
 
-            # Run the script on the Pi by piping it over SSH (no heredoc / quoting issues).
-            $lines = $bash | ssh $er1Pi "bash -lc 'bash -s'"
+            # Run the verifier script on the Pi (robust quoting via base64).
+            $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bash))
+            $subCmd = "bash -lc 'echo $b64 | base64 -d | bash'"
+            $lines = ssh $er1Pi $subCmd
             $rebooted = $false
             $prevUp = $null
             $lastSeen = $null
