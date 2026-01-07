@@ -29,10 +29,7 @@ except ImportError as exc:  # pragma: no cover - dependency check
 HB_INTERVAL_SEC = int(os.environ.get("HB_INTERVAL_SEC", "20"))
 TIME_STALE_SEC = 90
 RESTART_DELTA = 5  # seconds of slack when detecting uptime drops
-SEPARATOR = "-" * 64
-LOG_HISTORY_LINES = int(os.environ.get("LOG_HISTORY_LINES", "200"))
-LOG_DIR = Path(os.environ.get("LOG_DIR", Path(__file__).resolve().parent.parent / "logs"))
-
+SEPARATOR = "-" * 68
 
 def now_ts() -> float:
     return time.time()
@@ -117,8 +114,6 @@ class PrettyLogger:
         self.start_ts = now_ts()
         self.running = True
         self.last_dashboard_ts: Optional[int] = None
-        self.history_lines = LOG_HISTORY_LINES
-        self.log_dir = LOG_DIR
         self.burst_active = False
         self.burst_end_ts: Optional[float] = None
 
@@ -145,8 +140,6 @@ class PrettyLogger:
         client.on_message = self._on_message
         client.connect(self.broker, self.port, 30)
         client.loop_start()
-
-        self.print_startup_history()
 
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
@@ -367,28 +360,6 @@ class PrettyLogger:
     def print_fallback(self, topic: str, payload: str) -> None:
         print(f"[unparsed] {topic}: {payload}")
 
-    def print_startup_history(self) -> None:
-        if self.history_lines <= 0:
-            return
-        today = datetime.fromtimestamp(now_ts()).strftime("%d.%m.%Y")
-        log_file = self.log_dir / f"er1-{today}.log"
-        try:
-            with log_file.open("r", encoding="utf-8") as fh:
-                last_lines = deque(fh, maxlen=self.history_lines)
-        except FileNotFoundError:
-            return
-        except Exception as exc:  # pragma: no cover - best-effort history
-            print(f"[history] failed to read {log_file}: {exc}", file=sys.stderr)
-            return
-
-        lines = list(last_lines)
-        if not lines:
-            return
-        print(f"[history] showing last {len(lines)} lines from {log_file}")
-        for line in lines:
-            print(line.rstrip("\n"))
-        print(SEPARATOR)
-
     def format_heap(self, hb: Heartbeat) -> str:
         size = hb.heap_size or 0
         free_pct = None
@@ -473,7 +444,7 @@ class PrettyLogger:
             flag_str = f" ({', '.join(flags)})" if flags else ""
             up_field = f"{format_uptime(hb.up)}{flag_str}"
             row = [
-                f"{hb.node:9}",
+                f"{hb.node:13}",
                 f"{up_field:<14}",
                 f"{(hb.fw or '?'):<6}",
                 f"{self.format_build(hb.build):<7}",
@@ -486,7 +457,7 @@ class PrettyLogger:
             print("(no heartbeats yet)")
         else:
             header = [
-                f"{'node':9}",
+                f"{'node':13}",
                 f"{'up':<14}",
                 f"{'fw':<6}",
                 f"{'build':<7}",
