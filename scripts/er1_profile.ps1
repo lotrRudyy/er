@@ -4,7 +4,6 @@ Set-StrictMode -Version Latest
 # ---- ER1 Pi over Tailscale ----
 $er1Pi  = "rudyy@100.108.1.80"
 $er1RemoteLogDir = "/home/rudyy/er1/logs"
-$er1TodayLog = "$er1RemoteLogDir/er1-" + (Get-Date -Format "dd.MM.yyyy") + ".log"
 
 # ---- Repo root detection (PC + Laptop) ----
 $pcPath     = "$HOME\Documents\Escape Room\er"
@@ -58,9 +57,8 @@ $er1LockIds = @(
 $er1Commands = [ordered]@{
     "help"   = "Show help + examples"
     "pi"     = "SSH into the ER1 Pi"
-    "log"    = "Tail logs (today/errors/live), tag markers, or extract slices"
-    "logs"   = "Pi-side MQTT view (pretty dashboard)"
-    "ota"    = "Upload firmware to a device via ota.ps1"
+    "log"    = "Logs: tail/errors/live, tag, extract, hb dashboard, pretty"
+"ota"    = "Upload firmware to a device via ota.ps1"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
     "status" = "One-shot health summary"
@@ -68,6 +66,28 @@ $er1Commands = [ordered]@{
     "reset"  = "Reset riddles (all or one): er1 reset all | er1 reset <riddle>"
     "push"   = "Git add/commit/push from repo root"
     "commit" = "Legacy alias for 'er1 push'"
+}
+
+# =========================================================
+# LOG PATH HELPERS (FIX: DO NOT FREEZE TODAY AT PROFILE LOAD)
+# =========================================================
+
+function Get-Er1TodayLogRemotePath {
+    # Returns the log file path for "today" based on the PI's date.
+    # We intentionally use PI time/date so PC timezone doesn't matter.
+    #
+    # IMPORTANT: escape $ so PowerShell doesn't treat $(...) as its own subexpression.
+    $cmd = "bash -lc 'echo $er1RemoteLogDir/er1-\$(date +%d.%m.%Y).log'"
+    return (ssh $er1Pi $cmd).Trim()
+}
+
+function Get-Er1LogRemotePathForDate {
+    param(
+        [Parameter(Mandatory=$true)]
+        [datetime]$Date
+    )
+    # For local, deterministic "date -> filename" mapping (used by extract).
+    return "$er1RemoteLogDir/er1-" + $Date.ToString("dd.MM.yyyy") + ".log"
 }
 
 # =========================================================
@@ -182,8 +202,10 @@ function Invoke-Er1Status {
     Write-Host "`n=== MQTT (BROKER) ===" -ForegroundColor Cyan
     ssh $er1Pi "mosquitto_sub -h 127.0.0.1 -t '\$SYS/broker/version' -C 1 2>/dev/null || true"
 
+    $todayFile = Get-Er1TodayLogRemotePath
+
     Write-Host "`n=== LAST ERR LOGS (today, last 20) ===" -ForegroundColor Cyan
-    ssh $er1Pi "grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 20 || true"
+    ssh $er1Pi "grep '""lv"":""ERR""' $todayFile 2>/dev/null | tail -n 20 || true"
 }
 
 function Invoke-Er1Doctor {
@@ -206,6 +228,9 @@ function Invoke-Er1Doctor {
     }
 
     "=== REMOTE ===" | Out-File $out -Append
+
+    $todayFile = Get-Er1TodayLogRemotePath
+
     $remoteCmds = @(
         "echo '--- uname ---'; uname -a",
         "echo '--- uptime ---'; uptime",
@@ -217,8 +242,8 @@ function Invoke-Er1Doctor {
         "echo '--- journal mosquitto (200) ---'; journalctl -u mosquitto.service -n 200 --no-pager || true",
         "echo '--- journal mqtt-log (200) ---'; journalctl -u mqtt-log.service -n 200 --no-pager || true",
         "echo '--- journal ota-http (200) ---'; journalctl -u ota-http.service -n 200 --no-pager || true",
-        "echo '--- today log tail (200) ---'; tail -n 200 $er1TodayLog 2>/dev/null || true",
-        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $er1TodayLog 2>/dev/null | tail -n 50 || true"
+        "echo '--- today log tail (200) ---'; tail -n 200 $todayFile 2>/dev/null || true",
+        "echo '--- today ERR tail (50) ---'; grep '""lv"":""ERR""' $todayFile 2>/dev/null | tail -n 50 || true"
     )
 
     foreach ($cmd in $remoteCmds) {
@@ -456,8 +481,6 @@ function Invoke-Er1LogExtract {
 # MAIN DISPATCHER
 # =========================================================
 
-
-
 function Get-Er1RiddleResetMap {
     # Key = riddle name you type after `er1 reset <name>`
     # Value = @{ dev = "<mqtt device>"; cmd = "<command>" }
@@ -580,9 +603,9 @@ function er1 {
             Write-Host "  er1 status"
             Write-Host "  er1 doctor"
 
+            Write-Host "`nReset examples:" -ForegroundColor Cyan
+            Write-Host "  er1 reset all"
 
-            Write-Host \"`nReset examples:\" -ForegroundColor Cyan
-            Write-Host \"  er1 reset all\"
             Write-Host "`nMQTT examples:" -ForegroundColor Cyan
             Write-Host "  er1 mqtt status"
             Write-Host "  er1 mqtt restart"
@@ -599,7 +622,8 @@ function er1 {
             Write-Host "  er1 log tag game-start"
             Write-Host "  er1 log extract --tag game"
             Write-Host "  er1 log extract --from game-start --to game-end --date 2025-12-14 --no-open"
-            Write-Host "  er1 logs pretty"
+            Write-Host "  er1 log pretty"
+            Write-Host "  er1 log hb"
             Write-Host ""
             return
         }
@@ -703,57 +727,53 @@ function er1 {
             ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m '$payloadEsc'"
             if ($LASTEXITCODE -ne 0) { throw "Failed to publish OTA command via mosquitto_pub (exit $LASTEXITCODE)." }
 
+            # PC-side verify (30s max)...
+            $hbTimeoutSec = 30
+            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
 
+            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"
+            $lines = ssh $er1Pi $subCmd
 
-	            # PC-side verify (10s max): ONLY check that
-	            #   1) ESP rebooted (offline or uptime reset)
-	            #   2) the first heartbeat AFTER reboot reports build == the build-id we just uploaded
-	            $hbTimeoutSec = 30
-	            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
+            $rebooted = $false
+            $prevUp = $null
+            $lastSeen = $null
+            $ok = $false
 
-	            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"
-	            $lines = ssh $er1Pi $subCmd
+            foreach ($payload in $lines) {
+                if (-not $payload) { continue }
+                $lastSeen = $payload
 
-	            $rebooted = $false
-	            $prevUp = $null
-	            $lastSeen = $null
-	            $ok = $false
+                if ($payload.ToLowerInvariant() -eq "offline") {
+                    $rebooted = $true
+                    continue
+                }
 
-	            foreach ($payload in $lines) {
-	                if (-not $payload) { continue }
-	                $lastSeen = $payload
+                try { $hb = $payload | ConvertFrom-Json } catch { continue }
+                $upVal = $hb.up
+                try {
+                    $upInt = [int]$upVal
+                    if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
+                        $rebooted = $true
+                    }
+                    $prevUp = $upInt
+                } catch {
+                    # ignore
+                }
 
-	                if ($payload.ToLowerInvariant() -eq "offline") {
-	                    $rebooted = $true
-	                    continue
-	                }
+                $hbBuild = [string]$hb.build
+                if ($rebooted -and $hbBuild -and $hbBuild -eq $bldStr) {
+                    $ok = $true
+                    break
+                }
+            }
 
-	                try { $hb = $payload | ConvertFrom-Json } catch { continue }
-	                $upVal = $hb.up
-	                try {
-	                    $upInt = [int]$upVal
-	                    if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
-	                        $rebooted = $true
-	                    }
-	                    $prevUp = $upInt
-	                } catch {
-	                    # ignore
-	                }
+            if ($ok) {
+                Write-Host "== OTA VERIFY: OK (rebooted + hb.build matches) ==" -ForegroundColor Green
+                return
+            }
 
-	                $hbBuild = [string]$hb.build
-	                if ($rebooted -and $hbBuild -and $hbBuild -eq $bldStr) {
-	                    $ok = $true
-	                    break
-	                }
-	            }
-
-	            if ($ok) {
-	                Write-Host "== OTA VERIFY: OK (rebooted + hb.build matches) ==" -ForegroundColor Green
-	                return
-	            }
-
-	            $reason = if (-not $lastSeen) { "no hb received" } elseif (-not $rebooted) { "no reboot detected" } else { "hb.build didn't match" }
-	            throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
+            $reason = if (-not $lastSeen) { "no hb received" } elseif (-not $rebooted) { "no reboot detected" } else { "hb.build didn't match" }
+            throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
         }
 
         "lock" {
@@ -783,7 +803,7 @@ function er1 {
         }
 
         "log" {
-            # Minimal (fast) implementation: today/errors/live + simple regex filter + optional --save.
+            # Subcommands first
             if ($cmdArgs -and $cmdArgs.Count -gt 0) {
                 $sub = $cmdArgs[0].ToLowerInvariant()
                 if ($sub -eq "tag") {
@@ -798,6 +818,17 @@ function er1 {
                     Invoke-Er1LogExtract -ExtractArgs $extractArgsLocal
                     return
                 }
+                elseif ($sub -eq "hb") {
+                    # Heartbeat dashboard (Pi-side)
+                    ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/hb_pretty.py"
+                    return
+                }
+                elseif ($sub -eq "pretty") {
+                    # Consolidated pretty view (Pi-side)
+                    ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/all_logs_pretty.py"
+                    return
+                }
+
             }
 
             $argsNoSave = @()
@@ -828,7 +859,8 @@ function er1 {
             $useAll = ($patterns.Count -eq 1 -and $patterns[0] -eq "*")
             $regex  = if ($useAll) { $null } else { ($patterns -join "|") }
 
-            $todayFile = $er1TodayLog
+            # ALWAYS resolve today file at runtime (using PI date)
+            $todayFile = Get-Er1TodayLogRemotePath
 
             $localSaveDir = Join-Path $erRepoRoot "er1\data\logs"
             if ($saveRequested) {
@@ -836,11 +868,58 @@ function er1 {
             }
 
             if ($live) {
-                if ($useAll) {
-                    ssh -t $er1Pi "tail -f $todayFile"
-                } else {
-                    ssh -t $er1Pi "tail -f $todayFile | grep -E '$regex'"
+                # Remote loop that switches log file at midnight (PI date), without restarting local terminal.
+                $regexEsc = $null
+                if (-not $useAll -and $regex) {
+                    # Escape for embedding inside single-quoted bash string
+                    $regexEsc = $regex -replace "'", "'\''"
                 }
+
+                if ($useAll) {
+                    $remoteFollow = @"
+bash -lc '
+cur=""
+curDay=""
+while true; do
+  day=\$(date +%d.%m.%Y)
+  file="$er1RemoteLogDir/er1-\$day.log"
+
+  if [ "\$day" != "\$curDay" ]; then
+    curDay="\$day"
+    echo "=== [er1 log] following \$file ==="
+    if [ -n "\$cur" ]; then kill "\$cur" 2>/dev/null || true; fi
+    tail -n 0 -f "\$file" &
+    cur=\$!
+  fi
+
+  sleep 1
+done
+'
+"@
+                } else {
+                    $remoteFollow = @"
+bash -lc '
+cur=""
+curDay=""
+while true; do
+  day=\$(date +%d.%m.%Y)
+  file="$er1RemoteLogDir/er1-\$day.log"
+
+  if [ "\$day" != "\$curDay" ]; then
+    curDay="\$day"
+    echo "=== [er1 log] following \$file (filter) ==="
+    if [ -n "\$cur" ]; then kill "\$cur" 2>/dev/null || true; fi
+    ( tail -n 0 -f "\$file" | grep -E '$regexEsc' ) &
+    cur=\$!
+  fi
+
+  sleep 1
+done
+'
+"@
+                }
+
+                ssh -t $er1Pi $remoteFollow
                 return
             }
 
@@ -850,13 +929,16 @@ function er1 {
                 if ($useAll) {
                     $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
                 } else {
-                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                    # Escape regex for single-quoted grep -E
+                    $regexEsc2 = $regex -replace "'", "'\''"
+                    $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
                 }
             } else {
                 if ($useAll) {
                     $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
                 } else {
-                    $remoteCmd = "cd ~/er1; grep -E '$regex' $todayFile | tail -n $localN"
+                    $regexEsc2 = $regex -replace "'", "'\''"
+                    $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | tail -n $localN"
                 }
             }
 
@@ -875,18 +957,6 @@ function er1 {
             return
         }
 
-        "logs" {
-            $sub = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs[0].ToLowerInvariant() } else { "pretty" }
-            switch ($sub) {
-                "pretty" {
-                    ssh -t $er1Pi "cd ~/er1 && ./scripts/mqtt_logs.sh pretty"
-                    return
-                }
-                default {
-                    throw "Usage: er1 logs pretty"
-                }
-            }
-        }
 
         "push" {
             $Message = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs -join " " } else { $null }
@@ -942,7 +1012,7 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
     if ($tokens.Count -lt 2) { return }
     $sub = $tokens[1].Value
     if ($sub -eq "log") {
-        (@("*") + $er1LogDevices) |
+        (@("*","hb","pretty","tag","extract") + $er1LogDevices) |
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
     }
