@@ -668,10 +668,6 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
 
   if (wasValid) {
     deltaSec = (currentEpoch > epoch) ? (currentEpoch - epoch) : (epoch - currentEpoch);
-    if (deltaSec <= 2) {
-      // Delta <= 2 seconds, ignore silently
-      return;
-    }
   }
 
   // Set time
@@ -689,7 +685,9 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
     }
   } else {
     // Resync
-    logger_.publish("WRN", String("time_resync delta_s=") + static_cast<long long>(deltaSec));
+    if (deltaSec > 2) {
+      logger_.publish("WRN", String("time_resync delta_s=") + static_cast<long long>(deltaSec));
+    }
   }
 }
 

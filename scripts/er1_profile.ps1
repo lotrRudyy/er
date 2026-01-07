@@ -688,43 +688,8 @@ function er1 {
             if (-not $verStr) { throw "Verifier: could not parse Version from ota.ps1 output." }
             if (-not $bldStr) { throw "Verifier: could not parse Build from ota.ps1 output." }
 
-            # Compute SHA256 + size on the PC for the locally built .bin
-            $localBin = Join-Path $erRepoRoot ("er1\firmware\.pio\build\{0}\firmware.bin" -f $target)
-            Write-Host "== LocalBin: $localBin =="
-            if (-not (Test-Path $localBin)) {
-                throw "Verifier: local firmware.bin not found at $localBin"
-            }
-
-            $hash = (Get-FileHash -Algorithm SHA256 -Path $localBin).Hash.ToLowerInvariant()
-            $size = (Get-Item $localBin).Length
-            if ($size -le 0) { throw "Verifier: local firmware.bin size invalid: $size" }
-
-            # URL served by Pi (ota-http)
-            $httpHost = "192.168.0.10"
-            $url = "http://$httpHost/node_firmware/$target.bin"
-
-            # Publish UPDATE via mosquitto_pub on the Pi (no Pi python scripts)
-            # Use the firmware build-id as the OTA id (no extra random id generation).
-            $otaId = $bldStr
-            $payloadObj = [ordered]@{
-                id      = $otaId
-                version = $verStr
-                build   = $bldStr
-                target  = $target
-                url     = $url
-                sha256  = $hash
-                size    = $size
-            }
-            $payloadJson = ($payloadObj | ConvertTo-Json -Compress)
-            $cmdTopic = "$target/cmd"
-            $payloadLine = "UPDATE $payloadJson"
-
-            # Escape single quotes for remote bash single-quoted string
-            $payloadEsc = $payloadLine -replace "'", "'\''"
-
-            Write-Host "== Publishing OTA command on $cmdTopic =="
-            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m '$payloadEsc'"
-            if ($LASTEXITCODE -ne 0) { throw "Failed to publish OTA command via mosquitto_pub (exit $LASTEXITCODE)." }
+	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
+	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
             # PC-side verify (30s max)...
             $hbTimeoutSec = 30
