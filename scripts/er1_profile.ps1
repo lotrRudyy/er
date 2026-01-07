@@ -691,37 +691,35 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-            # PC-side verify (fast, no spam): watch log for "MQTT connected", then request one immediate heartbeat.
-            # We subscribe to hb + ota + log so we can:
-            #  - fail fast on OTA_FAIL
-            #  - detect reboot via "MQTT connected"
-            #  - verify build via hb.build
-            $hbTimeoutSec = 20
-            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' + '$target/log' (up to ${hbTimeoutSec}s) =="
+            # PC-side verify (fast): spam "SEND HB" while subscribing so we don't wait for the periodic heartbeat.
+            # We subscribe to both hb + ota so we can fail fast on OTA_FAIL.
+            $hbTimeoutSec = 22
+            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' (up to ${hbTimeoutSec}s) =="
 
             $cmdTopic = "$target/cmd"
 
-            # Run everything on the Pi so we can react (publish SEND HB) while the subscription is live.
-            $bash = @"
+            # Run subscription + "SEND HB once after MQTT connected" on the Pi so we can react while listening.
+            # IMPORTANT: use a single-quoted here-string (@' '@) so PowerShell does NOT expand $line (StrictMode would throw).
+            $bash = @'
 sent=0
-timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/hb' -t '$target/ota' -t '$target/log' 2>/dev/null | while IFS= read -r line; do
-    if ($line) { echo "$line" }
+timeout __TIMEOUT__s mosquitto_sub -h 127.0.0.1 -v -t '__TARGET__/hb' -t '__TARGET__/ota' -t '__TARGET__/log' 2>/dev/null | while IFS= read -r line; do
+  echo "$line"
   if [ $sent -eq 0 ]; then
     case "$line" in
-      "$target/log "*)
-        echo "$line" | grep -q '"MQTT connected"' && { mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m 'SEND HB' >/dev/null 2>&1 || true; sent=1; }
+      "__TARGET__/log "*)
+        echo "$line" | grep -q '"MQTT connected"' && { mosquitto_pub -h 127.0.0.1 -t '__CMDTOPIC__' -m 'SEND HB' >/dev/null 2>&1 || true; sent=1; }
         ;;
     esac
   fi
 done
-"@
+'@
 
-            # Use bash -lc with a here-string piped to avoid quote hell.
+            $bash = $bash.Replace("__TIMEOUT__", "$hbTimeoutSec").Replace("__TARGET__", "$target").Replace("__CMDTOPIC__", "$cmdTopic")
+
+            # Pipe the script over SSH without quote hell
             $subCmd = "bash -lc " + [char]34 + "cat <<'ER1EOF' | bash" + [char]10 + $bash + [char]10 + "ER1EOF" + [char]34
             $lines = ssh $er1Pi $subCmd
-
-
-            $rebooted = $false
+$rebooted = $false
             $prevUp = $null
             $lastSeen = $null
             $ok = $false
@@ -738,16 +736,14 @@ done
                 }
 
                 if ($topic -and $topic.EndsWith('/log')) {
-                    # Fail fast on common OTA auth/truncation errors that may not emit OTA_FAIL reliably
-                    if ($payload -like '*OTA missing/invalid sha256*' -or $payload -like '*invalid_sha256*') {
-                        throw "== OTA VERIFY: FAIL (invalid_sha256) =="
-                    }
-                    if ($payload -like '*OTA payload too large*' -or $payload -like '*payload too large*') {
-                        throw "== OTA VERIFY: FAIL (payload_too_large) =="
-                    }
-                    if ($payload -like '*"MQTT connected"*') {
+                    # Detect reboot fast (node announces MQTT re-connect)
+                    if ($payload -like '*"msg":"MQTT connected"*' -or $payload -like '*MQTT connected*') {
                         $rebooted = $true
                         continue
+                    }
+                    # Fail fast on auth/truncation errors
+                    if ($payload -like '*invalid_sha256*' -or $payload -like '*OTA missing/invalid sha256*') {
+                        throw "== OTA VERIFY: FAIL (invalid_sha256) =="
                     }
                 }
 
