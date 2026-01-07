@@ -29,7 +29,7 @@ struct OtaConfig {
 struct OtaUpdateCommand {
   char sha256[65]{};
   char version[48]{};
-  char id[48]{};
+  char build[48]{};
   char target[48]{};
   char urlHost[64]{};
   char urlPath[128]{};
@@ -39,7 +39,7 @@ struct OtaUpdateCommand {
   bool hasUrlPort = false;
   size_t sizeBytes = 0;
   bool hasVersion = false;
-  bool hasId = false;
+  bool hasBuild = false;
   bool hasTarget = false;
 };
 
@@ -55,7 +55,7 @@ public:
 private:
   OtaConfig cfg_{};
   Logger* logger_ = nullptr;
-  String currentId_;
+  String currentBuild_;
   String currentVersion_;
   String currentTarget_;
   String currentUrl_;

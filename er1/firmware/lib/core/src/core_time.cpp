@@ -144,6 +144,17 @@ bool core_set_time(int64_t epochSeconds) {
     return false;
   }
 
+  // Avoid spamming resyncs: if wall-clock is already valid and we're close enough,
+  // do not apply the update (caller can treat this as 'no change' and skip logging).
+  time_t now = ::time(nullptr);
+  if (wallClockValid(now)) {
+    int64_t delta = (epochSeconds > (int64_t)now) ? (epochSeconds - (int64_t)now) : ((int64_t)now - epochSeconds);
+    // If within 2 seconds, treat as already-synced.
+    if (delta <= 2) {
+      return false;
+    }
+  }
+
 #if defined(ESP32)
   struct timeval tv;
   tv.tv_sec = static_cast<time_t>(epochSeconds);

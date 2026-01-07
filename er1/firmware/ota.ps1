@@ -17,6 +17,7 @@ $deployments = @{
         Dev          = "maglock"
         CmdNode      = "maglock"
         FirmwareName = "maglock.bin"
+        VerifyNodes  = @("maglock")
     }
     "images_piano" = @{
         Env          = "images_piano"
@@ -30,112 +31,55 @@ $deployments = @{
         Dev          = "chess"
         CmdNode      = "chess"
         FirmwareName = "chess.bin"
+        VerifyNodes  = @("chess")
     }
     "knocking" = @{
         Env          = "knocking"
         Dev          = "knocking"
         CmdNode      = "knocking"
         FirmwareName = "knocking.bin"
+        VerifyNodes  = @("knocking")
     }
     "candles" = @{
         Env          = "candles"
         Dev          = "candles"
         CmdNode      = "candles"
         FirmwareName = "candles.bin"
+        VerifyNodes  = @("candles")
     }
     "star_sky" = @{
         Env          = "star_sky"
         Dev          = "star_sky"
         CmdNode      = "star_sky"
         FirmwareName = "star_sky.bin"
+        VerifyNodes  = @("star_sky")
     }
     "star_slider" = @{
         Env          = "star_slider"
         Dev          = "star_slider"
         CmdNode      = "star_slider"
         FirmwareName = "star_slider.bin"
+        VerifyNodes  = @("star_slider")
     }
     "stop_timer" = @{
         Env          = "stop_timer"
         Dev          = "stop_timer"
         CmdNode      = "stop_timer"
         FirmwareName = "stop_timer.bin"
+        VerifyNodes  = @("stop_timer")
     }
-}
-
-function Resolve-Deployment([string]$target) {
-    if (-not $deployments.ContainsKey($target)) { return $null }
-    $cfg = $deployments[$target].Clone()
-    if (-not $cfg.ContainsKey("CmdNode") -or -not $cfg.CmdNode) { $cfg.CmdNode = $cfg.Dev }
-    if (-not $cfg.ContainsKey("FirmwareName") -or -not $cfg.FirmwareName) { $cfg.FirmwareName = "$($cfg.Dev).bin" }
-    if (-not $cfg.ContainsKey("VerifyNodes") -or -not $cfg.VerifyNodes) { $cfg.VerifyNodes = @($cfg.CmdNode) }
-    return $cfg
-}
-
-function Test-RemoteFirmwareAvailability([string]$url, [string]$sshTarget) {
-    $via = "local"
-    $output = ""
-    $exitCode = 0
-
-    if ($sshTarget) {
-        $output = ssh $sshTarget "curl -I -sS --connect-timeout 5 --max-time 10 $url" 2>&1
-        $exitCode = $LASTEXITCODE
-        $via = "ssh:$sshTarget"
-    } else {
-        $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
-        if ($curlExe) {
-            $output = & $curlExe.Path "-I" "-sS" "--connect-timeout" "5" "--max-time" "10" $url 2>&1
-            $exitCode = $LASTEXITCODE
-        } else {
-            try {
-                $resp = Invoke-WebRequest -Method Head -Uri $url -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-            } catch {
-                Write-Error ("Postflight failed for {0} (local): {1}" -f $url, $_.Exception.Message)
-                return $false
-            }
-
-            if ($resp.StatusCode -ne 200) {
-                Write-Error "Postflight failed for $url (local status $($resp.StatusCode))"
-                return $false
-            }
-
-            $cl = $resp.Headers["Content-Length"]
-            try { $len = [int64]$cl } catch { $len = -1 }
-            if ($len -le 0) {
-                Write-Error "Postflight failed for $url (local Content-Length $cl)"
-                return $false
-            }
-
-            return $true
-        }
-    }
-
-    $outText = ($output | ForEach-Object { "$_" }) -join "`n"
-
-    if ($exitCode -ne 0) {
-        Write-Error "Postflight failed for $url via $via (curl exit $exitCode). Output:`n$outText"
-        return $false
-    }
-
-    $okStatus = $outText -match 'HTTP/\d\.\d\s+200'
-    $lenMatch = [regex]::Match($outText, 'Content-Length:\s*(\d+)', 'IgnoreCase')
-    $okLen = $lenMatch.Success -and ([int64]$lenMatch.Groups[1].Value -gt 0)
-
-    if (-not ($okStatus -and $okLen)) {
-        Write-Error "Postflight failed for $url via $via (status/content-length missing). Output:`n$outText"
-        return $false
-    }
-
-    return $true
 }
 
 function Get-FirmwareMainPath([string]$dev) {
-    $mainPath = Join-Path $scriptDir "src/${dev}_main.cpp"
-    if (-not (Test-Path $mainPath)) {
-        Write-Error "Firmware source not found for $dev at $mainPath"
+    $p = Join-Path $scriptDir ("src/{0}_main.cpp" -f $dev)
+    if (-not (Test-Path $p)) {
+        # fallback: some devs may have different entry naming
+        $p2 = Join-Path $scriptDir ("src/{0}.cpp" -f $dev)
+        if (Test-Path $p2) { return $p2 }
+        Write-Error "Unable to locate firmware main for '$dev'. Checked: $p and $p2"
         exit 1
     }
-    return $mainPath
+    return $p
 }
 
 function Get-FirmwareVersion([string]$dev) {
@@ -151,51 +95,62 @@ function Get-FirmwareVersion([string]$dev) {
 
 function Get-FirmwareBuildSeed([string]$Override) {
     if ($Override) { return $Override }
-    # Avoid spaces so the value survives compiler -D quoting on all shells.
+    # Avoid spaces so the value survives header embedding cleanly.
     return (Get-Date).ToString("yyyy-MM-dd_HHmmss")
 }
 
 function Get-FirmwareBuildId([string]$Seed) {
-    $alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    $offset = [uint64]14695981039346656037
-    $prime  = [uint64]1099511628211
-    $mod64 = [System.Numerics.BigInteger]::Pow(2, 64)
-    $state = $offset
-
+    # Produce a deterministic 20-char base32-ish id from the seed string.
+    # Stable + short + human-readable.
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($Seed)
-    foreach ($b in $bytes) {
-        $state = $state -bxor [uint64]$b
-        $state = [uint64]([System.Numerics.BigInteger]::Remainder(([System.Numerics.BigInteger]$state * [System.Numerics.BigInteger]$prime), $mod64))
-    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $hash = $sha.ComputeHash($bytes)
 
-    $sb = New-Object System.Text.StringBuilder
-    for ($i = 0; $i -lt 20; $i++) {
-        $state = [uint64]([System.Numerics.BigInteger]::Remainder(([System.Numerics.BigInteger]6364136223846793005 * [System.Numerics.BigInteger]$state) + 1, $mod64))
-        $idx = $state % $alphabet.Length
-        $sb.Append($alphabet[$idx]) | Out-Null
+    $alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    $out = New-Object System.Text.StringBuilder
+    for ($i=0; $i -lt 20; $i++) {
+        $b = $hash[$i]
+        $out.Append($alphabet[ $b % $alphabet.Length ]) | Out-Null
     }
-
-    return $sb.ToString()
+    return $out.ToString()
 }
 
-# ============ Resolve Env/Dev ============
-if ($Target) {
-    $cfg = Resolve-Deployment $Target
-    if (-not $cfg) {
-        Write-Error "Unknown Target '$Target'. Valid: $($deployments.Keys -join ', ')"
-        exit 1
-    }
+function Write-FwBuildMetaHeader {
+    param(
+        [Parameter(Mandatory=$true)][string]$RepoRoot,
+        [Parameter(Mandatory=$true)][string]$Build,
+        [Parameter(Mandatory=$true)][string]$Seed
+    )
+    $metaPath = Join-Path $RepoRoot "src/fw_build_meta.h"
 
-    if (-not $Env)  { $Env  = $cfg.Env }
-    if (-not $Dev)  { $Dev  = $cfg.Dev }
+    # NOTE:
+    # We write the per-run build string into a tiny header that is ONLY included from src/fw_build_id.cpp.
+    # This keeps PlatformIO build_flags stable, so incremental builds stay fast (only fw_build_id.cpp recompiles).
+    $content = @"
+#pragma once
+// Auto-generated by er1/firmware/ota.ps1. Do not edit by hand.
+#define FW_BUILD_ID_STR `"$Build`"
+#define FW_BUILD_SEED_STR `"$Seed`"
+"@
+
+    Set-Content -Path $metaPath -Value $content -Encoding ASCII
 }
 
-if (-not $Env -or -not $Dev) {
-    Write-Error "You must either: -Target <name> OR provide -Env/-Dev manually."
+# ============ TARGET RESOLUTION ============
+if (-not $Target) {
+    Write-Error "Usage: .\ota.ps1 -Target <dev>  (valid: $($deployments.Keys -join ', '))"
     exit 1
 }
 
-$cfg = if ($Target) { Resolve-Deployment $Target } else { @{ Env = $Env; Dev = $Dev; CmdNode = $Dev; FirmwareName = "$Dev.bin"; VerifyNodes = @($Dev) } }
+$cfg = $deployments[$Target]
+if (-not $cfg) {
+    Write-Error "Unknown target: $Target"
+    exit 1
+}
+
+if (-not $Env) { $Env = $cfg.Env }
+if (-not $Dev) { $Dev = $cfg.Dev }
+
 $cmdNode = $cfg.CmdNode
 $firmwareName = $cfg.FirmwareName
 $verifyNodes = $cfg.VerifyNodes
@@ -208,40 +163,24 @@ if (-not $otaVersion) {
     exit 1
 }
 
+# Build seed/id for verification + for embedding into firmware via src/fw_build_meta.h
 $buildSeed = Get-FirmwareBuildSeed $null
-$env:FW_BUILD_SEED = $buildSeed
-$env:FW_BUILD_ID = ""
-
 $otaBuild = Get-FirmwareBuildId $buildSeed
-$env:FW_BUILD_ID = $otaBuild
+Write-FwBuildMetaHeader -RepoRoot $scriptDir -Build $otaBuild -Seed $buildSeed
 
 Write-Host "== Version = $otaVersion  Build=$otaBuild  Seed='$buildSeed'  =="
 
-# ============ Locate platformio.exe ============
-$possiblePaths = @(
-    "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe",
-    "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
-)
-
-$pioFull = $null
-foreach ($p in $possiblePaths) {
-    if (Test-Path $p) { $pioFull = $p; break }
-}
-
-if (-not $pioFull) {
-    Write-Error "PlatformIO not found."
-    exit 1
-}
-
-Write-Host "== Using PlatformIO: $pioFull =="
-
 # ============ BUILD ============
-if ($NoBuild) {
-    Write-Host "== Skipping build (NoBuild switch set) =="
-} else {
-    Write-Host "== Building environment '$Env' =="
+$pio = "$HOME\.platformio\penv\Scripts\platformio.exe"
+if (-not (Test-Path $pio)) {
+    $pio = "platformio"
+}
 
-    & $pioFull run -e $Env
+Write-Host "== Using PlatformIO: $pio =="
+
+if (-not $NoBuild) {
+    Write-Host "== Building environment '$Env' =="
+    & $pio run --environment $Env
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed"
         exit 1
@@ -258,10 +197,10 @@ if (-not (Test-Path $firmwarePath)) {
 }
 
 # ============ PI / MQTT CONFIG ============
-$piUser        = "rudyy"
-$piHost        = "100.108.1.80"
+$piHost = "192.168.0.10"
+$piUser = "rudyy"
 $piFirmwareDir = "/home/rudyy/er1/node_firmware"
-$topicUpdate   = "$cmdNode/cmd"
+$httpHost = "192.168.0.10"
 
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $firmwareName =="
@@ -279,40 +218,41 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# ============ POSTFLIGHT CHECK ============
-$postflightUrl = "http://192.168.0.10/node_firmware/$firmwareName"
-Write-Host "== Verifying OTA URL from Pi: $postflightUrl =="
-if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
-    exit 1
-}
-
-# ============ TRIGGER OTA ============
-Write-Host "== Triggering OTA on $topicUpdate =="
-
-$sha256 = ssh "$piUser@$piHost" "sha256sum '$piFirmwareDir/$firmwareName' | cut -d' ' -f1"
-$sha256 = $sha256.Trim()
-if ($sha256.Length -ne 64) { throw "Invalid sha256" }
-
-# IMPORTANT: quote build/version on the remote shell in case they contain spaces
-$otaPublishCmd = @(
-    "python3",
-    "/home/rudyy/er1/scripts/ota_publish.py",
-    "--dev", $Dev,
-    "--cmd-node", $cmdNode,
-    "--broker", "192.168.0.10",
-    "--version", "`"$otaVersion`"",
-    "--build",   "`"$otaBuild`"",
-    "--target",  $Dev,
-    "--url",     "http://192.168.0.10/node_firmware/$firmwareName",
-    "--sha256",  $sha256,
-    "--size",    (ssh "$piUser@$piHost" "stat -c%s '$piFirmwareDir/$firmwareName'")
-) -join " "
-
-ssh "$piUser@$piHost" $otaPublishCmd
+# Verify URL from Pi (basic reachability)
+$url = "http://$httpHost/node_firmware/$firmwareName"
+Write-Host "== Verifying OTA URL from Pi: $url =="
+ssh "$piUser@$piHost" "bash -lc 'curl -fsS -o /dev/null --max-time 3 `"$url`"'"
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "OTA publish failed via $piUser@$piHost (exit $LASTEXITCODE)"
+    Write-Error "Pi could not reach firmware URL: $url"
     exit 1
 }
+
+# ============ INVOKE PI PUBLISHER ============
+Write-Host "== Triggering OTA on $cmdNode/cmd =="
+
+$remotePublisher = "/home/rudyy/er1/scripts/ota_publish.py"
+$publisherCmd = @"
+bash -lc 'python3 $remotePublisher --dev "$Dev" --cmd-node "$cmdNode" --http-host "$httpHost" --version "$otaVersion" --build "$otaBuild" --target "$Dev" --firmware-name "$firmwareName"'
+"@
+
+# Run publisher on Pi
+$publisherOut = ssh "$piUser@$piHost" $publisherCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ota_publish.py failed"
+    Write-Host $publisherOut
+    exit 1
+}
+
+# Re-print parseable lines for the profile wrapper
+# (keep these exact labels; er1_profile.ps1 parses them)
+Write-Host "Firmware : $piFirmwareDir/$firmwareName"
+Write-Host "URL      : $url"
+Write-Host "Dev      : $Dev"
+Write-Host "Version  : $otaVersion"
+Write-Host "Build    : $otaBuild"
+Write-Host "Target   : $Dev"
+Write-Host "CmdNode  : $cmdNode"
+Write-Host "CmdTopic : $cmdNode/cmd"
 
 Write-Host "== DONE. Device will update. =="
 

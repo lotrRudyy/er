@@ -415,7 +415,6 @@ void NodeCore::handleCommandMessage(const String& raw) {
 }
 
 bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
-  (void)arg;
   if (cfg_.commands.allowEnableDisable) {
     if (strcmp(cmd, "DISABLE") == 0) {
       setEnabled(false);
@@ -435,13 +434,34 @@ bool NodeCore::handleCoreCommand(const char* cmd, const char* arg) {
     }
   }
 
-  if (cfg_.commands.allowPing && strcmp(cmd, "PING") == 0) {
+  // Immediate heartbeat.
+  // Aliases:
+  //   - PING
+  //   - SEND_HB / SENDHB / HB
+  //   - SEND HB
+  if (cfg_.commands.allowPing &&
+      (strcmp(cmd, "PING") == 0 || strcmp(cmd, "SEND_HB") == 0 || strcmp(cmd, "SENDHB") == 0 || strcmp(cmd, "HB") == 0 ||
+       (strcmp(cmd, "SEND") == 0 && arg && ((arg[0] == 'H' || arg[0] == 'h') && (arg[1] == 'B' || arg[1] == 'b') && arg[2] == '\0')))) {
     if (cfg_.commands.logPing) {
       const char* lvl = cfg_.commands.levelPing ? cfg_.commands.levelPing : "DBG";
       logger_.publish(lvl, "CMD PING");
     }
     publishHeartbeatNow();
     return true;
+  }
+
+
+  // One-shot heartbeat request used by the PC-side OTA verifier.
+  // Accept: SEND HB
+  if (strcmp(cmd, "SEND") == 0) {
+    if (arg && strcmp(arg, "HB") == 0) {
+      publishHeartbeatNow();
+      if (cfg_.commands.logPing) {
+        const char* lvl = cfg_.commands.levelPing ? cfg_.commands.levelPing : "DBG";
+        logger_.publish(lvl, "CMD SEND HB");
+      }
+      return true;
+    }
   }
 
   if (cfg_.commands.allowUpdate && strcmp(cmd, "UPDATE") == 0) {

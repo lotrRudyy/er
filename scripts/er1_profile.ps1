@@ -691,22 +691,75 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-            # PC-side verify (30s max)...
-            $hbTimeoutSec = 30
-            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
+            # PC-side verify (fast): spam "SEND HB" while subscribing so we don't wait for the periodic heartbeat.
+            # We subscribe to both hb + ota so we can fail fast on OTA_FAIL.
+            $hbTimeoutSec = 22
+            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' (up to ${hbTimeoutSec}s) =="
 
-            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"
+            $cmdTopic = "$target/cmd"
+
+            # Run subscription + "SEND HB once after MQTT connected" on the Pi so we can react while listening.
+            # IMPORTANT: use a single-quoted here-string (@' '@) so PowerShell does NOT expand $line (StrictMode would throw).
+            $bash = @'
+sent=0
+timeout __TIMEOUT__s mosquitto_sub -h 127.0.0.1 -v -t '__TARGET__/hb' -t '__TARGET__/ota' -t '__TARGET__/log' 2>/dev/null | while IFS= read -r line; do
+  echo "$line"
+  if [ $sent -eq 0 ]; then
+    case "$line" in
+      "__TARGET__/log "*)
+        echo "$line" | grep -q '"MQTT connected"' && { mosquitto_pub -h 127.0.0.1 -t '__CMDTOPIC__' -m 'SEND HB' >/dev/null 2>&1 || true; sent=1; }
+        ;;
+    esac
+  fi
+done
+'@
+
+            $bash = $bash.Replace("__TIMEOUT__", "$hbTimeoutSec").Replace("__TARGET__", "$target").Replace("__CMDTOPIC__", "$cmdTopic")
+
+            # Run the verifier script on the Pi (robust quoting via base64).
+            $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bash))
+            $subCmd = "bash -lc 'echo $b64 | base64 -d | bash'"
             $lines = ssh $er1Pi $subCmd
-
             $rebooted = $false
             $prevUp = $null
             $lastSeen = $null
             $ok = $false
 
-            foreach ($payload in $lines) {
-                if (-not $payload) { continue }
-                $lastSeen = $payload
+            foreach ($line in $lines) {
+                if (-not $line) { continue }
+                $lastSeen = $line
 
+                $topic = $null
+                $payload = $line
+                if ($line -match '^([^\s]+)\s+(.*)$') {
+                    $topic = $Matches[1]
+                    $payload = $Matches[2]
+                }
+
+                if ($topic -and $topic.EndsWith('/log')) {
+                    # Detect reboot fast (node announces MQTT re-connect)
+                    if ($payload -like '*"msg":"MQTT connected"*' -or $payload -like '*MQTT connected*') {
+                        $rebooted = $true
+                        continue
+                    }
+                    # Fail fast on auth/truncation errors
+                    if ($payload -like '*invalid_sha256*' -or $payload -like '*OTA missing/invalid sha256*') {
+                        throw "== OTA VERIFY: FAIL (invalid_sha256) =="
+                    }
+                }
+
+                if ($topic -and $topic.EndsWith('/ota')) {
+                    try { $ota = $payload | ConvertFrom-Json } catch { continue }
+                    $st = [string]$ota.st
+                    if ($st -eq 'OTA_FAIL') {
+                        $reason = "OTA_FAIL"
+                        if ($ota.d -and $ota.d.reason) { $reason = "OTA_FAIL $($ota.d.reason)" }
+                        throw "== OTA VERIFY: FAIL ($reason) =="
+                    }
+                    continue
+                }
+
+                # hb topic
                 if ($payload.ToLowerInvariant() -eq "offline") {
                     $rebooted = $true
                     continue

@@ -18,6 +18,7 @@ Current behavior:
 """
 
 import json
+import re
 import os
 import queue
 import signal
@@ -90,6 +91,16 @@ def fmt_local_ts(ts: float) -> str:
     return time.strftime("%H:%M:%S", lt) + " - " + time.strftime("%Y.%m.%d", lt)
 
 
+_TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?\s*-\s*(\d{4}\.\d{2}\.\d{2})$")
+
+def normalize_ts_no_ms(ts_str: str) -> str:
+    """Convert 'HH:MM:SS.mmm - YYYY.MM.DD' -> 'HH:MM:SS - YYYY.MM.DD' (keeps other strings unchanged)."""
+    s = (ts_str or "").strip()
+    m = _TS_RE.match(s)
+    if not m:
+        return s
+    return f"{m.group(1)} - {m.group(2)}"
+
 @dataclass
 class PianoNoteCompat:
     ts: str
@@ -102,7 +113,7 @@ class PianoNoteCompat:
 @dataclass
 class OtaPrettySession:
     node: str
-    ota_id: str
+    build_id: str
     version: Optional[str] = None
     created_at: float = field(default_factory=now_ts)
     header_printed: bool = False
@@ -125,7 +136,7 @@ class LogsAllPretty:
 
         # OTA sessions and "recent flash" window to attach reboot logs
         self.ota_sessions: Dict[str, Dict[str, OtaPrettySession]] = {}
-        self.ota_recent_flash: Dict[str, Tuple[str, float]] = {}  # node -> (id, flashed_ts)
+        self.ota_recent_flash: Dict[str, Tuple[str, float]] = {}  # node -> (build_id, flashed_ts)
 
         # Pending id=? invalid_sha256 (held briefly so we can drop if real START follows)
         self.pending_ota_fail: Dict[str, Tuple[float, str]] = {}  # node -> (ts, reason)
@@ -252,11 +263,11 @@ class LogsAllPretty:
             self._p(pad_score_line(p, s, label_width))
 
     # ----------------- OTA helpers -----------------
-    def get_ota_session(self, node: str, ota_id: str, created_at: float) -> OtaPrettySession:
-        sess = self.ota_sessions.get(node, {}).get(ota_id)
+    def get_ota_session(self, node: str, build_id: str, created_at: float) -> OtaPrettySession:
+        sess = self.ota_sessions.get(node, {}).get(build_id)
         if sess is None:
-            sess = OtaPrettySession(node=node, ota_id=ota_id, created_at=created_at)
-            self.ota_sessions.setdefault(node, {})[ota_id] = sess
+            sess = OtaPrettySession(node=node, build_id=build_id, created_at=created_at)
+            self.ota_sessions.setdefault(node, {})[build_id] = sess
         return sess
 
     def print_ota_header_if_needed(self, sess: OtaPrettySession) -> None:
@@ -264,7 +275,7 @@ class LogsAllPretty:
             return
         ver = sess.version or "?"
         self._p(OTA_SEP)
-        self._p(f"{fmt_local_ts_ms(sess.created_at)} | OTA | {sess.node} | v={ver} | id={sess.ota_id}")
+        self._p(f"{fmt_local_ts_ms(sess.created_at)} | OTA | {sess.node} | v={ver} | id={sess.build_id}")
         self._p(OTA_SEP)
         sess.header_printed = True
 
@@ -302,11 +313,11 @@ class LogsAllPretty:
         recent = self.ota_recent_flash.get(node)
         if not recent:
             return False
-        ota_id, flashed_at = recent
+        build_id, flashed_at = recent
         if ts_recv - flashed_at > 60:
             return False
 
-        sess = self.get_ota_session(node, ota_id, flashed_at)
+        sess = self.get_ota_session(node, build_id, flashed_at)
         self.print_ota_header_if_needed(sess)
 
         if "OTA FLASHED, rebooting" in msg:
@@ -315,19 +326,28 @@ class LogsAllPretty:
         if "MQTT connected" in msg:
             self.ota_line(sess, ts_recv, "MQTT connected")
             return True
+        if "log_level set to " in msg:
+            # prefer device timestamp string if present, and strip .mmm if present
+            when = normalize_ts_no_ms(ts_str) if ts_str else fmt_local_ts(ts_recv)
+            lvl = "?"
+            try:
+                lvl = msg.rsplit(" ", 1)[1].strip()
+            except Exception:
+                pass
+            line = f"{when} | log_level: {lvl}"
+            if line not in sess.printed_lines:
+                sess.printed_lines.add(line)
+                self._p(line)
+            return True
+
         if "time_resync delta_s=" in msg:
             delta = "?"
             try:
                 delta = msg.split("delta_s=", 1)[1].strip()
             except Exception:
                 pass
-            # prefer device timestamp string if present
-            when = ts_str if ts_str else ts_recv
-            line = f"{when} | time_resync: {delta}"
-            if line not in sess.printed_lines:
-                sess.printed_lines.add(line)
-                self._p(line)
-            self.ota_end_if_needed(sess, ts_recv)
+            when = normalize_ts_no_ms(ts) if ts else fmt_local_ts(recv_ts)
+            self._p(f"{when} | time_resync: {delta}")
             return True
 
         return False
@@ -488,7 +508,7 @@ class LogsAllPretty:
         if not isinstance(details, dict):
             details = {}
 
-        ota_id = str(details.get("id") or "?")
+        build_id = str(details.get("build") or details.get("id") or "?")
         reason = str(details.get("reason") or "")
         ver = details.get("version")
         if ver is not None:
@@ -500,14 +520,14 @@ class LogsAllPretty:
             return
 
         # Hold id=? invalid_sha256 briefly so we can drop it if a real START follows
-        if status == "OTA_FAIL" and ota_id == "?" and "invalid_sha256" in reason:
+        if status == "OTA_FAIL" and build_id == "?" and "invalid_sha256" in reason:
             self.pending_ota_fail[node] = (recv_ts, "invalid_sha256")
             return
 
         if status == "OTA_START":
             self.pending_ota_fail.pop(node, None)
 
-        sess = self.get_ota_session(node, ota_id, recv_ts)
+        sess = self.get_ota_session(node, build_id, recv_ts)
         if ver:
             sess.version = ver
 
@@ -527,7 +547,7 @@ class LogsAllPretty:
                 self.ota_flashing_line(sess, recv_ts, 100)
                 sess.last_pct = 100
             self.ota_line(sess, recv_ts, "FLASHED")
-            self.ota_recent_flash[node] = (ota_id, recv_ts)
+            self.ota_recent_flash[node] = (build_id, recv_ts)
 
         elif status == "OTA_OK":
             self.ota_line(sess, recv_ts, "OK")

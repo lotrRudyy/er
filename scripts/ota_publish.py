@@ -3,7 +3,7 @@
 Compute OTA sha256 on the Pi and publish the UPDATE command with a JSON payload.
 
 - Reads firmware from /home/rudyy/er1/node_firmware by default
-- Publishes: UPDATE {"id":...,"version":...,"build":...,"target":...,"url":...,"sha256":...,"size":...}
+- Publishes: UPDATE {"version":...,"build":...,"target":...,"url":...,"sha256":...,"size":...}
 - Default URL matches ota_http.py: http://<http-host>/node_firmware/<firmware>.bin
 
 Dependencies:
@@ -16,7 +16,6 @@ import argparse
 import hashlib
 import json
 import sys
-import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,23 +29,20 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "maglock",
         "cmd_node": "maglock",
         "firmware": "maglock.bin",
-        "legacy": ("maglock_ctrl.bin",),
         "verify_nodes": ("maglock",),
     },
     "images_piano": {
         "env": "images_piano",
         "dev": "images_piano",
-        "cmd_node": "images",
+        "cmd_node": "images_piano",
         "firmware": "images_piano.bin",
-        "legacy": (),
-        "verify_nodes": ("images", "piano"),
+        "verify_nodes": ("images_piano",),
     },
     "chess": {
         "env": "chess",
         "dev": "chess",
         "cmd_node": "chess",
         "firmware": "chess.bin",
-        "legacy": (),
         "verify_nodes": ("chess",),
     },
     "knocking": {
@@ -54,7 +50,6 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "knocking",
         "cmd_node": "knocking",
         "firmware": "knocking.bin",
-        "legacy": (),
         "verify_nodes": ("knocking",),
     },
     "candles": {
@@ -62,7 +57,6 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "candles",
         "cmd_node": "candles",
         "firmware": "candles.bin",
-        "legacy": (),
         "verify_nodes": ("candles",),
     },
     "star_sky": {
@@ -70,7 +64,6 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "star_sky",
         "cmd_node": "star_sky",
         "firmware": "star_sky.bin",
-        "legacy": (),
         "verify_nodes": ("star_sky",),
     },
     "star_slider": {
@@ -78,7 +71,6 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "star_slider",
         "cmd_node": "star_slider",
         "firmware": "star_slider.bin",
-        "legacy": (),
         "verify_nodes": ("star_slider",),
     },
     "stop_timer": {
@@ -86,7 +78,6 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "dev": "stop_timer",
         "cmd_node": "stop_timer",
         "firmware": "stop_timer.bin",
-        "legacy": (),
         "verify_nodes": ("stop_timer",),
     },
 }
@@ -187,7 +178,6 @@ def parse_args() -> argparse.Namespace:
              "Defaults to /node_firmware/<firmware>.",
     )
 
-    # Preferred flag
     parser.add_argument(
         "--firmware-name",
         dest="firmware_name",
@@ -206,12 +196,11 @@ def parse_args() -> argparse.Namespace:
         help="Firmware file path on the Pi (defaults to /home/rudyy/er1/node_firmware/<firmware_name>)",
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
-    parser.add_argument("--build", required=True, help="Firmware build timestamp/string")
+    parser.add_argument("--build", required=True, help="Firmware build string to announce")
     parser.add_argument(
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
     )
-    parser.add_argument("--id", dest="ota_id", help="OTA update id (nonce); defaults to random UUID")
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
     return parser.parse_args()
 
@@ -224,7 +213,6 @@ def main() -> int:
 
     firmware_name = (
         args.firmware_name
-        or getattr(args, "firmware_name_legacy", None)
         or deployment.get("firmware")
         or f"{args.dev}.bin"
     )
@@ -246,8 +234,6 @@ def main() -> int:
     default_path = f"/node_firmware/{firmware_name}"
     url = normalize_url(args.url or default_path, args.http_host)
 
-    ota_id = args.ota_id or uuid.uuid4().hex
-
     try:
         sha_hex = sha256_file(firmware_path)
         try:
@@ -258,8 +244,11 @@ def main() -> int:
             raise OtaPublishError(f"Firmware size invalid: {size_bytes}")
 
         topic = f"{cmd_node}/cmd"
+
+        # IMPORTANT:
+        # We intentionally DO NOT include an OTA id ("id") because legacy nodes truncate
+        # the JSON payload; id is not required for OTA correctness.
         payload_obj = {
-            "id": ota_id,
             "version": version,
             "build": build,
             "target": target,
@@ -267,6 +256,7 @@ def main() -> int:
             "sha256": sha_hex,
             "size": size_bytes,
         }
+
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
         payload = f"UPDATE {payload_json}"
 
@@ -276,9 +266,8 @@ def main() -> int:
         print(f"URL      : {url}")
         print(f"Dev      : {args.dev}")
         print(f"Version  : {version}")
-        print(f"Build    : {args.build}")
+        print(f"Build    : {build}")
         print(f"Target   : {target}")
-        print(f"OtaId    : {ota_id}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
         print(f"Payload  : {payload}")
