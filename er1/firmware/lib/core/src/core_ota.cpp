@@ -716,7 +716,7 @@ void OtaUpdater::publishFail(const char* at, int code, const char* msg, size_t b
     data += extraJson;
   }
   data += "}";
-  publishStatus("OTA_FAIL", data, true);
+  publishStatus("OTA_FAIL", data, false);
   clearPending();
   bootReportPending_ = false;
   bootReportOk_ = false;
@@ -738,7 +738,11 @@ void OtaUpdater::publishOk(size_t bytes, const char* sha256Hex, bool retained) {
   publishStatus("OTA_OK", data, retained);
 }
 
+
 void OtaUpdater::publishStart() {
+  // Clear any retained OTA_FAIL (empty retained payload clears it)
+  publishStatus("OTA_FAIL", "{}", true);
+
   String data = buildBaseJson();
   data += "}";
   publishStatus("OTA_START", data, true);
@@ -791,7 +795,7 @@ void OtaUpdater::onMqttConnected() {
     if (logger_) logger_->publish(cfg_.infoLevel, String("OTA_OK id=") + currentId_);
   } else {
     data += ",\"reason\":\"version_mismatch_boot\"}";
-    publishStatus("OTA_FAIL", data, true);
+    publishStatus("OTA_FAIL", data, false);
     if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch id=") + currentId_);
   }
   clearPending();

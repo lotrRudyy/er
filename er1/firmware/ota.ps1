@@ -289,6 +289,13 @@ if (-not (Test-RemoteFirmwareAvailability $postflightUrl "$piUser@$piHost")) {
 # ============ TRIGGER OTA ============
 Write-Host "== Triggering OTA on $topicUpdate =="
 
+$sha256 = ssh "$piUser@$piHost" "sha256sum '$piFirmwareDir/$firmwareName' | cut -d' ' -f1"
+$sha256 = $sha256.Trim()
+if (-not $sha256 -or $sha256.Length -ne 64) {
+    throw "Failed to compute valid sha256 on Pi (got '$sha256')"
+    exit 1
+}
+
 # IMPORTANT: quote build/version on the remote shell in case they contain spaces
 $otaPublishCmd = @(
     "python3",
@@ -300,7 +307,8 @@ $otaPublishCmd = @(
     "--build",   "`"$otaBuild`"",
     "--target",  $Dev,
     "--url",     "http://192.168.0.10/node_firmware/$firmwareName",
-    "--file",    "$piFirmwareDir/$firmwareName"
+    "--sha256",  $sha256,
+    "--size",    (ssh "$piUser@$piHost" "stat -c%s '$piFirmwareDir/$firmwareName'")
 ) -join " "
 
 ssh "$piUser@$piHost" $otaPublishCmd
