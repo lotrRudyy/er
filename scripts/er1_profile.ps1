@@ -691,11 +691,14 @@ function er1 {
 	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
 	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
 
-            # PC-side verify (30s max)...
-            $hbTimeoutSec = 30
-            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' (up to ${hbTimeoutSec}s) =="
+            # PC-side verify (fast): spam "SEND HB" while subscribing so we don't wait for the periodic heartbeat.
+            # We subscribe to both hb + ota so we can fail fast on OTA_FAIL.
+            $hbTimeoutSec = 10
+            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' (up to ${hbTimeoutSec}s) =="
 
-            $subCmd = "timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -t '$target/hb' 2>/dev/null || true"
+            $cmdTopic = "$target/cmd"
+            $spam = "for i in \$(seq 1 40); do mosquitto_pub -h 127.0.0.1 -t '$cmdTopic' -m 'SEND HB' >/dev/null 2>&1; sleep 0.25; done"
+            $subCmd = "bash -lc '$spam & timeout ${hbTimeoutSec}s mosquitto_sub -h 127.0.0.1 -v -t '$target/hb' -t '$target/ota' 2>/dev/null || true'"
             $lines = ssh $er1Pi $subCmd
 
             $rebooted = $false
@@ -703,10 +706,29 @@ function er1 {
             $lastSeen = $null
             $ok = $false
 
-            foreach ($payload in $lines) {
-                if (-not $payload) { continue }
-                $lastSeen = $payload
+            foreach ($line in $lines) {
+                if (-not $line) { continue }
+                $lastSeen = $line
 
+                $topic = $null
+                $payload = $line
+                if ($line -match '^([^\s]+)\s+(.*)$') {
+                    $topic = $Matches[1]
+                    $payload = $Matches[2]
+                }
+
+                if ($topic -and $topic.EndsWith('/ota')) {
+                    try { $ota = $payload | ConvertFrom-Json } catch { continue }
+                    $st = [string]$ota.st
+                    if ($st -eq 'OTA_FAIL') {
+                        $reason = "OTA_FAIL"
+                        if ($ota.d -and $ota.d.reason) { $reason = "OTA_FAIL $($ota.d.reason)" }
+                        throw "== OTA VERIFY: FAIL ($reason) =="
+                    }
+                    continue
+                }
+
+                # hb topic
                 if ($payload.ToLowerInvariant() -eq "offline") {
                     $rebooted = $true
                     continue

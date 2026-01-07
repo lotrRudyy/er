@@ -17,7 +17,6 @@ $deployments = @{
         Dev          = "maglock"
         CmdNode      = "maglock"
         FirmwareName = "maglock.bin"
-        VerifyNodes  = @("maglock")
     }
     "images_piano" = @{
         Env          = "images_piano"
@@ -31,42 +30,36 @@ $deployments = @{
         Dev          = "chess"
         CmdNode      = "chess"
         FirmwareName = "chess.bin"
-        VerifyNodes  = @("chess")
     }
     "knocking" = @{
         Env          = "knocking"
         Dev          = "knocking"
         CmdNode      = "knocking"
         FirmwareName = "knocking.bin"
-        VerifyNodes  = @("knocking")
     }
     "candles" = @{
         Env          = "candles"
         Dev          = "candles"
         CmdNode      = "candles"
         FirmwareName = "candles.bin"
-        VerifyNodes  = @("candles")
     }
     "star_sky" = @{
         Env          = "star_sky"
         Dev          = "star_sky"
         CmdNode      = "star_sky"
         FirmwareName = "star_sky.bin"
-        VerifyNodes  = @("star_sky")
     }
     "star_slider" = @{
         Env          = "star_slider"
         Dev          = "star_slider"
         CmdNode      = "star_slider"
         FirmwareName = "star_slider.bin"
-        VerifyNodes  = @("star_slider")
     }
     "stop_timer" = @{
         Env          = "stop_timer"
         Dev          = "stop_timer"
         CmdNode      = "stop_timer"
         FirmwareName = "stop_timer.bin"
-        VerifyNodes  = @("stop_timer")
     }
 }
 
@@ -248,7 +241,12 @@ if ($NoBuild) {
 } else {
     Write-Host "== Building environment '$Env' =="
 
-    & $pioFull run -e $Env
+    # Inject build id into firmware so hb.build matches what we print and verify.
+    # This avoids relying on platformio.ini interpolation.
+    $buildFlags = "-DFW_BUILD_SEED=\"$buildSeed\" -DFW_BUILD_ID=\"$otaBuild\""
+
+    # Windows can sometimes race/lock build artifacts; build single-threaded for stability.
+    & $pioFull run -e $Env --jobs 1 -O "build_flags=$buildFlags"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed"
         exit 1
@@ -269,12 +267,6 @@ $piUser        = "rudyy"
 $piHost        = "100.108.1.80"
 $piFirmwareDir = "/home/rudyy/er1/node_firmware"
 $topicUpdate   = "$cmdNode/cmd"
-
-# Emit stable fields for er1_profile.ps1 parsers (and for copy/paste).
-Write-Host ("Firmware : {0}" -f ("$piFirmwareDir/$firmwareName"))
-Write-Host ("URL      : {0}" -f ("http://192.168.0.10/node_firmware/$firmwareName"))
-Write-Host ("Version  : {0}" -f $otaVersion)
-Write-Host ("Build    : {0}" -f $otaBuild)
 
 # ============ SCP UPLOAD ============
 Write-Host "== Uploading firmware to Pi as $firmwareName =="
