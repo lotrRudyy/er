@@ -72,14 +72,13 @@ $er1Commands = [ordered]@{
 # LOG PATH HELPERS (FIX: DO NOT FREEZE TODAY AT PROFILE LOAD)
 # =========================================================
 
+
 function Get-Er1TodayLogRemotePath {
-    # Returns the log file path for "today" based on the PI's date.
-    # We intentionally use PI time/date so PC timezone doesn't matter.
-    #
-    # IMPORTANT: escape $ so PowerShell doesn't treat $(...) as its own subexpression.
-    $cmd = "bash -lc 'echo $er1RemoteLogDir/er1-\$(date +%d.%m.%Y).log'"
+    # Use SINGLE-QUOTED PowerShell string so $(date ...) is NOT expanded by PS
+    $cmd = 'bash -lc "echo /home/rudyy/er1/logs/er1-$(date +%d.%m.%Y).log"'
     return (ssh $er1Pi $cmd).Trim()
 }
+
 
 function Get-Er1LogRemotePathForDate {
     param(
@@ -87,7 +86,7 @@ function Get-Er1LogRemotePathForDate {
         [datetime]$Date
     )
     # For local, deterministic "date -> filename" mapping (used by extract).
-    return "$er1RemoteLogDir/er1-" + $Date.ToString("dd.MM.yyyy") + ".log"
+    return '$er1RemoteLogDir/er1-' + $Date.ToString('dd.MM.yyyy') + '.log'
 }
 
 # =========================================================
@@ -400,21 +399,8 @@ function Invoke-Er1LogExtract {
         $date = Get-Date
     }
 
-    $dateHyphen = $date.ToString("yyyy-MM-dd")
     $dateDots = $date.ToString("dd.MM.yyyy")
-    $remoteCandidates = @(
-        "$er1RemoteLogDir/er1-$dateHyphen.log",
-        "$er1RemoteLogDir/er1-$dateDots.log"
-    )
-
-    $remoteFile = $null
-    foreach ($candidate in $remoteCandidates) {
-        ssh $er1Pi "test -f $candidate"
-        if ($LASTEXITCODE -eq 0) {
-            $remoteFile = $candidate
-            break
-        }
-    }
+    $remoteFile = '$er1RemoteLogDir/er1-$dateDots.log'
 
     if (-not $remoteFile) {
         throw "Remote log file not found for $dateHyphen (tried $($remoteCandidates -join ', '))."
@@ -819,16 +805,13 @@ function er1 {
                     return
                 }
                 elseif ($sub -eq "hb") {
-                    # Heartbeat dashboard (Pi-side)
                     ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/hb_pretty.py"
                     return
                 }
                 elseif ($sub -eq "pretty") {
-                    # Consolidated pretty view (Pi-side)
                     ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/all_logs_pretty.py"
                     return
                 }
-
             }
 
             $argsNoSave = @()
@@ -859,7 +842,6 @@ function er1 {
             $useAll = ($patterns.Count -eq 1 -and $patterns[0] -eq "*")
             $regex  = if ($useAll) { $null } else { ($patterns -join "|") }
 
-            # ALWAYS resolve today file at runtime (using PI date)
             $todayFile = Get-Er1TodayLogRemotePath
 
             $localSaveDir = Join-Path $erRepoRoot "er1\data\logs"
@@ -868,55 +850,55 @@ function er1 {
             }
 
             if ($live) {
-                # Remote loop that switches log file at midnight (PI date), without restarting local terminal.
+
                 $regexEsc = $null
                 if (-not $useAll -and $regex) {
-                    # Escape for embedding inside single-quoted bash string
                     $regexEsc = $regex -replace "'", "'\''"
                 }
 
                 if ($useAll) {
-                    $remoteFollow = @"
+                    $remoteFollow = @'
 bash -lc '
 cur=""
 curDay=""
 while true; do
-  day=\$(date +%d.%m.%Y)
-  file="$er1RemoteLogDir/er1-\$day.log"
+  day=$(date +%d.%m.%Y)
+  file="/home/rudyy/er1/logs/er1-$day.log"
 
-  if [ "\$day" != "\$curDay" ]; then
-    curDay="\$day"
-    echo "=== [er1 log] following \$file ==="
-    if [ -n "\$cur" ]; then kill "\$cur" 2>/dev/null || true; fi
-    tail -n 0 -f "\$file" &
-    cur=\$!
+  if [ "$day" != "$curDay" ]; then
+    curDay="$day"
+    echo "=== [er1 log] following $file ==="
+    if [ -n "$cur" ]; then kill "$cur" 2>/dev/null || true; fi
+    tail -n 0 -f "$file" &
+    cur=$!
   fi
 
   sleep 1
 done
 '
-"@
-                } else {
-                    $remoteFollow = @"
+'@
+                }
+                else {
+                    $remoteFollow = @'
 bash -lc '
 cur=""
 curDay=""
 while true; do
-  day=\$(date +%d.%m.%Y)
-  file="$er1RemoteLogDir/er1-\$day.log"
+  day=$(date +%d.%m.%Y)
+  file="/home/rudyy/er1/logs/er1-$day.log"
 
-  if [ "\$day" != "\$curDay" ]; then
-    curDay="\$day"
-    echo "=== [er1 log] following \$file (filter) ==="
-    if [ -n "\$cur" ]; then kill "\$cur" 2>/dev/null || true; fi
-    ( tail -n 0 -f "\$file" | grep -E '$regexEsc' ) &
-    cur=\$!
+  if [ "$day" != "$curDay" ]; then
+    curDay="$day"
+    echo "=== [er1 log] following $file (filter) ==="
+    if [ -n "$cur" ]; then kill "$cur" 2>/dev/null || true; fi
+    ( tail -n 0 -f "$file" | grep -E '"$regexEsc"' ) &
+    cur=$!
   fi
 
   sleep 1
 done
 '
-"@
+'@
                 }
 
                 ssh -t $er1Pi $remoteFollow
@@ -929,7 +911,6 @@ done
                 if ($useAll) {
                     $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
                 } else {
-                    # Escape regex for single-quoted grep -E
                     $regexEsc2 = $regex -replace "'", "'\''"
                     $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
                 }
@@ -950,12 +931,15 @@ done
             $outLines = ssh $er1Pi $remoteCmd
             $ts = Get-Date -Format "yyyyMMdd-HHmmss"
             $label = if ($useAll) { "all" } else { ($patterns -join "_") }
-            foreach ($c in [IO.Path]::GetInvalidFileNameChars()) { $label = $label -replace ([Regex]::Escape($c)), "_" }
+            foreach ($c in [IO.Path]::GetInvalidFileNameChars()) {
+                $label = $label -replace ([Regex]::Escape($c)), "_"
+            }
             $outPath = Join-Path $localSaveDir ("log_{0}_{1}.txt" -f $label, $ts)
             $outLines | Set-Content -Path $outPath -Encoding utf8
             Write-Host "[er1 log] Saved -> $outPath" -ForegroundColor Green
             return
         }
+
 
 
         "push" {
