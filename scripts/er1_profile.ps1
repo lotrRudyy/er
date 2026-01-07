@@ -57,8 +57,9 @@ $er1LockIds = @(
 $er1Commands = [ordered]@{
     "help"   = "Show help + examples"
     "pi"     = "SSH into the ER1 Pi"
-    "log"    = "Logs: tail/errors/live, tag, extract, hb dashboard, pretty"
-"ota"    = "Upload firmware to a device via ota.ps1"
+    "log"    = "Tail logs (today/errors/live), tag markers, or extract slices"
+    "logs"   = "Pi-side MQTT view (pretty dashboard)"
+    "ota"    = "Upload firmware to a device via ota.ps1"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
     "status" = "One-shot health summary"
@@ -72,13 +73,13 @@ $er1Commands = [ordered]@{
 # LOG PATH HELPERS (FIX: DO NOT FREEZE TODAY AT PROFILE LOAD)
 # =========================================================
 
-
 function Get-Er1TodayLogRemotePath {
-    # Use SINGLE-QUOTED PowerShell string so $(date ...) is NOT expanded by PS
-    $cmd = 'bash -lc "echo /home/rudyy/er1/logs/er1-$(date +%d.%m.%Y).log"'
+    # Returns the log file path for "today" based on the PI's date.
+    # We intentionally use PI time/date so PC timezone doesn't matter.
+    # IMPORTANT: build command via concatenation so PowerShell never evaluates $(date ...)
+    $cmd = 'bash -lc "echo ' + $er1RemoteLogDir + '/er1-$(date +%d.%m.%Y).log"'
     return (ssh $er1Pi $cmd).Trim()
 }
-
 
 function Get-Er1LogRemotePathForDate {
     param(
@@ -86,7 +87,7 @@ function Get-Er1LogRemotePathForDate {
         [datetime]$Date
     )
     # For local, deterministic "date -> filename" mapping (used by extract).
-    return '$er1RemoteLogDir/er1-' + $Date.ToString('dd.MM.yyyy') + '.log'
+    return "$er1RemoteLogDir/er1-" + $Date.ToString("dd.MM.yyyy") + ".log"
 }
 
 # =========================================================
@@ -399,8 +400,21 @@ function Invoke-Er1LogExtract {
         $date = Get-Date
     }
 
+    $dateHyphen = $date.ToString("yyyy-MM-dd")
     $dateDots = $date.ToString("dd.MM.yyyy")
-    $remoteFile = '$er1RemoteLogDir/er1-$dateDots.log'
+    $remoteCandidates = @(
+        "$er1RemoteLogDir/er1-$dateHyphen.log",
+        "$er1RemoteLogDir/er1-$dateDots.log"
+    )
+
+    $remoteFile = $null
+    foreach ($candidate in $remoteCandidates) {
+        ssh $er1Pi "test -f $candidate"
+        if ($LASTEXITCODE -eq 0) {
+            $remoteFile = $candidate
+            break
+        }
+    }
 
     if (-not $remoteFile) {
         throw "Remote log file not found for $dateHyphen (tried $($remoteCandidates -join ', '))."
@@ -608,8 +622,7 @@ function er1 {
             Write-Host "  er1 log tag game-start"
             Write-Host "  er1 log extract --tag game"
             Write-Host "  er1 log extract --from game-start --to game-end --date 2025-12-14 --no-open"
-            Write-Host "  er1 log pretty"
-            Write-Host "  er1 log hb"
+            Write-Host "  er1 logs pretty"
             Write-Host ""
             return
         }
@@ -805,13 +818,16 @@ function er1 {
                     return
                 }
                 elseif ($sub -eq "hb") {
+                    # Heartbeat dashboard (Pi-side)
                     ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/hb_pretty.py"
                     return
                 }
                 elseif ($sub -eq "pretty") {
+                    # Consolidated pretty view (Pi-side)
                     ssh -t $er1Pi "cd ~/er1 && python3 ./scripts/all_logs_pretty.py"
                     return
                 }
+
             }
 
             $argsNoSave = @()
@@ -842,6 +858,7 @@ function er1 {
             $useAll = ($patterns.Count -eq 1 -and $patterns[0] -eq "*")
             $regex  = if ($useAll) { $null } else { ($patterns -join "|") }
 
+            # ALWAYS resolve today file at runtime (using PI date)
             $todayFile = Get-Er1TodayLogRemotePath
 
             $localSaveDir = Join-Path $erRepoRoot "er1\data\logs"
@@ -850,20 +867,21 @@ function er1 {
             }
 
             if ($live) {
-
+                # Remote loop that switches log file at midnight (PI date), without restarting local terminal.
                 $regexEsc = $null
                 if (-not $useAll -and $regex) {
-                    $regexEsc = $regex -replace "'", "'\''"
+                    # Escape for embedding in bash double quotes
+                    $regexEsc = $regex -replace '"', '\"'
                 }
 
                 if ($useAll) {
-                    $remoteFollow = @'
+                    $tmpl = @'
 bash -lc '
 cur=""
 curDay=""
 while true; do
   day=$(date +%d.%m.%Y)
-  file="/home/rudyy/er1/logs/er1-$day.log"
+  file="__LOGDIR__/er1-$day.log"
 
   if [ "$day" != "$curDay" ]; then
     curDay="$day"
@@ -877,21 +895,23 @@ while true; do
 done
 '
 '@
-                }
-                else {
-                    $remoteFollow = @'
+                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir)
+                } else {
+                    $tmpl = @'
 bash -lc '
+FILTER="__FILTER__"
+
 cur=""
 curDay=""
 while true; do
   day=$(date +%d.%m.%Y)
-  file="/home/rudyy/er1/logs/er1-$day.log"
+  file="__LOGDIR__/er1-$day.log"
 
   if [ "$day" != "$curDay" ]; then
     curDay="$day"
     echo "=== [er1 log] following $file (filter) ==="
     if [ -n "$cur" ]; then kill "$cur" 2>/dev/null || true; fi
-    ( tail -n 0 -f "$file" | grep -E '"$regexEsc"' ) &
+    tail -n 0 -f "$file" | grep -E "$FILTER" &
     cur=$!
   fi
 
@@ -899,6 +919,7 @@ while true; do
 done
 '
 '@
+                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir).Replace("__FILTER__", $regexEsc)
                 }
 
                 ssh -t $er1Pi $remoteFollow
@@ -911,6 +932,7 @@ done
                 if ($useAll) {
                     $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
                 } else {
+                    # Escape regex for single-quoted grep -E
                     $regexEsc2 = $regex -replace "'", "'\''"
                     $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
                 }
@@ -931,16 +953,25 @@ done
             $outLines = ssh $er1Pi $remoteCmd
             $ts = Get-Date -Format "yyyyMMdd-HHmmss"
             $label = if ($useAll) { "all" } else { ($patterns -join "_") }
-            foreach ($c in [IO.Path]::GetInvalidFileNameChars()) {
-                $label = $label -replace ([Regex]::Escape($c)), "_"
-            }
+            foreach ($c in [IO.Path]::GetInvalidFileNameChars()) { $label = $label -replace ([Regex]::Escape($c)), "_" }
             $outPath = Join-Path $localSaveDir ("log_{0}_{1}.txt" -f $label, $ts)
             $outLines | Set-Content -Path $outPath -Encoding utf8
             Write-Host "[er1 log] Saved -> $outPath" -ForegroundColor Green
             return
         }
 
-
+        "logs" {
+            $sub = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs[0].ToLowerInvariant() } else { "pretty" }
+            switch ($sub) {
+                "pretty" {
+                    ssh -t $er1Pi "cd ~/er1 && ./scripts/mqtt_logs.sh pretty"
+                    return
+                }
+                default {
+                    throw "Usage: er1 logs pretty"
+                }
+            }
+        }
 
         "push" {
             $Message = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs -join " " } else { $null }
@@ -996,7 +1027,7 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
     if ($tokens.Count -lt 2) { return }
     $sub = $tokens[1].Value
     if ($sub -eq "log") {
-        (@("*","hb","pretty","tag","extract") + $er1LogDevices) |
+        (@("*") + $er1LogDevices) |
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
     }
