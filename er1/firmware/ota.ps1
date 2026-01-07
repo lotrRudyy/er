@@ -242,7 +242,7 @@ if ($NoBuild) {
     $env:FW_BUILD_ID   = $otaBuild
 
     try {
-      & $pioFull run --jobs 1 -e $Env
+      & $pioFull run -e $Env
       if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)" }
     }
     finally {

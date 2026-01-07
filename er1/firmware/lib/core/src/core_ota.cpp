@@ -333,7 +333,7 @@ bool OtaUpdater::perform(const char* cmdPayload) {
     return false;
   }
 
-  currentId_ = cmd.hasId ? String(cmd.id) : "";
+  currentId_ = cmd.hasId ? String(cmd.id) : (cmd.hasVersion ? String(cmd.version) : String("?"));
   currentTarget_ = cfg_.targetId ? cfg_.targetId : "";
   if (cmd.hasTarget) {
     currentTarget_ = cmd.target;
@@ -359,10 +359,10 @@ bool OtaUpdater::perform(const char* cmdPayload) {
   }
 
   if (!cmd.hasId) {
-    logger_->publish(cfg_.errLevel, "OTA missing id");
-    publishFail("auth", -1, "missing_id", 0, "\"reason\":\"missing_id\"");
-    return false;
+    // ID is optional; older publishers may omit it. We still accept the update command.
+    logger_->publish("WRN", "OTA missing id; continuing");
   }
+
 
   const char* expectedTarget = cfg_.targetId;
   if (expectedTarget && expectedTarget[0]) {
