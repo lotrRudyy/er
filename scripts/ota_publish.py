@@ -183,6 +183,12 @@ def parse_args() -> argparse.Namespace:
         dest="firmware_name",
         help="Firmware filename (defaults from deployment map or <dev>.bin)",
     )
+    # Back-compat alias (underscore)
+    parser.add_argument(
+        "--firmware_name",
+        dest="firmware_name_legacy",
+        help=argparse.SUPPRESS,
+    )
 
     parser.add_argument(
         "--file",
