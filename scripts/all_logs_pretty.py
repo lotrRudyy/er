@@ -2,6 +2,12 @@
 """
 all_logs_pretty.py — Pretty ER1 log viewer (all nodes) with piano + OTA pretty blocks.
 
+FIX (2026-01-24):
+- Generic logs (incl. knocking) no longer omit structured data:
+  - If payload has "d" (dict/list/anything), it is printed as compact JSON.
+  - Any additional JSON fields (besides ts/lv/level/msg/d) are also printed.
+  => This ensures no data is silently dropped.
+
 Current behavior:
 - OTA:
   - Prints nice OTA timeline for live sessions.
@@ -93,6 +99,7 @@ def fmt_local_ts(ts: float) -> str:
 
 _TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?\s*-\s*(\d{4}\.\d{2}\.\d{2})$")
 
+
 def normalize_ts_no_ms(ts_str: str) -> str:
     """Convert 'HH:MM:SS.mmm - YYYY.MM.DD' -> 'HH:MM:SS - YYYY.MM.DD' (keeps other strings unchanged)."""
     s = (ts_str or "").strip()
@@ -100,6 +107,17 @@ def normalize_ts_no_ms(ts_str: str) -> str:
     if not m:
         return s
     return f"{m.group(1)} - {m.group(2)}"
+
+
+def _compact_json(v: Any) -> str:
+    """Compact JSON for log suffixes. Never throws."""
+    try:
+        return json.dumps(v, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        try:
+            return str(v)
+        except Exception:
+            return "<?>"
 
 @dataclass
 class PianoNoteCompat:
@@ -327,7 +345,6 @@ class LogsAllPretty:
             self.ota_line(sess, ts_recv, "MQTT connected")
             return True
         if "log_level set to " in msg:
-            # prefer device timestamp string if present, and strip .mmm if present
             when = normalize_ts_no_ms(ts_str) if ts_str else fmt_local_ts(ts_recv)
             lvl = "?"
             try:
@@ -346,13 +363,36 @@ class LogsAllPretty:
                 delta = msg.split("delta_s=", 1)[1].strip()
             except Exception:
                 pass
-            when = normalize_ts_no_ms(ts) if ts else fmt_local_ts(recv_ts)
-            self._p(f"{when} | time_resync: {delta}")
+            # NOTE: original code had typos (ts/recv_ts not defined here). Fix safely:
+            when = normalize_ts_no_ms(ts_str) if ts_str else fmt_local_ts(ts_recv)
+            line = f"{when} | time_resync: {delta}"
+            if line not in sess.printed_lines:
+                sess.printed_lines.add(line)
+                self._p(line)
             return True
 
         return False
 
     # ----------------- LOG HANDLING -----------------
+    def _format_generic_suffix(self, data: Dict[str, Any]) -> str:
+        """
+        Ensures we don't omit structured fields:
+        - Print d=... if present and not empty.
+        - Print extras for any other top-level keys.
+        """
+        used = {"ts", "lv", "level", "msg", "d"}
+        parts: List[str] = []
+
+        d = data.get("d")
+        if d is not None and d != {} and d != [] and d != "":
+            parts.append(f"d={_compact_json(d)}")
+
+        extras = {k: v for k, v in data.items() if k not in used}
+        if extras:
+            parts.append(f"extra={_compact_json(extras)}")
+
+        return (" " + " ".join(parts)) if parts else ""
+
     def handle_log(self, topic: str, payload: str, recv_ts: float) -> None:
         data = self.safe_json(payload)
         if not isinstance(data, dict):
@@ -364,6 +404,11 @@ class LogsAllPretty:
         ts = str(data.get("ts") or "")
         msg = str(data.get("msg") or "")
         d = data.get("d")
+
+        # Suppress heartbeat logs
+        m = msg.lower()
+        if m == "hb" or m.startswith("hb ") or m.startswith("heartbeat"):
+            return
 
         # Attach reboot-tail logs to OTA block
         if self.attach_log_to_recent_ota(node, recv_ts, msg, ts):
@@ -377,7 +422,7 @@ class LogsAllPretty:
             except Exception:
                 pass
             when = ts if ts else fmt_local_ts(recv_ts)
-            self._p(f"{when} | time_resync: {delta}")
+            self._p(f"{when} | time_resync: {delta}{self._format_generic_suffix(data)}")
             return
 
         # Suppress noisy OTA-related logs that duplicate OTA block
@@ -476,17 +521,23 @@ class LogsAllPretty:
                 )
                 return
 
-        # Generic log
+        # Generic log (FIXED: never omit structured fields)
         header = f"{node}/log {level}"
         if ts:
             header += f" {ts}"
 
+        suffix = self._format_generic_suffix(data)
+
         if "\n" in msg:
-            self._p(header)
+            self._p(header + suffix)
             for line in msg.splitlines():
                 self._p(line)
         else:
-            self._p(f"{header} {msg}")
+            # If msg is empty but d/extra exists, still print the suffix.
+            if msg:
+                self._p(f"{header} {msg}{suffix}")
+            else:
+                self._p(f"{header}{suffix}")
 
     # ----------------- OTA HANDLING -----------------
     def handle_ota(self, topic: str, payload: str, recv_ts: float, retain: bool) -> None:
