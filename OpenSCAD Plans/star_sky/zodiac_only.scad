@@ -4,7 +4,7 @@
 
 $fn = 96;
 
-constellation_idx = 3;     // 0..6
+constellation_idx = 0;     // 0..6
 mode = "3D";               // "2D" for SVG/DXF export, "3D" for clean preview
 disk_d = 200;              // mm (outer disk)
 map_d  = 170;              // mm (inner reference circle diameter)
@@ -22,7 +22,47 @@ show_center_cross = true;
 fit_margin = 2.0;          // mm safety margin to stay inside map_d
 rot_deg = 0;               // rotate constellation
 offset_xy = [0,0];         // mm offset inside disk (x,y)
-scale_extra = 1.0;         // 1.0 = fill available map circle
+scale_extra = 0.9;         // 1.0 = fill available map circle
+
+
+// -------------------- helpers (OpenSCAD has no built-in sum/reduce) --------------------
+function fsum(v, i=0, acc=0) = (i >= len(v)) ? acc : fsum(v, i+1, acc + v[i]);
+function vlen2(v) = sqrt(v[0]*v[0] + v[1]*v[1]);
+// ---------- Ritter smallest-enclosing-circle style center (good auto-fit)
+// returns [cx, cy, r] where r is max distance to center after expansion
+function dist2(a,b) = vlen2([a[0]-b[0], a[1]-b[1]]);
+
+function farthest_from(p, pts, i=0, best_i=0, best_d=-1) =
+    (i >= len(pts)) ? best_i :
+    let(d = dist2(p, pts[i]))
+    farthest_from(p, pts, i+1, (d > best_d) ? i : best_i, (d > best_d) ? d : best_d);
+
+function ritter_seed(pts) =
+    let(i1 = farthest_from(pts[0], pts),
+        i2 = farthest_from(pts[i1], pts),
+        p1 = pts[i1],
+        p2 = pts[i2],
+        c  = [(p1[0]+p2[0])/2, (p1[1]+p2[1])/2],
+        r  = dist2(c, p1))
+    [c[0], c[1], r];
+
+function ritter_step(pts, i, cx, cy, r) =
+    (i >= len(pts)) ? [cx, cy, r] :
+    let(p = pts[i],
+        d = dist2([cx,cy], p))
+    (d <= r) ?
+        ritter_step(pts, i+1, cx, cy, r) :
+        let(new_r = (r + d)/2,
+            // move center toward p
+            k = (d - r) / (2*d),
+            new_cx = cx + (p[0]-cx)*k,
+            new_cy = cy + (p[1]-cy)*k)
+        ritter_step(pts, i+1, new_cx, new_cy, new_r);
+
+function ritter_circle(pts) =
+    let(seed = ritter_seed(pts),
+        res  = ritter_step(pts, 0, seed[0], seed[1], seed[2]))
+    res;
 
 // -------------------- Constellation point sets (normalized) --------------------
 function pts_for(i) =
@@ -54,28 +94,28 @@ function pts_for(i) =
   [0.651237, -0.394591]
 ] :
     i==2 ? [
-  [-0.265730, 0.935982],
-  [-0.910998, 0.412412],
-  [0.447751, 0.412070],
-  [-0.228618, 0.379872],
-  [-0.533603, -0.178623],
-  [0.594546, -0.298915],
-  [0.571898, -0.482816],
-  [0.736040, -0.522184],
-  [-0.411287, -0.657797]
+  [0.788211, 0.615405],
+  [-0.030439, 0.565854],
+  [-0.925424, 0.200731],
+  [-0.404700, 0.150556],
+  [0.498672, -0.230722],
+  [0.041565, -0.450217],
+  [0.032115, -0.851607]
 ] :
     i==3 ? [
-  [0.134438, 0.354616],
-  [-0.444567, -0.086040],
-  [0.060856, -0.237296],
-  [0.358331, 0.204015],
-  [-0.231237, 0.204713],
-  [-0.647851, -0.208661],
-  [0.084861, 0.029295],
-  [-0.310564, -0.002495],
-  [0.537010, -0.117032],
-  [-0.396486, 0.377165],
-  [0.855211, -0.518281]
+  [ 0.532463,  0.846453],
+  [ 0.103697,  0.590352],
+  [-0.353483,  0.336667],
+  [ 0.429146,  0.182040],
+  [ 0.022247,  0.104726],
+  [-0.547937,  0.090230],
+  [-0.348317,  0.073318],
+  [-0.506610, -0.175535],
+  [ 0.196682, -0.180367],
+  [-0.070329, -0.310834],
+  [ 0.279336, -0.412308],
+  [ 0.625449, -0.541566],
+  [-0.162346, -0.603176]
 ] :
     i==4 ? [
   [0.105784, -0.479338],
@@ -91,16 +131,16 @@ function pts_for(i) =
 
 ] :
     i==5 ? [
-  [0.349408, 0.245638],
-  [-0.657482, -0.100573],
-  [-0.457085, -0.685758],
-  [0.798321, 0.602232],
-  [-0.867315, -0.482710],
-  [-0.328561, -0.138758],
-  [-0.098498, -0.410898],
-  [0.727870, 0.262947],
-  [0.058649, 0.112954],
-  [0.474693, 0.594926]
+  [ 0.415757,  0.909476],
+  [ 0.548812,  0.685938],
+  [ 0.183061,  0.522443],
+  [ 0.603793,  0.403053],
+  [-0.049366,  0.078819],
+  [-0.539698, -0.225253],
+  [ 0.106515, -0.459940],
+  [-0.666177, -0.592623],
+  [-0.178672, -0.605792],
+  [-0.424026, -0.716122]
 ] :
            [
   [-0.679016,  0.721854],
@@ -139,13 +179,26 @@ module center_cross_2d() {
 module zodiac_holes_2d() {
     pts = pts_for(constellation_idx);
 
-    // scale so max radius becomes (map_d/2 - fit_margin)
+    // ---- Auto-fit (NO distortion): recentre -> uniform-scale to fill map circle ----
+    // This fixes the "unused space" problem: we do NOT assume pts are already centred.
+    n = len(pts);
+
+    // better auto-center: Ritter enclosing circle center (fills the 170mm ring much better than centroid)
+    rc = ritter_circle(pts);
+    cx = rc[0];
+    cy = rc[1];
+    maxr = rc[2];  // already the max distance from (cx,cy)
+
+    // desired radius inside the 170mm reference circle
     r_target = (map_d/2 - fit_margin) * scale_extra;
+
+    // uniform scale factor
+    s = (maxr > 0) ? (r_target / maxr) : 1;
 
     translate(offset_xy)
     rotate(rot_deg)
     for(p = pts) {
-        translate([p[0]*r_target, p[1]*r_target])
+        translate([(p[0]-cx)*s, (p[1]-cy)*s])
             circle(d=zodiac_d);
     }
 }

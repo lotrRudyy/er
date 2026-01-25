@@ -71,7 +71,7 @@ base_margin_x  = 34;
 base_margin_y_front = 34;
 base_margin_y_back  = 80;
 
-candle_d       = 22;
+candle_d       = 16;
 candle_h_min   = 24;
 candle_h_step  = 14;
 
@@ -79,11 +79,11 @@ hole_d         = 7.2;
 hole_clear     = 0.4;
 hole_depth     = base_th + 0.6;
 
-token_bottom_d   = 26;
-token_bottom_h   = 4.0;
+token_bottom_d   = 18.1;
+token_bottom_h   = 2.3;
 
-token_top_scale  = 0.70;
-token_top_h      = 2.8;
+token_top_d      = 14.2;
+token_top_h      = 2.3;
 
 // annulus candles (2D icons)
 mark_th        = 0.25;
@@ -243,7 +243,7 @@ function _half_line_deg(r) = (wall_mark_w/2) / r * 180 / PI;
 
 // Conservative angular half-width (top radius is smaller -> larger degrees)
 _bottom_r0 = token_bottom_d/2;
-_top_r0    = (token_bottom_d*token_top_scale)/2;
+_top_r0    = token_top_d/2;
 _half_line_deg_max = max(_half_line_deg(_bottom_r0), _half_line_deg(_top_r0));
 
 // Effective margins so at least half thickness is clearly in/out
@@ -502,7 +502,7 @@ module annulus_candle_icon_centered(level=0, label="0") {
 
 module annulus_candles_on_ring() {
   bottom_r = token_bottom_d/2;
-  top_r    = (token_bottom_d*token_top_scale)/2;
+  top_r    = token_top_d/2;
   ring_mid_r = (bottom_r + top_r)/2;
 
   for (p=[0:3]) {
@@ -553,7 +553,7 @@ module top_disk_line(top_r) {
 
 module disk_assembly(i) {
   bottom_r = token_bottom_d/2;
-  top_r    = (token_bottom_d*token_top_scale)/2;
+  top_r    = token_top_d/2;
 
   union() {
     // bottom (apply bottom rotation ONLY)
