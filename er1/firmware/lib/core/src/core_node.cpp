@@ -691,6 +691,11 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
   }
 
   // Set time
+  // If wall-clock time is already valid and we're within our tolerance,
+  // treat this as an already-synced no-op (avoid spamming ERR logs).
+  if (wasValid && deltaSec <= 2) {
+    return;
+  }
   if (!core_set_time(epoch)) {
     logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
     return;
