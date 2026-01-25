@@ -42,7 +42,7 @@ wall_marks_per_wall = 20;      // per wall count (bottom wall has this many, top
 wall_mark_min_sep_deg = 6;     // separation between marks on same wall
 wall_mark_min_sep_deg_inside  = 2.6;   // MIN sep for COUNTING marks inside zones (allows 4 marks)
 wall_mark_min_sep_deg_outside = wall_mark_min_sep_deg; // sep for non-counting/outside marks
-wall_mark_w   = 0.85;          // tangential width
+wall_mark_w   = 0.425;          // tangential width
 wall_mark_out = 0.55;          // radial protrusion outward from cylinder wall
 wall_mark_z_inset = 0.12;      // keep marks away from wall edges
 
