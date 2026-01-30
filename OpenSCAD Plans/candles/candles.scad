@@ -111,9 +111,9 @@ big_num_side_inset = 0.8;
 levels = [0, 2, 3, 1];
 
 // nails
-nail_r         = 1.3;
+nail_r = 0.3;
 nail_h         = 7.0;
-nail_head_r    = 2.3;
+nail_head_r = 0.6;
 nail_head_h    = 1.2;
 nail_offset_from_disk = 5;
 
@@ -434,19 +434,192 @@ module wall_line_marks(r, z0, h, angles_local) {
 // ============================================================
 // GEOMETRY
 // ============================================================
+
+// ============================================================
+// BOARD MARKERS (engraved into wood) — ZONE CONES (as you drew)
+// Disk 0/1/2: draw a "cone" that EXTENDS the corresponding zone outward from the hole.
+// Disk 3: unchanged (no marker).
+//
+// IMPORTANT: players see NO printed colors/zones on the disks.
+// These cones are the ONLY board cue.
+// In CAD we render the engraved area as a darker wood tone (not green).
+//
+// Also add a tiny universal hint: 3 small "tally bars" inside the cone,
+// to suggest "COUNT the wall bars inside this projected slice".
+//
+// FULL FILE. ASCII ONLY.
+// ============================================================
+
+show_board_markers = true;      // engrave cones into the board
+marker_depth       = 0.6;       // mm (engrave depth into top surface)
+
+// Cone geometry (project the hidden zone outward)
+cone_r_start_clear = 0.6;       // mm: start just OUTSIDE disk outer radius
+cone_len = 5;         // mm: how far the cone extends outward
+cone_arc_steps     = 28;        // polygon resolution for the sector edges
+
+// Visual-only: fill the engraved area with a darker wood tone in the preview (so it's NOT green)
+show_marker_fill_preview = true;
+marker_fill_th           = 0.25;      // mm visual "ink" thickness
+marker_fill_col          = [0.42,0.28,0.18];
+
+// NEW: "look-through bridge" hint (small sight window)
+// Idea: a thin vertical frame whose opening has the SAME width as the zone at the disk radius,
+// and the SAME height as the two stacked disks. Players can "peek through" to isolate the zone.
+show_zone_bridge   = true;
+bridge_th          = 2.0;       // mm thickness (radial)
+bridge_frame_w     = 1.2;       // mm frame border (tangential + vertical)
+bridge_clear_h     = 0.2;       // mm height clearance above disks
+bridge_clear_r     = 0.4;       // mm radial clearance so bridge doesn't touch disk
+bridge_r_pos       = 0.55;      // 0..1 position along the cone length (where the bridge sits)
+bridge_h_scale     = 1.08;      // height multiplier (5-10% extra over (bottom_h+top_h))
+
+// Small gap so the cone doesn't touch the disk edge visually
+function _cone_r0() = token_bottom_d/2 + cone_r_start_clear;
+function _cone_r1() = _cone_r0() + cone_len;
+
+// 2D ring-sector (center at origin), from radius r0..r1, angle a0..a1 (degrees)
+module _ring_sector2d(r0, r1, a0, a1, steps=24) {
+  pts_outer = [for (k=[0:steps]) [ r1*cos(a0 + (a1-a0)*k/steps), r1*sin(a0 + (a1-a0)*k/steps) ]];
+  pts_inner = [for (k=[steps:-1:0]) [ r0*cos(a0 + (a1-a0)*k/steps), r0*sin(a0 + (a1-a0)*k/steps) ]];
+  polygon(concat(pts_outer, pts_inner));
+}
+
+// Cone angle for disk i = its OWN zone center in WORLD space
+function _zone_center_world(i) = box_world_ang(i);
+
+// 2D marker shape in LOCAL coordinates (origin at hole center)
+// Rotate by the zone center, then build a sector from -halfspan..+halfspan.
+module _zone_cone_marker2d(i) {
+  rotate(_zone_center_world(i))
+    _ring_sector2d(_cone_r0(), _cone_r1(), -zone_halfspan_deg, +zone_halfspan_deg, cone_arc_steps);
+}
+
+module _cut_zone_cone(i) {
+  if (show_board_markers) {
+    cx = x_of_i(i);
+    cy = hole_y();
+
+    translate([0,0, base_th - marker_depth])
+      linear_extrude(height=marker_depth + 0.02)
+        translate([cx, cy])
+          _zone_cone_marker2d(i);
+  }
+}
+
+// Visual fill for the engraved area (darker wood tone), so it's NOT green in CAD.
+module _fill_zone_cone_preview(i) {
+  if (show_board_markers && show_marker_fill_preview) {
+    cx = x_of_i(i);
+    cy = hole_y();
+
+    color(marker_fill_col)
+      translate([0,0, base_th - marker_depth + 0.001])
+        linear_extrude(height=marker_fill_th)
+          translate([cx, cy])
+            _zone_cone_marker2d(i);
+  }
+}
+
+// --- Bridge geometry ---
+// Opening width = zone chord width at disk outer radius.
+// Height = bottom + top disk heights (plus a tiny clearance).
+function _zone_open_w() =
+  let(r = token_bottom_d/2)
+  (2 * r * sin(zone_halfspan_deg));
+
+function _bridge_open_h() = (token_bottom_h + token_top_h) * bridge_h_scale;
+function _bridge_outer_w() = _zone_open_w() + 2*bridge_frame_w;
+function _bridge_outer_h() = _bridge_open_h() + 2*bridge_frame_w;
+
+module _zone_bridge(i) {
+  if (show_zone_bridge) {
+    cx = x_of_i(i);
+    cy = hole_y();
+
+    // Place bridge at the OUTER END of the cone (as requested).
+    // IMPORTANT: Our cone marker is centered on local angle 0deg (= +X axis).
+    // So after rotate([0,0,ang]), local +X points radially outward along the zone.
+    // Move bridge closer to disk: 70% closer than outer cone end
+    rpos = _cone_r0() + (_cone_r1() - _cone_r0())*0.30 + bridge_clear_r;
+    // NOTE: In the rest of this project the "0deg" reference for the visible zone
+    // points along +Y (not +X). The cone marker itself already matches that world
+    // convention via box_world_ang(). For the 3D bridge placement we must use the
+    // SAME convention, i.e. rotate by (ang-90) so the bridge sits exactly on top
+    // of the cone direction.
+    // Use same angle reference as cone (no extra offset)
+    ang  = _zone_center_world(i);
+
+    open_w  = _zone_open_w();
+    open_h  = _bridge_open_h();
+    outer_w = open_w + 2*bridge_frame_w;        // tangential span (Y)
+    outer_h = open_h + bridge_frame_w;          // only top beam, no bottom beam (U-bridge)
+
+    translate([cx, cy, base_th])
+      rotate([0,0,ang])
+        translate([rpos, 0, 0]) {
+
+          // U-BRIDGE: two posts + top beam. OPEN AT BOTTOM.
+          // Frame axes here:
+          //   X = radial thickness
+          //   Y = tangential width (zone width)
+          //   Z = height
+
+          // Left post (at -Y)
+          translate([-bridge_th/2, -outer_w/2, 0])
+            cube([bridge_th, bridge_frame_w, outer_h], center=false);
+
+          // Right post (at +Y)
+          translate([-bridge_th/2, outer_w/2 - bridge_frame_w, 0])
+            cube([bridge_th, bridge_frame_w, outer_h], center=false);
+
+          // Top beam (spans full tangential width)
+          translate([-bridge_th/2, -outer_w/2, outer_h - bridge_frame_w])
+            cube([bridge_th, outer_w, bridge_frame_w], center=false);
+        }
+  }
+}
+
+module board_markers_cut() {
+  // as requested: cones only on disks 0/1/2 (disk 3 unchanged)
+  _cut_zone_cone(0);
+  _cut_zone_cone(1);
+  _cut_zone_cone(2);
+}
+
+module board_markers_fill_preview() {
+  _fill_zone_cone_preview(0);
+  _fill_zone_cone_preview(1);
+  _fill_zone_cone_preview(2);
+}
+
+module board_bridges() {
+  // bridges only on disks 0/1/2 (disk 3 unchanged)
+  _zone_bridge(0);
+  _zone_bridge(1);
+  _zone_bridge(2);
+}
+
 module board() {
+
   difference() {
     color([0.62,0.42,0.26])
       translate([-((3*candle_spacing) + 2*base_margin_x)/2, -(base_margin_y_front + front_offset_y), 0])
         cube([(3*candle_spacing) + 2*base_margin_x, base_margin_y_back + base_margin_y_front + front_offset_y, base_th]);
-
     for (i=[0:3]) {
       translate([x_of_i(i), hole_y(), 0])
         cylinder(d=hole_d + hole_clear, h=hole_depth);
     }
-  }
-}
 
+    // engraved markers (disk0=opt1, disk1=opt2, disk2=opt3)
+    board_markers_cut();
+  }
+  // Visual-only: darker fill for engraved cones
+  board_markers_fill_preview();
+
+  // Physical hint: small look-through bridges (0/1/2 only)
+  color([0.55,0.36,0.22]) board_bridges();
+}
 module candle_real_with_number(x=0, y=0, d=22, lvl=0, label="0") {
   h = level_to_h(lvl);
   translate([x, y, base_th]) {
