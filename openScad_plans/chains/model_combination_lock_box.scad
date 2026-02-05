@@ -25,26 +25,26 @@ show_rail     = true;
 show_left_wall = false; // false = left wall removed (look inside)
 
 // ---------------- DIMENSIONS ----------------
-box_outer = [220, 95, 55];
-wall      = 4;
+box_outer = [325, 200, 184];
+wall      = 25;
 
 // lid
-lid_thk      = 7;
+lid_thk      = 25;
 lid_overhang = 3;
 lid_inset    = 0.8;
 
 // dials
-dial_xs      = [45, 110, 175];
-dial_y       = 30;   // was 27 -> increased to avoid collision with rail (with clearance)
+dial_xs      = [65, 162, 259];
+dial_y       = 85;   // was 27 -> increased to avoid collision with rail (with clearance)
 
 // shaft
-shaft_r      = 2.0;
-shaft_len_up = 7;
-shaft_len_dn = 10;
+shaft_r      = 5.0;
+shaft_len_up = 10;
+shaft_len_dn = 28;
 
 // outer shapes
-outer_r      = 14;
-outer_t      = 7;
+outer_r      = 35;
+outer_t      = 10;
 
 // POINTER LINE (black)
 ptr_len      = outer_r;
@@ -53,24 +53,24 @@ ptr_h        = 1.2;
 ptr_zlift    = 0.2;
 
 // inner cams
-inner_r      = 18;
-inner_t      = 7;
+inner_r      = 35;
+inner_t      = 10;
 
 // chord cut depth (flat amount on rail side)
-cut_depth    = 2.8;   // mm
+cut_depth    = 3;   // mm
 
 // EXTRA clearance for diagonal closing motion
 clearance    = 0.8;   // mm recommended
 
 // numbers
-num_radius   = 22;
-num_size     = 5.0;
-num_depth    = 1.2;
+num_radius   = 42;
+num_size     = 7.0;
+num_depth    = 3.2;
 font_name    = "Liberation Sans:style=Bold";
 
 // rail
-rail_thk_y   = 9.8;    // depth (Y)
-rail_drop_z  = 9.8;    // hang down
+rail_thk_y   = 25;    // depth (Y)
+rail_drop_z  = 25;    // hang down
 rail_x_pad   = 0;
 rail_z_gap   = 0;
 
