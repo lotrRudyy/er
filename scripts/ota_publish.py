@@ -1,13 +1,38 @@
 #!/usr/bin/env python3
-"""
+"""ota_publish.py
+
 Compute OTA sha256 on the Pi and publish the UPDATE command with a JSON payload.
 
 - Reads firmware from /home/rudyy/er1/node_firmware by default
-- Publishes: UPDATE {"version":...,"target":...,"url":...,"sha256":...,"size":...}
-- Default URL matches ota_http.py: http://<http-host>/node_firmware/<firmware>.bin
+- Publishes to: <cmd_node>/cmd
+    UPDATE {"version":...,"target":...,"url":...,"sha256":...,"size":...}
 
-Dependencies:
+Migration note (Phase 1):
+- Older node firmware may REQUIRE a "build" field in UPDATE.
+- Therefore this publisher accepts an OPTIONAL --build flag. If provided,
+  it will include "build" in the published UPDATE payload (for backwards
+  compatibility). New firmware ignores it.
+
+Default URL matches ota_http.py: http://<http-host>/node_firmware/<firmware>.bin
+
+Optional verification (recommended for er1 ota):
+  --verify --timeout 25 --up-max 10
+
+Verification behavior:
+- Watches <node>/hb (and <node>/ota + <node>/log for visibility)
+- Requires seeing "<node>/hb offline" first (LWT)
+- Then requires a NEW hb JSON within 10 seconds of offline where:
+    hb.fw == expected version  AND  hb.up < up_max
+
+Dependencies on the Pi:
   pip install paho-mqtt
+
+Exit codes:
+  0  success
+  1  error (bad args, file missing, mqtt publish fail, etc.)
+  2  verify timeout / sequence fail
+  3  verify saw OTA_FAIL
+  4  verify saw hb.fw match but uptime too large
 """
 
 from __future__ import annotations
@@ -16,7 +41,10 @@ import argparse
 import hashlib
 import json
 import sys
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/er1/node_firmware")
@@ -153,6 +181,14 @@ def normalize_url(url: str, http_host: str) -> str:
     return f"http://{http_host}{path}"
 
 
+def _split_csv(s: Optional[str]) -> Optional[tuple[str, ...]]:
+    if s is None:
+        return None
+    parts = [p.strip() for p in s.split(",")]
+    parts = [p for p in parts if p]
+    return tuple(parts) if parts else None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Publish an OTA command from the Pi with SHA-256 validation (no PSK)."
@@ -174,8 +210,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--url",
-        help="OTA URL (full http(s)://... or path like /node_firmware/x.bin). "
-             "Defaults to /node_firmware/<firmware>.",
+        help=(
+            "OTA URL (full http(s)://... or path like /node_firmware/x.bin). "
+            "Defaults to /node_firmware/<firmware>."
+        ),
     )
 
     parser.add_argument(
@@ -196,13 +234,168 @@ def parse_args() -> argparse.Namespace:
         help="Firmware file path on the Pi (defaults to /home/rudyy/er1/node_firmware/<firmware_name>)",
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
-    # Build id removed from OTA control plane.
+    # Phase-1 migration: optional, only to satisfy legacy node firmware that requires a build field.
+    parser.add_argument("--build", required=False, default="", help="(optional) legacy build string to include in UPDATE")
     parser.add_argument(
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
     )
+
     parser.add_argument("--dry-run", action="store_true", help="Print payload without publishing")
+
+    # Verification (runs on the Pi)
+    parser.add_argument("--verify", action="store_true", help="Verify OTA completes by watching MQTT")
+    parser.add_argument(
+        "--verify-nodes",
+        dest="verify_nodes",
+        help="Comma-separated nodes to verify (defaults from deployment map or dev)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=25,
+        help="Verify timeout seconds (default: 25)",
+    )
+    parser.add_argument(
+        "--up-max",
+        dest="up_max",
+        type=int,
+        default=10,
+        help="Max allowed hb.up at success time (0 disables check). Default: 10",
+    )
+
     return parser.parse_args()
+
+
+@dataclass
+class VerifyState:
+    expected_version: str
+    up_max: int
+    ok_nodes: set[str] = field(default_factory=set)
+    fail_reason: Optional[str] = None
+    fail_code: int = 0
+    # offline->hb sequencing
+    saw_offline: set[str] = field(default_factory=set)
+    offline_since: dict[str, float] = field(default_factory=dict)
+
+
+def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version: str, timeout_s: int, up_max: int) -> int:
+    """Return exit code (0 ok, 2 timeout/sequence fail, 3 ota_fail, 4 uptime too large)."""
+    try:
+        import paho.mqtt.client as mqtt  # type: ignore
+    except ImportError:
+        print("ota_publish: paho-mqtt not installed on Pi; pip install paho-mqtt", file=sys.stderr)
+        return 1
+
+    st = VerifyState(expected_version=expected_version, up_max=up_max)
+
+    topics = []
+    for n in nodes:
+        topics.extend([(f"{n}/hb", 0), (f"{n}/ota", 0), (f"{n}/log", 0)])
+
+    def on_message(client, userdata, msg):
+        # msg.topic is str, payload bytes
+        topic = msg.topic
+        try:
+            payload_txt = msg.payload.decode("utf-8", errors="replace")
+        except Exception:
+            payload_txt = ""
+
+        # Always print for visibility (matches how mosquitto_sub -v looks)
+        print(f"{topic} {payload_txt}")
+
+        # Parse node
+        node = topic.split("/", 1)[0] if "/" in topic else topic
+
+        if topic.endswith("/ota"):
+            try:
+                o = json.loads(payload_txt)
+            except Exception:
+                return
+            if o.get("st") == "OTA_FAIL":
+                st.fail_reason = f"{node} reported OTA_FAIL"
+                st.fail_code = 3
+
+        if topic.endswith("/hb"):
+            # Phase-1 verifier requirement:
+            # 1) must see explicit "offline" first
+            # 2) then must see a NEW hb JSON with fw==expected_version and up<=up_max within timeout
+
+            # offline marker
+            if payload_txt.strip() == "offline":
+                st.saw_offline.add(node)
+                st.offline_since[node] = time.time()
+                return
+
+            try:
+                hb = json.loads(payload_txt)
+            except Exception:
+                return
+
+            # only accept hb AFTER offline for this node
+            if node not in st.saw_offline:
+                return
+
+            fw = hb.get("fw")
+            up = hb.get("up")
+            if fw == st.expected_version:
+                if st.up_max and isinstance(up, int) and up > st.up_max:
+                    st.fail_reason = f"{node} fw matched but uptime too large (up={up} > {st.up_max})"
+                    st.fail_code = 4
+                    return
+                st.ok_nodes.add(node)
+
+    client = make_mqtt_client()
+    client.on_message = on_message
+
+    rc = client.connect(broker, port, 30)
+    if rc != 0:
+        print(f"ota_publish: MQTT connect failed rc={rc}", file=sys.stderr)
+        return 1
+
+    for t, qos in topics:
+        client.subscribe(t, qos=qos)
+
+    client.loop_start()
+    deadline = time.time() + max(1, timeout_s)
+    try:
+        print(
+            f"== OTA VERIFY: expecting fw={expected_version}; nodes={','.join(nodes)}; timeout={timeout_s}s; up_max={up_max} =="
+        )
+
+        while time.time() < deadline:
+            if st.fail_code:
+                print(f"== OTA VERIFY: FAIL ({st.fail_reason}) ==")
+                return st.fail_code
+
+            # fail if any node has been offline too long without a qualifying hb
+            now = time.time()
+            for n in st.saw_offline:
+                since = st.offline_since.get(n, 0.0)
+                if since and (now - since) > timeout_s and (n not in st.ok_nodes):
+                    st.fail_reason = f"{n} went offline but no qualifying hb within {timeout_s}s"
+                    st.fail_code = 2
+                    break
+            if st.fail_code:
+                print(f"== OTA VERIFY: FAIL ({st.fail_reason}) ==")
+                return st.fail_code
+
+            if set(nodes).issubset(st.ok_nodes):
+                print("== OTA VERIFY: OK (offline->hb fw matched) ==")
+                return 0
+
+            time.sleep(0.05)
+
+        # If we didn't even see offline, make that explicit.
+        missing_offline = [n for n in nodes if n not in st.saw_offline]
+        if missing_offline:
+            print(f"== OTA VERIFY: FAIL (timeout; never saw hb offline for {','.join(missing_offline)}) within {timeout_s}s ==")
+        else:
+            print(f"== OTA VERIFY: FAIL (timeout; fw never became {expected_version} with up<= {up_max}) within {timeout_s}s ==")
+        return 2
+    finally:
+        client.loop_stop()
+        client.disconnect()
 
 
 def main() -> int:
@@ -213,11 +406,12 @@ def main() -> int:
 
     firmware_name = (
         args.firmware_name
+        or getattr(args, "firmware_name_legacy", None)
         or deployment.get("firmware")
         or f"{args.dev}.bin"
     )
 
-    firmware_path = Path(args.firmware_path) if args.firmware_path else (DEFAULT_FIRMWARE_DIR / firmware_name)
+    firmware_path = Path(args.firmware_path) if args.firmware_path else (DEFAULT_FIRMWARE_DIR / str(firmware_name))
 
     target = args.target or deployment.get("target") or args.dev
     if not target:
@@ -227,8 +421,19 @@ def main() -> int:
     if not version:
         raise OtaPublishError("Version must be provided")
 
+    build = (args.build or "").strip()
+
     default_path = f"/node_firmware/{firmware_name}"
     url = normalize_url(args.url or default_path, args.http_host)
+
+    # Determine verify nodes
+    vn_cli = _split_csv(args.verify_nodes)
+    if vn_cli is not None:
+        verify_nodes = vn_cli
+    else:
+        verify_nodes = tuple(deployment.get("verify_nodes", (args.dev,)))  # type: ignore
+        if not verify_nodes:
+            verify_nodes = (args.dev,)
 
     try:
         sha_hex = sha256_file(firmware_path)
@@ -252,6 +457,10 @@ def main() -> int:
             "size": size_bytes,
         }
 
+        # Phase-1 backwards compatibility: include build if provided.
+        if build:
+            payload_obj["build"] = build
+
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
         payload = f"UPDATE {payload_json}"
 
@@ -261,6 +470,8 @@ def main() -> int:
         print(f"URL      : {url}")
         print(f"Dev      : {args.dev}")
         print(f"Version  : {version}")
+        if build:
+            print(f"Build    : {build}")
         print(f"Target   : {target}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")
@@ -272,7 +483,19 @@ def main() -> int:
 
         publish(args.broker, args.port, topic, payload)
         print("Published OTA command")
+
+        if args.verify:
+            return verify_ota(
+                broker=args.broker,
+                port=args.port,
+                nodes=verify_nodes,
+                expected_version=version,
+                timeout_s=int(args.timeout),
+                up_max=int(args.up_max),
+            )
+
         return 0
+
     except OtaPublishError as exc:
         print(f"ota_publish: {exc}", file=sys.stderr)
         return 1
