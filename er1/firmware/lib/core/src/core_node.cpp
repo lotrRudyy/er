@@ -4,6 +4,7 @@
 #include <ctime>
 #include <stdexcept>
 #include <esp_system.h>
+#include <esp_ota_ops.h>
 
 #include "core_time.h"
 
@@ -183,6 +184,12 @@ NodeCore::NodeCore() : ctx_(*this) {}
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
   errState_ = {};
+
+  // If OTA rollback is enabled, an OTA image can boot in "pending verify" state.
+  // If the app doesn't confirm itself as valid, the bootloader may roll back to
+  // the previous OTA slot on next boot.
+  // Safe to call even when rollback isn't enabled.
+  esp_ota_mark_app_valid_cancel_rollback();
   // Ensure local time formatting matches Europe/Rome (CET/CEST), not UTC.
   core_time_init_tz();
   buildIdBuf_[0] = '\0';
@@ -691,11 +698,6 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
   }
 
   // Set time
-  // If wall-clock time is already valid and we're within our tolerance,
-  // treat this as an already-synced no-op (avoid spamming ERR logs).
-  if (wasValid && deltaSec <= 2) {
-    return;
-  }
   if (!core_set_time(epoch)) {
     logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
     return;

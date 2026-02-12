@@ -1,6 +1,1 @@
-bblanchon/ArduinoJson@^7
-bblanchon/ArduinoJson
-kosme/arduinoFFT@^2
-knolleary/PubSubClient
-arduino-libraries/Ethernet
-miguelbalboa/MFRC522 @ ^1.4.10
+ESP32-audioI2S

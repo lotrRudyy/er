@@ -662,167 +662,17 @@ function er1 {
             Invoke-Er1Mqtt -Action $cmdArgs[0]
             return
         }
-
         "ota" {
             $target = if ($cmdArgs -and $cmdArgs.Count -ge 1) { $cmdArgs[0] } else { $null }
             if (-not $target) { throw "Usage: er1 ota <device>" }
 
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
 
-            # Run ota.ps1 once, CAPTURE output so we can parse version/build + print it.
-            $otaOut = & pwsh -File $otaScript -Target $target 2>&1
-            $otaText = ($otaOut | Out-String)
-            Write-Host $otaText
-
+            # Let ota.ps1 do build+upload+publish+verify and stream progress live.
+            & pwsh -NoProfile -File $otaScript -Target $target
             if ($LASTEXITCODE -ne 0) { throw "ota.ps1 failed (exit $LASTEXITCODE)." }
-
-            # Parse from ota.ps1 output:
-            # Firmware : /home/rudyy/er1/node_firmware/<target>.bin
-            # Version  : <ver>
-            # Build    : <build>
-            $fwPath = ([regex]::Match($otaText, '^\s*Firmware\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
-            $verStr = ([regex]::Match($otaText, '^\s*Version\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
-            $bldStr = ([regex]::Match($otaText, '^\s*Build\s*:\s*(.+?)\s*$', 'Multiline')).Groups[1].Value.Trim()
-
-            if (-not $fwPath) { throw "Verifier: could not parse firmware path from ota.ps1 output." }
-            if (-not $verStr) { throw "Verifier: could not parse Version from ota.ps1 output." }
-            if (-not $bldStr) { throw "Verifier: could not parse Build from ota.ps1 output." }
-
-	            # NOTE (Option A): ota.ps1 is the single source of truth for triggering OTA.
-	            # Do NOT publish a second UPDATE command here — it causes duplicate / invalid_sha256 failures.
-
-            # PC-side verify (fast): spam "SEND HB" while subscribing so we don't wait for the periodic heartbeat.
-            # We subscribe to both hb + ota so we can fail fast on OTA_FAIL.
-            $hbTimeoutSec = 22
-            Write-Host "== Verifier(PC): expect build=$bldStr; watching '$target/hb' + '$target/ota' (up to ${hbTimeoutSec}s) =="
-
-            $cmdTopic = "$target/cmd"
-
-            # Run subscription + "SEND HB once after MQTT connected" on the Pi so we can react while listening.
-            # IMPORTANT: use a single-quoted here-string (@' '@) so PowerShell does NOT expand $line (StrictMode would throw).
-            $bash = @'
-sent=0
-timeout __TIMEOUT__s mosquitto_sub -h 127.0.0.1 -v -t '__TARGET__/hb' -t '__TARGET__/ota' -t '__TARGET__/log' 2>/dev/null | while IFS= read -r line; do
-  echo "$line"
-  if [ $sent -eq 0 ]; then
-    case "$line" in
-      "__TARGET__/log "*)
-        echo "$line" | grep -q '"MQTT connected"' && { mosquitto_pub -h 127.0.0.1 -t '__CMDTOPIC__' -m 'SEND HB' >/dev/null 2>&1 || true; sent=1; }
-        ;;
-    esac
-  fi
-done
-'@
-
-            $bash = $bash.Replace("__TIMEOUT__", "$hbTimeoutSec").Replace("__TARGET__", "$target").Replace("__CMDTOPIC__", "$cmdTopic")
-
-            # Run the verifier script on the Pi (robust quoting via base64).
-            $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bash))
-            $subCmd = "bash -lc 'echo $b64 | base64 -d | bash'"
-            $lines = ssh $er1Pi $subCmd
-            $rebooted = $false
-            $prevUp = $null
-            $lastSeen = $null
-            $ok = $false
-
-            foreach ($line in $lines) {
-                if (-not $line) { continue }
-                $lastSeen = $line
-
-                $topic = $null
-                $payload = $line
-                if ($line -match '^([^\s]+)\s+(.*)$') {
-                    $topic = $Matches[1]
-                    $payload = $Matches[2]
-                }
-
-                if ($topic -and $topic.EndsWith('/log')) {
-                    # Detect reboot fast (node announces MQTT re-connect)
-                    if ($payload -like '*"msg":"MQTT connected"*' -or $payload -like '*MQTT connected*') {
-                        $rebooted = $true
-                        continue
-                    }
-                    # Fail fast on auth/truncation errors
-                    if ($payload -like '*invalid_sha256*' -or $payload -like '*OTA missing/invalid sha256*') {
-                        throw "== OTA VERIFY: FAIL (invalid_sha256) =="
-                    }
-                }
-
-                if ($topic -and $topic.EndsWith('/ota')) {
-                    try { $ota = $payload | ConvertFrom-Json } catch { continue }
-                    $st = [string]$ota.st
-                    if ($st -eq 'OTA_FAIL') {
-                        $reason = "OTA_FAIL"
-                        if ($ota.d -and $ota.d.reason) { $reason = "OTA_FAIL $($ota.d.reason)" }
-                        throw "== OTA VERIFY: FAIL ($reason) =="
-                    }
-                    continue
-                }
-
-                # hb topic
-                if ($payload.ToLowerInvariant() -eq "offline") {
-                    $rebooted = $true
-                    continue
-                }
-
-                try { $hbObj = $payload | ConvertFrom-Json } catch { continue }
-
-                # Heartbeat payload formats:
-                #  - flat: {"up":123,"build":"..."}
-                #  - envelope: {"t":"hb","v":1,"d":{...}} or {"type":"hb","data":{...}}
-                $hb = $hbObj
-                if ($hb -and ($hb.PSObject.Properties.Name -contains 'd')) {
-                    $hb = $hb.d
-                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'data')) {
-                    $hb = $hb.data
-                }
-
-                # Uptime (used to detect reboot)
-                $upVal = $null
-                if ($hb -and ($hb.PSObject.Properties.Name -contains 'up')) {
-                    $upVal = $hb.up
-                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'uptime')) {
-                    $upVal = $hb.uptime
-                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'uptime_s')) {
-                    $upVal = $hb.uptime_s
-                }
-
-                if ($null -ne $upVal) {
-                    try {
-                        $upInt = [int]$upVal
-                        if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
-                            $rebooted = $true
-                        }
-                        $prevUp = $upInt
-                    } catch {
-                        # ignore parse errors
-                    }
-                }
-
-                # Build id (what we verify)
-                $hbBuild = $null
-                foreach ($k in @('build','buildId','build_id')) {
-                    if ($hb -and ($hb.PSObject.Properties.Name -contains $k)) {
-                        $hbBuild = [string]$hb.$k
-                        break
-                    }
-                }
-
-                if ($rebooted -and $hbBuild -and $hbBuild -eq $bldStr) {
-                    $ok = $true
-                    break
-                }
-            }
-
-            if ($ok) {
-                Write-Host "== OTA VERIFY: OK (rebooted + hb.build matches) ==" -ForegroundColor Green
-                return
-            }
-
-            $reason = if (-not $lastSeen) { "no hb received" } elseif (-not $rebooted) { "no reboot detected" } else { "hb.build didn't match" }
-            throw "== OTA VERIFY: FAIL ($reason) within ${hbTimeoutSec}s =="
+            return
         }
-
         "lock" {
             if (-not $cmdArgs -or $cmdArgs.Count -lt 2) {
                 throw "Usage: er1 lock <id> open|close OR er1 lock all open|close"

@@ -1,0 +1,40 @@
+; PlatformIO Project Configuration File
+;
+;   Build options: build flags, source filter
+;   Upload options: custom upload port, speed and extra flags
+;   Library options: dependencies, extra library storages
+;   Advanced options: extra scripting
+;
+; Please visit documentation for the other options and examples
+; https://docs.platformio.org/page/projectconf.html
+
+[env:esp32dev]
+platform = espressif32
+board = esp32dev
+framework = arduino
+
+;monitor_speed = 921600
+monitor_speed = 115200
+
+board_build.filesystem = spiffs
+
+lib_deps =
+  bblanchon/ArduinoJson@^7
+  kosme/arduinoFFT@^2
+  arduino-libraries/Ethernet
+  knolleary/PubSubClient
+  bblanchon/ArduinoJson
+  miguelbalboa/MFRC522 @ ^1.4.10
+  ESP32-audioI2S
+
+build_flags =
+    -std=gnu++17
+    -D ETH_SPI_HOST=VSPI
+    -D ETH_MISO=19
+    -D ETH_MOSI=23
+    -D ETH_SCLK=18
+    -D ETH_CS=15
+    -D ETH_RST=27
+    -D ETH_SPI_CLOCK_MHZ=20
+    -Wl,-Map,firmware.map
+    -Wl,--print-memory-usage
