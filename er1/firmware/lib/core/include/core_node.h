@@ -202,6 +202,7 @@ private:
   // Time sync state
   bool timeValidFirstSet_ = false;
   uint32_t lastTimeSyncParseErrorMs_ = 0;
+  uint32_t lastTimeResyncMs_ = 0;  // cooldown for time resyncs
   struct ErrorState {
     uint32_t count = 0;
     uint32_t activeCode = 0;

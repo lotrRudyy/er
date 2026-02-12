@@ -7,11 +7,8 @@ Compute OTA sha256 on the Pi and publish the UPDATE command with a JSON payload.
 - Publishes to: <cmd_node>/cmd
     UPDATE {"version":...,"target":...,"url":...,"sha256":...,"size":...}
 
-Migration note (Phase 1):
-- Older node firmware may REQUIRE a "build" field in UPDATE.
-- Therefore this publisher accepts an OPTIONAL --build flag. If provided,
-  it will include "build" in the published UPDATE payload (for backwards
-  compatibility). New firmware ignores it.
+Post-upgrade (Phase 2):
+- No legacy OTA fields are emitted anymore ("id" and "build" removed).
 
 Default URL matches ota_http.py: http://<http-host>/node_firmware/<firmware>.bin
 
@@ -44,7 +41,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 DEFAULT_FIRMWARE_DIR = Path("/home/rudyy/er1/node_firmware")
@@ -234,8 +231,7 @@ def parse_args() -> argparse.Namespace:
         help="Firmware file path on the Pi (defaults to /home/rudyy/er1/node_firmware/<firmware_name>)",
     )
     parser.add_argument("--version", required=True, help="Firmware version string to announce")
-    # Phase-1 migration: optional, only to satisfy legacy node firmware that requires a build field.
-    parser.add_argument("--build", required=False, default="", help="(optional) legacy build string to include in UPDATE")
+
     parser.add_argument(
         "--target",
         help="Expected target node id (defaults from deployment map or dev)",
@@ -279,7 +275,14 @@ class VerifyState:
     offline_since: dict[str, float] = field(default_factory=dict)
 
 
-def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version: str, timeout_s: int, up_max: int) -> int:
+def verify_ota(
+    broker: str,
+    port: int,
+    nodes: tuple[str, ...],
+    expected_version: str,
+    timeout_s: int,
+    up_max: int,
+) -> int:
     """Return exit code (0 ok, 2 timeout/sequence fail, 3 ota_fail, 4 uptime too large)."""
     try:
         import paho.mqtt.client as mqtt  # type: ignore
@@ -294,7 +297,6 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
         topics.extend([(f"{n}/hb", 0), (f"{n}/ota", 0), (f"{n}/log", 0)])
 
     def on_message(client, userdata, msg):
-        # msg.topic is str, payload bytes
         topic = msg.topic
         try:
             payload_txt = msg.payload.decode("utf-8", errors="replace")
@@ -304,7 +306,6 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
         # Always print for visibility (matches how mosquitto_sub -v looks)
         print(f"{topic} {payload_txt}")
 
-        # Parse node
         node = topic.split("/", 1)[0] if "/" in topic else topic
 
         if topic.endswith("/ota"):
@@ -317,11 +318,7 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
                 st.fail_code = 3
 
         if topic.endswith("/hb"):
-            # Phase-1 verifier requirement:
-            # 1) must see explicit "offline" first
-            # 2) then must see a NEW hb JSON with fw==expected_version and up<=up_max within timeout
-
-            # offline marker
+            # Require hb offline first, then hb JSON with fw match.
             if payload_txt.strip() == "offline":
                 st.saw_offline.add(node)
                 st.offline_since[node] = time.time()
@@ -332,7 +329,6 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
             except Exception:
                 return
 
-            # only accept hb AFTER offline for this node
             if node not in st.saw_offline:
                 return
 
@@ -368,7 +364,6 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
                 print(f"== OTA VERIFY: FAIL ({st.fail_reason}) ==")
                 return st.fail_code
 
-            # fail if any node has been offline too long without a qualifying hb
             now = time.time()
             for n in st.saw_offline:
                 since = st.offline_since.get(n, 0.0)
@@ -386,12 +381,15 @@ def verify_ota(broker: str, port: int, nodes: tuple[str, ...], expected_version:
 
             time.sleep(0.05)
 
-        # If we didn't even see offline, make that explicit.
         missing_offline = [n for n in nodes if n not in st.saw_offline]
         if missing_offline:
-            print(f"== OTA VERIFY: FAIL (timeout; never saw hb offline for {','.join(missing_offline)}) within {timeout_s}s ==")
+            print(
+                f"== OTA VERIFY: FAIL (timeout; never saw hb offline for {','.join(missing_offline)}) within {timeout_s}s =="
+            )
         else:
-            print(f"== OTA VERIFY: FAIL (timeout; fw never became {expected_version} with up<= {up_max}) within {timeout_s}s ==")
+            print(
+                f"== OTA VERIFY: FAIL (timeout; fw never became {expected_version} with up<= {up_max}) within {timeout_s}s =="
+            )
         return 2
     finally:
         client.loop_stop()
@@ -421,12 +419,9 @@ def main() -> int:
     if not version:
         raise OtaPublishError("Version must be provided")
 
-    build = (args.build or "").strip()
-
     default_path = f"/node_firmware/{firmware_name}"
     url = normalize_url(args.url or default_path, args.http_host)
 
-    # Determine verify nodes
     vn_cli = _split_csv(args.verify_nodes)
     if vn_cli is not None:
         verify_nodes = vn_cli
@@ -446,9 +441,6 @@ def main() -> int:
 
         topic = f"{cmd_node}/cmd"
 
-        # IMPORTANT:
-        # We intentionally DO NOT include an OTA id ("id") because legacy nodes truncate
-        # the JSON payload; id is not required for OTA correctness.
         payload_obj = {
             "version": version,
             "target": target,
@@ -456,10 +448,6 @@ def main() -> int:
             "sha256": sha_hex,
             "size": size_bytes,
         }
-
-        # Phase-1 backwards compatibility: include build if provided.
-        if build:
-            payload_obj["build"] = build
 
         payload_json = json.dumps(payload_obj, separators=(",", ":"))
         payload = f"UPDATE {payload_json}"
@@ -470,8 +458,6 @@ def main() -> int:
         print(f"URL      : {url}")
         print(f"Dev      : {args.dev}")
         print(f"Version  : {version}")
-        if build:
-            print(f"Build    : {build}")
         print(f"Target   : {target}")
         print(f"CmdNode  : {cmd_node}")
         print(f"CmdTopic : {topic}")

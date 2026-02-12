@@ -6,9 +6,8 @@ param(
     [switch]$NoBuild
 )
 
-# ota.ps1 (Phase 1)
-# - Firmware: build-id removed from runtime identity, but OTA UPDATE still needs an optional "build" field
-#   to update legacy nodes that require it.
+# ota.ps1 (Phase 2)
+# - Legacy OTA fields removed: no more "build" token passed to ota_publish.py
 # - Verification is performed on the Pi by ota_publish.py (offline -> hb with fw match and up<10).
 # - This script only builds, uploads to Pi, verifies HTTP sha, and triggers ota_publish.py.
 
@@ -63,12 +62,6 @@ try {
 
   $ver = Get-FirmwareVersion $Dev
   Write-Host ("== Version = {0} ==" -f $ver)
-
-  # Legacy build token (Phase 1 only): included in UPDATE to satisfy old firmware.
-  # Not compiled into the firmware and not used for verification.
-  $alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-  $rng = New-Object System.Random
-  $legacyBuild = -join (1..20 | ForEach-Object { $alphabet[$rng.Next(0,$alphabet.Length)] })
 
   # =====================
   # BUILD
@@ -165,7 +158,6 @@ try {
       "--cmd-node", $cmdNode,
       "--http-host", $httpHost,
       "--version", $ver,
-      "--build", $legacyBuild,
       "--target", $Dev,
       "--firmware-name", $firmwareName,
       "--verify",

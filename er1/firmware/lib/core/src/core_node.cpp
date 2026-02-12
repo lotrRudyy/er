@@ -669,34 +669,58 @@ void NodeCore::handleTimeStateMessage(const String& payload) {
     return;
   }
 
-  // Check if we should sync
+  // --- Time sync policy ---
+  // - If time is not valid yet: set once as soon as we get a good epoch.
+  // - If time is valid:
+  //     * if delta <= 2s: already synced -> do nothing (no log, no err)
+  //     * if delta >= threshold AND cooldown elapsed: resync + WRN once
+  //     * otherwise: ignore (keeps logs quiet)
+
+  static constexpr int64_t kAlreadySyncedDeltaSec = 2;
+  static constexpr int64_t kResyncThresholdSec    = 30;        // only resync on meaningful drift
+  static constexpr uint32_t kResyncCooldownMs     = 60UL * 60UL * 1000UL; // 1 hour
+
   bool wasValid = core_time_valid();
-  int64_t currentEpoch = ::time(nullptr);
-  int64_t deltaSec = 0;
+  time_t nowEpoch = ::time(nullptr);
+  int64_t deltaSec = (nowEpoch > epoch) ? ((int64_t)nowEpoch - epoch) : (epoch - (int64_t)nowEpoch);
 
-  if (wasValid) {
-    deltaSec = (currentEpoch > epoch) ? (currentEpoch - epoch) : (epoch - currentEpoch);
-  }
-
-  // Set time
-  if (!core_set_time(epoch)) {
-    logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
-    return;
-  }
-
-  // Log appropriately
   if (!wasValid) {
-    // First time setting valid time
+    if (!core_set_time(epoch)) {
+      logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
+      return;
+    }
+    lastTimeResyncMs_ = millis();
+
     if (!timeValidFirstSet_) {
       timeValidFirstSet_ = true;
       logger_.publish("INF", String("time_sync epoch=") + static_cast<long long>(epoch) + " src=mqtt");
     }
-  } else {
-    // Resync
-    if (deltaSec > 2) {
-      logger_.publish("WRN", String("time_resync delta_s=") + static_cast<long long>(deltaSec));
-    }
+    return;
   }
+
+  // Already valid: ignore small deltas completely.
+  if (deltaSec <= kAlreadySyncedDeltaSec) {
+    return;
+  }
+
+  // Ignore moderate deltas; we only correct large drift, and not too frequently.
+  if (deltaSec < kResyncThresholdSec) {
+    return;
+  }
+
+  uint32_t nowMs = millis();
+  if (lastTimeResyncMs_ != 0 && (nowMs - lastTimeResyncMs_) < kResyncCooldownMs) {
+    return;
+  }
+
+  if (!core_set_time(epoch)) {
+    // Only log ERR here because we gated out the "already synced" case above.
+    logger_.publish("ERR", String("time_sync failed to set epoch=") + static_cast<long long>(epoch));
+    return;
+  }
+
+  lastTimeResyncMs_ = nowMs;
+  logger_.publish("WRN", String("time_resync delta_s=") + static_cast<long long>(deltaSec));
 }
 
 uint32_t NodeCore::errorCount() const {
