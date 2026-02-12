@@ -83,18 +83,22 @@ token_top_h      = 2.3;
 mark_th        = 0.25;
 mark_z_eps     = 0.06;
 
-ann_body_w       = 1.0;
-ann_body_h0      = 1.0;
-ann_body_h_step  = 1.0;
+ann_body_w       = 0.5;
+ann_body_h0      = 0.55;
+ann_body_h_step  = 0.28;
 
-ann_flame_w    = 0.6;
-ann_flame_h    = 1.2;
-ann_flame_y_gap = 0.25;
+ann_flame_w    = 0.25;
+ann_flame_h    = 0.5;
+ann_flame_y_gap = 0;
 
 font_name = "Liberation Sans:style=Bold";
-show_annulus_numbers = true;
-ann_num_size  = 1.0;
+show_annulus_numbers = false;
+ann_num_size  = 0.4;
 ann_num_th    = 0.22;
+
+annulus_auto_scale = false;     // auto-shrink annulus icons to fit the ring band
+annulus_margin     = 0.00;     // mm safety gap from BOTH ring edges (outer + inner)
+annulus_scale_manual = 1.00;   // used if annulus_auto_scale = false (or as an upper cap if true)
 
 show_big_numbers = true;
 big_num_size = 8.5;
@@ -561,13 +565,32 @@ module annulus_candle_icon_centered(level=0, label="0") {
 
 module annulus_candles_on_ring() {
   bottom_r = token_bottom_d/2;
-  top_r    = token_top_d/2;
-  ring_mid_r = (bottom_r + top_r)/2;
+  top_r    = token_top_d/2;    
+  ring_mid_r = ((bottom_r + top_r)/2)-((ann_flame_h + ann_flame_y_gap)/2);
+  // Auto scale so icons stay fully within the annulus band:
+  // - never cross outer edge (bottom_r)
+  // - never intrude into inner edge (top_r / top disk)
+  max_lvl = 3;
+  body_h_max = ann_body_h0 + max_lvl * ann_body_h_step;
+    
+    ring_bot_r = top_r + (ann_body_h0/2);
+
+  // Icon extents along +Y (flame side) and -Y (body bottom) in its LOCAL frame
+  y_in  = body_h_max/2;  // inward extent (toward center)  : bottom of body
+  y_out = body_h_max/2 + ann_flame_y_gap + ann_flame_h*1.15; // outward extent : flame tip
+
+  s_in  = (ring_mid_r - (top_r + annulus_margin)) / y_in;
+  s_out = ((bottom_r - annulus_margin) - ring_mid_r) / y_out;
+
+  ann_s_auto = _clamp(min([s_in, s_out, 1.0]), 0.01, 1.0);
+  ann_s = annulus_auto_scale ? ann_s_auto : annulus_scale_manual;
 
   for (p=[0:3]) {
     rotate([0,0,candle_ang(p)]) {
-      translate([ring_mid_r, 0, token_bottom_h + mark_z_eps]) {
-        annulus_candle_icon_centered(p, str(p));
+      translate([(ring_bot_r + 0.1 + (ann_body_h_step*p)/2), 0, token_bottom_h + mark_z_eps]) {
+        scale([ann_s, ann_s, ann_s])
+          rotate([0,0,-90])
+          annulus_candle_icon_centered(p, str(p));
       }
     }
   }
