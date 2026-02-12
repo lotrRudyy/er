@@ -3,16 +3,21 @@
 
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-  dfSerial_ = &Serial2;
-  dfSerial_->begin(9600, SERIAL_8N1, 16, 17);
 
-  if (dfPlayer_.begin(*dfSerial_)) {
-    dfOk_ = true;
-    dfPlayer_.volume(kDfVolume);
+  // LittleFS is used to store the 4 sound files (/1.wav .. /4.wav).
+  // IMPORTANT: begin(false) only (never auto-format), so we don't accidentally wipe uploaded sounds.
+  if (!LittleFS.begin(false)) {
+    audioOk_ = false;
+    log("ERR", "LittleFS mount failed (audio disabled)");
   } else {
-    dfOk_ = false;
-    log("ERR", "DFPlayer init failed");
+    audioOk_ = true;
   }
+
+  // I2S -> MAX98357A (pins chosen to not collide with piezos 32/33/34 and Ethernet SPI pins 15/27/18/19/23).
+  audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
+  audio_.setVolume(kAudioVolume);
+  // Match your standalone test sketch: treble boost (perceived loudness/clarity)
+  audio_.setTone(0, 0, 15);
 
   for (int i = 0; i < kSensorCount; i++) {
     piezo_[i].pin = kPiezoPins[i];
@@ -42,6 +47,10 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
+  // Keep audio pipeline running.
+  if (audioOk_) {
+    audio_.loop();
+  }
   updatePiezoSamples(nowMs);
   handleKnockWindow(nowMs);
   evaluateSequenceIfDue(nowMs);
@@ -167,9 +176,6 @@ void KnockingRiddle::registerKnock(int idx, uint16_t raw, uint32_t nowMs) {
     seqBuf_[seqLen_++] = idx;
   }
   // Use the same timebase as tick(nowMs) to avoid underflow.
-  // If lastSeqActivityMs_ is set using a *newer* millis() value than nowMs,
-  // then (nowMs - lastSeqActivityMs_) underflows and the sequence evaluates
-  // immediately after the first knock.
   lastSeqActivityMs_ = nowMs;
   playKnockSound(idx);
 }
@@ -184,7 +190,7 @@ void KnockingRiddle::playKnockSound(int idx) {
 }
 
 void KnockingRiddle::enqueueSound(uint8_t track) {
-  if (!dfOk_) return;
+  if (!audioOk_) return;
   if (soundQueueFull()) {
     if (kDevLog) {
       log("WRN", "Sound queue full, dropping", String("{\"track\":") + track + "}");
@@ -223,7 +229,7 @@ unsigned long KnockingRiddle::trackFallbackMs(uint8_t track) const {
 }
 
 void KnockingRiddle::serviceSound(uint32_t nowMs) {
-  if (!dfOk_) return;
+  if (!audioOk_) return;
 
   if (soundPlaying_) {
     unsigned long needed = trackFallbackMs(currentTrack_);
@@ -249,7 +255,9 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
     log("INF", "PLAY sound from queue", data);
   }
 
-  dfPlayer_.playMp3Folder(track);
+  const char* path = (track <= 4) ? kTrackPaths[track] : nullptr;
+  if (!path) return;
+  audio_.connecttoFS(LittleFS, path);
   lastSoundStartMs_ = nowMs;
   currentTrack_ = track;
   soundPlaying_ = true;
@@ -325,9 +333,9 @@ void KnockingRiddle::resetState(const char* reason) {
   lastSoundStartMs_ = 0;
   currentTrack_ = 0;
   solved_ = false;
-  // Stop any DFPlayer audio immediately on reset.
-  if (dfOk_) {
-    dfPlayer_.stop();
+  // Stop any audio immediately on reset.
+  if (audioOk_) {
+    audio_.stopSong();
   }
   const char* src = (reason && reason[0]) ? reason : "reset";
   String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";

@@ -1,7 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
-#include <DFRobotDFPlayerMini.h>
+
+// Audio output: ESP32 I2S -> MAX98357A
+#include "Audio.h"
+#include "LittleFS.h"
 
 #include "core_node.h"
 
@@ -11,7 +14,7 @@ public:
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
 
-  bool dfReady() const { return dfOk_; }
+  bool audioReady() const { return audioOk_; }
   uint32_t errorCount() const { return errorCount_; }
   bool shouldAllowLog(const char* level);
 
@@ -29,7 +32,19 @@ private:
   static constexpr int kSeqMaxLen = 16;
   static constexpr uint32_t kSeqTimeoutMs = 3000;
   static constexpr uint8_t kSoundQueueMax = 16;
-  static constexpr uint8_t kDfVolume = 30;
+
+  // MAX98357A (I2S) pins (chosen to avoid collisions with piezos 32/33/34
+  // and Ethernet SPI pins 15/27/18/19/23).
+  static constexpr int kI2S_BCLK = 26;
+  static constexpr int kI2S_LRC  = 25;  // WS/LRCLK
+  static constexpr int kI2S_DIN  = 22;
+
+  // ESP32-audioI2S volume range: 0..21
+  static constexpr uint8_t kAudioVolume = 21;
+
+  // Tracks stored in LittleFS (root): /1.wav .. /4.wav
+  static constexpr const char* kTrackPaths[5] = {
+      nullptr, "/1.wav", "/2.wav", "/3.wav", "/4.wav"};
 
   struct PiezoState {
     int pin;
@@ -67,9 +82,11 @@ private:
   void resetState(const char* reason);
 
   Core::NodeContext* ctx_ = nullptr;
-  HardwareSerial* dfSerial_ = nullptr;
-  DFRobotDFPlayerMini dfPlayer_;
-  bool dfOk_ = false;
+
+  // Audio (MAX98357A)
+  Audio audio_;
+  bool audioOk_ = false;
+
   uint8_t soundQueue_[kSoundQueueMax];
   uint8_t soundHead_ = 0;
   uint8_t soundTail_ = 0;
