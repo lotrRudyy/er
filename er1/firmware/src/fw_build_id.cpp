@@ -3,6 +3,15 @@
 #include <array>
 #include <cstdint>
 
+// If present, this generated header (written by ota.ps1) provides
+// FW_BUILD_ID_STR / FW_BUILD_SEED_STR for deterministic OTA verification.
+// It lives in src/ so we include it opportunistically.
+#if defined(__has_include)
+#  if __has_include("fw_build_meta.h")
+#    include "fw_build_meta.h"
+#  endif
+#endif
+
 #ifndef FW_BUILD_SEED
 #define FW_BUILD_SEED ""
 #endif
@@ -13,14 +22,32 @@
 
 namespace {
 
-constexpr const char* kBuildIdOverride = FW_BUILD_ID;
+// Priority for OTA verification id:
+//  1) Explicit build-flag override: -DFW_BUILD_ID="..."
+//  2) Generated header: FW_BUILD_ID_STR (written by ota.ps1)
+//  3) Empty -> fall back to seeded compile-time id
+constexpr const char* kBuildIdOverride =
+#if (sizeof(FW_BUILD_ID) > 1)
+    FW_BUILD_ID
+#elif defined(FW_BUILD_ID_STR) && (sizeof(FW_BUILD_ID_STR) > 1)
+    FW_BUILD_ID_STR
+#else
+    ""
+#endif
+    ;
+
 constexpr const char* kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 constexpr std::size_t kAlphabetLen = 36;
 constexpr std::size_t kBuildIdLen = 20;
 
-// Choose the seed: use FW_BUILD_SEED when provided, otherwise compile timestamp.
+// Choose the seed: use FW_BUILD_SEED when provided, otherwise generated header seed,
+// otherwise compile timestamp.
 constexpr const char* buildSeed() {
+#if defined(FW_BUILD_SEED_STR) && (sizeof(FW_BUILD_SEED_STR) > 1)
+  return (FW_BUILD_SEED[0] != '\0') ? FW_BUILD_SEED : FW_BUILD_SEED_STR;
+#else
   return (FW_BUILD_SEED[0] != '\0') ? FW_BUILD_SEED : (__DATE__ " " __TIME__);
+#endif
 }
 
 constexpr uint64_t fnv1a64(const char* str) {

@@ -30,6 +30,8 @@ void setup() {
 
   audio.setPinout(PIN_BCLK, PIN_LRC, PIN_DIN);
   audio.setVolume(21);
+  audio.setTone(0, 0, 15);
+
 
   pinMode(BTN1, INPUT_PULLUP);
   pinMode(BTN2, INPUT_PULLUP);
