@@ -795,7 +795,7 @@ void OtaUpdater::onMqttConnected() {
   } else {
     data += ",\"reason\":\"version_mismatch_boot\"}";
     publishStatus("OTA_FAIL", data, false);
-    if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch id=") + currentId_);
+    if (logger_) logger_->publish(cfg_.errLevel, String("OTA_FAIL boot version mismatch target=") + currentTarget_);
   }
   clearPending();
   bootReportPending_ = false;

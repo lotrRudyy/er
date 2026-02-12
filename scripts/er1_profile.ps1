@@ -765,19 +765,49 @@ done
                     continue
                 }
 
-                try { $hb = $payload | ConvertFrom-Json } catch { continue }
-                $upVal = $hb.up
-                try {
-                    $upInt = [int]$upVal
-                    if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
-                        $rebooted = $true
-                    }
-                    $prevUp = $upInt
-                } catch {
-                    # ignore
+                try { $hbObj = $payload | ConvertFrom-Json } catch { continue }
+
+                # Heartbeat payload formats:
+                #  - flat: {"up":123,"build":"..."}
+                #  - envelope: {"t":"hb","v":1,"d":{...}} or {"type":"hb","data":{...}}
+                $hb = $hbObj
+                if ($hb -and ($hb.PSObject.Properties.Name -contains 'd')) {
+                    $hb = $hb.d
+                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'data')) {
+                    $hb = $hb.data
                 }
 
-                $hbBuild = [string]$hb.build
+                # Uptime (used to detect reboot)
+                $upVal = $null
+                if ($hb -and ($hb.PSObject.Properties.Name -contains 'up')) {
+                    $upVal = $hb.up
+                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'uptime')) {
+                    $upVal = $hb.uptime
+                } elseif ($hb -and ($hb.PSObject.Properties.Name -contains 'uptime_s')) {
+                    $upVal = $hb.uptime_s
+                }
+
+                if ($null -ne $upVal) {
+                    try {
+                        $upInt = [int]$upVal
+                        if ($null -ne $prevUp -and ($upInt + 5) -lt $prevUp) {
+                            $rebooted = $true
+                        }
+                        $prevUp = $upInt
+                    } catch {
+                        # ignore parse errors
+                    }
+                }
+
+                # Build id (what we verify)
+                $hbBuild = $null
+                foreach ($k in @('build','buildId','build_id')) {
+                    if ($hb -and ($hb.PSObject.Properties.Name -contains $k)) {
+                        $hbBuild = [string]$hb.$k
+                        break
+                    }
+                }
+
                 if ($rebooted -and $hbBuild -and $hbBuild -eq $bldStr) {
                     $ok = $true
                     break
