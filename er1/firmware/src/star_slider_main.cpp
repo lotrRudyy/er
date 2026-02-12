@@ -3,15 +3,15 @@
 #include <cstring>
 
 #include "core_node.h"
-#include "../include/fw_build_id.h"
+// build id removed (version-only identity)
 #include "riddles/star_slider_riddle.h"
 
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "star_slider";
-static const char* FW_VERSION = "1.3";
-static const char* FW_DESC = "star_slider 1.3 - OTA JSON command, PSK removed";
+static const char* FW_VERSION = "1";
+static const char* FW_DESC = "star_slider with new ota";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x52};  // star_slider node MAC - must stay unique
@@ -53,7 +53,7 @@ void setup() {
   cfg.nodeId = "star_slider";
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-  cfg.buildId = fwBuildId();
+
   cfg.startEnabled = true;
   cfg.prefsNamespace = "star_slider";
 

@@ -62,7 +62,6 @@ struct CommandConfig {
 
 struct NodeCoreConfig {
   const char* nodeId = nullptr;
-  const char* buildId = nullptr;
   const char* fwVersion = nullptr;
   const char* fwDescription = nullptr;
   bool startEnabled = true;
@@ -113,7 +112,6 @@ public:
   TimestampSource* timestampSource();
 
   const char* fwVersion() const;
-  const char* buildId() const;
   const char* nodeId() const;
   const NodeCoreConfig& config() const;
 
@@ -141,7 +139,6 @@ public:
 
   NodeContext& context() { return ctx_; }
   const char* nodeId() const { return cfg_.nodeId; }
-  const char* buildId() const { return cfg_.buildId; }
 
   bool registerCommandHandler(CommandHandler handler, void* userData);
   bool registerSubscription(const char* topic, SubscriptionHandler handler, void* userData);
@@ -201,7 +198,6 @@ private:
   uint32_t lastHeartbeatMs_ = 0;
   uint32_t heartbeatIntervalMs_ = 0;
   bool heartbeatImmediate_ = false;
-  char buildIdBuf_[CORE_TS_LEN] = {0};
 
   // Time sync state
   bool timeValidFirstSet_ = false;
@@ -250,7 +246,6 @@ const char* resetReasonShort();
 struct HeartbeatFields {
   const char* nodeId;
   const char* fw;
-  const char* buildId;
   uint32_t uptime;
   uint32_t errCount;
   uint32_t errCode;

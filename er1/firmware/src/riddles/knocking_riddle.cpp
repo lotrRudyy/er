@@ -176,6 +176,9 @@ void KnockingRiddle::registerKnock(int idx, uint16_t raw, uint32_t nowMs) {
     seqBuf_[seqLen_++] = idx;
   }
   // Use the same timebase as tick(nowMs) to avoid underflow.
+  // If lastSeqActivityMs_ is set using a *newer* millis() value than nowMs,
+  // then (nowMs - lastSeqActivityMs_) underflows and the sequence evaluates
+  // immediately after the first knock.
   lastSeqActivityMs_ = nowMs;
   playKnockSound(idx);
 }

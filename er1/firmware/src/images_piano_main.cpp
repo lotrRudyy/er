@@ -3,7 +3,7 @@
 #include <cstring>
 
 #include "core_node.h"
-#include "../include/fw_build_id.h"
+// build id removed (version-only identity)
 #include "riddles/images_riddle.h"
 #include "riddles/piano_riddle.h"
 
@@ -13,8 +13,8 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "1.24";
-static const char* FW_DESC = "Single MQTT node for images+piano; OTA JSON, src-tagged logs";
+static const char* FW_VERSION = "1";
+static const char* FW_DESC = "images_piano with new ota";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x59};  // images_piano node MAC - must stay unique
@@ -57,7 +57,7 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-  cfg.buildId = fwBuildId();
+
   cfg.startEnabled = true;
   cfg.prefsNamespace = NODE_ID;
 

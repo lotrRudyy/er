@@ -4,7 +4,6 @@
 #include <ctime>
 #include <stdexcept>
 #include <esp_system.h>
-#include <esp_ota_ops.h>
 
 #include "core_time.h"
 
@@ -142,10 +141,6 @@ const char* NodeContext::fwVersion() const {
   return core_ ? core_->cfg_.fwVersion : nullptr;
 }
 
-const char* NodeContext::buildId() const {
-  return core_ ? core_->cfg_.buildId : nullptr;
-}
-
 const char* NodeContext::nodeId() const {
   return core_ ? core_->cfg_.nodeId : nullptr;
 }
@@ -184,25 +179,11 @@ NodeCore::NodeCore() : ctx_(*this) {}
 void NodeCore::begin(const NodeCoreConfig& cfg) {
   cfg_ = cfg;
   errState_ = {};
-
-  // If OTA rollback is enabled, an OTA image can boot in "pending verify" state.
-  // If the app doesn't confirm itself as valid, the bootloader may roll back to
-  // the previous OTA slot on next boot.
-  // Safe to call even when rollback isn't enabled.
-  esp_ota_mark_app_valid_cancel_rollback();
   // Ensure local time formatting matches Europe/Rome (CET/CEST), not UTC.
   core_time_init_tz();
-  buildIdBuf_[0] = '\0';
-  if (!core_format_build_ts(buildIdBuf_, sizeof(buildIdBuf_))) {
-    buildIdBuf_[0] = '\0';
-  }
 
   if (!cfg_.nodeId || cfg_.nodeId[0] == '\0') {
     cfg_.nodeId = cfg_.net.clientId;
-  }
-  // Respect module-provided buildId (used as OTA verifier id). Fallback to compile timestamp.
-  if (!cfg_.buildId || cfg_.buildId[0] == '\0') {
-    cfg_.buildId = buildIdBuf_;
   }
   cfg_.topics = makeTopicConfig(cfg_.nodeId, cfg.topics);
   // Runtime log-level control topic: <node>/log/level
@@ -821,7 +802,6 @@ void buildHeartbeat(String& out, const NodeContext& ctx, const ErrorInfo& module
   HeartbeatFields hb{
       ctx.nodeId(),
       ctx.fwVersion(),
-      ctx.buildId(),
       ctx.uptimeSeconds(),
       merged.count,
       merged.code,
@@ -834,7 +814,6 @@ void buildHeartbeat(String& out, const NodeContext& ctx, const ErrorInfo& module
 void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
   const char* node = (hb.nodeId && hb.nodeId[0]) ? hb.nodeId : "?";
   const char* fw = (hb.fw && hb.fw[0]) ? hb.fw : "?";
-  const char* build = (hb.buildId && hb.buildId[0]) ? hb.buildId : "?";
   const uint32_t heapFree = ESP.getFreeHeap();
   const uint32_t heapMin = ESP.getMinFreeHeap();
   const uint32_t heapSize = ESP.getHeapSize();
@@ -846,16 +825,13 @@ void buildHeartbeatPayload(String& out, const HeartbeatFields& hb) {
 
   String nodeEsc = escapeJson(node);
   String fwEsc = escapeJson(fw);
-  String buildEsc = escapeJson(build);
   String errMsgEsc = escapeJson(hb.errMsg);
 
-  out.reserve(nodeEsc.length() + fwEsc.length() + buildEsc.length() + sizeof(tsFields.ts) + 128);
+  out.reserve(nodeEsc.length() + fwEsc.length() + sizeof(tsFields.ts) + 128);
   out = "{\"node\":\"";
   out += nodeEsc;
   out += "\",\"fw\":\"";
   out += fwEsc;
-  out += "\",\"build\":\"";
-  out += buildEsc;
   out += "\",\"up\":";
   out += hb.uptime;
   out += ",\"ts\":\"";

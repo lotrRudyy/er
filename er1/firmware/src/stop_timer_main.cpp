@@ -3,7 +3,7 @@
 #include <cstring>
 
 #include "core_node.h"
-#include "../include/fw_build_id.h"
+// build id removed (version-only identity)
 #include "riddles/stop_timer_riddle.h"
 
 using namespace Core;
@@ -58,7 +58,7 @@ void setup() {
   cfg.nodeId = "stop_timer";
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-  cfg.buildId = fwBuildId();
+
   cfg.startEnabled = true;
   cfg.prefsNamespace = "stop_timer";
 
