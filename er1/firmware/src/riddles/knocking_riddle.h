@@ -26,7 +26,7 @@ private:
   static constexpr int kSensorCount = 3;
   static constexpr int kPiezoPins[kSensorCount] = {32, 33, 34};
 
-  static constexpr uint16_t kKnockThresholds[kSensorCount] = {900, 500, 1200};
+  static constexpr uint16_t kKnockThresholds[kSensorCount] = {700, 300, 1000};
 
   // Global debounce / lockout (sequence acceptance). NOTE: sound is now played BEFORE this check.
   static constexpr uint32_t kKnockDebounceMs = 200;
@@ -77,7 +77,7 @@ private:
   void registerKnock(int idx, uint16_t raw, uint32_t nowMs);
 
   void playKnockSound(int idx);
-  void enqueueSound(uint8_t track);
+  void enqueueSound(uint8_t track, int8_t srcIdx = -1);
   bool soundQueueEmpty() const;
   bool soundQueueFull() const;
   unsigned long trackFallbackMs(uint8_t track) const;
