@@ -57,7 +57,17 @@ void LightingController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
 
   // Must NOT collide with ETH pins in your build flags: 15,18,19,23,27
-  static const uint8_t kPins[kChannelCount] = {16, 17, 21, 22, 25, 26, 32, 33, 14};
+  static const uint8_t kPins[kChannelCount] = {
+    16,   // r2-schach
+    17,   // r2 schronk
+    21,   // r1 bild
+    22,   // r1 stuen
+    26,   // r3 cage
+    14,   // r3 slider
+    25,   // torch stiege
+    32,   // torch r2-r3
+    33,   // torch r2
+  };
 
   constexpr uint32_t kFreqHz = 2000;
   constexpr uint8_t kResBits = 12;
