@@ -1,6 +1,7 @@
-#include "lighting_controller.h"
+#include "ctrl/lighting_controller.h"
 
 #include <ArduinoJson.h>
+#include <cstring>
 
 namespace {
 
@@ -14,67 +15,95 @@ String makeStateTopic(const char* id) {
   return t;
 }
 
-static bool isNumberString(const String& s) {
-  if (!s.length()) return false;
-  for (size_t i = 0; i < s.length(); i++) {
-    const char c = s[i];
-    if (c == '-' && i == 0) continue;
-    if (c < '0' || c > '9') return false;
+String upperTrim(String s) {
+  s.trim();
+  s.toUpperCase();
+  return s;
+}
+
+bool parseIntLoose(const String& s, int32_t& out) {
+  String t = s;
+  t.trim();
+  if (!t.length()) return false;
+
+  // Accept "PWM 123", "PWM:123", "PWM=123"
+  int idx = t.indexOf(' ');
+  if (idx < 0) idx = t.indexOf(':');
+  if (idx < 0) idx = t.indexOf('=');
+  if (idx >= 0) {
+    t = t.substring(idx + 1);
+    t.trim();
   }
+
+  char* endp = nullptr;
+  long v = strtol(t.c_str(), &endp, 10);
+  if (endp == t.c_str()) return false;
+  out = (int32_t)v;
   return true;
 }
 
-}  // namespace
+} // namespace
+
+bool LightingController::parseChannelIdFromTopic(const String& topic, String& outId) {
+  if (!topic.startsWith(kCmdPrefix) || !topic.endsWith(kCmdSuffix)) return false;
+  int start = strlen(kCmdPrefix);
+  int end = topic.length() - strlen(kCmdSuffix);
+  if (end <= start) return false;
+  outId = topic.substring(start, end);
+  return outId.length() > 0;
+}
 
 void LightingController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-  topicDbg_ = ctx.config().topics.dbg;
 
-  MosfetPwmChannelConfig cfg[kChannelCount];
+  // Must NOT collide with ETH pins in your build flags: 15,18,19,23,27
+  static const uint8_t kPins[kChannelCount] = {16, 17, 21, 22, 25, 26, 32, 33, 14};
+
+  constexpr uint32_t kFreqHz = 2000;
+  constexpr uint8_t kResBits = 12;
+
+  LightingChannelConfig cfg[kChannelCount];
   for (size_t i = 0; i < kChannelCount; i++) {
-    cfg[i] = {channels_[i].id, channels_[i].pin, channels_[i].ledcCh};
+    channels_[i].pin = kPins[i];
+    channels_[i].ledcCh = (uint8_t)i;
+    channels_[i].on = false;
     channels_[i].duty = 0;
-    channels_[i].lastOnDuty = percentToDuty(100);
+    cfg[i] = {channels_[i].id, channels_[i].pin, channels_[i].ledcCh};
   }
 
-  driver_.begin(cfg, kChannelCount, kFreqHz, kResolutionBits);
-  for (auto& ch : channels_) {
-    applyOutput(ch);
+  driver_.begin(cfg, kChannelCount, kFreqHz, kResBits);
+
+  // Ensure outputs start OFF.
+  for (size_t i = 0; i < kChannelCount; i++) {
+    applyOutput(channels_[i]);
+    publishChannelState(channels_[i], "boot");
   }
 
   lastMetricMs_ = millis();
-  publishStateSnapshot("boot");
 }
 
-void LightingController::tick(uint32_t nowMs) {
-  if (!ctx_) return;
-  publishMetricsIfDue(nowMs);
+void LightingController::tick(uint32_t /*nowMs*/) {
+  // No periodic work needed. Kept for parity with other controllers.
 }
 
-void LightingController::onMosfetCommandTopic(const char* topic, const String& payload) {
-  if (!ctx_) return;
-  String id;
-  if (!parseChannelIdFromTopic(String(topic ? topic : ""), id)) {
-    log("WRN", "lighting cmd on unexpected topic", String("{\"topic\":\"") + String(topic ? topic : "") + "\"}");
-    return;
+bool LightingController::onCmd(const char* cmd, const char* payload) {
+  // Lighting is controlled via lighting/mosfet/<id>/cmd, not <node>/cmd.
+  // Still log unknown node commands to avoid silent surprises.
+  if (!ctx_) return false;
+  String msg(cmd ? cmd : "");
+  if (payload && payload[0]) {
+    msg += " ";
+    msg += payload;
   }
-
-  ChannelState* ch = findChannelById(id);
-  if (!ch) {
-    log("WRN", "lighting cmd unknown channel", String("{\"id\":\"") + id + "\"}");
-    return;
-  }
-  parseAndApplyCommand(*ch, payload, topic);
-}
-
-bool LightingController::shouldAllowLog(const char* level) {
-  bool isErr = (strcmp(level, "ERR") == 0);
-  if (isErr) errorCount_++;
+  log("WRN", String("Unknown node CMD: ") + msg);
   return true;
 }
 
-void LightingController::applyOutput(ChannelState& ch) {
-  driver_.writeDuty(ch.ledcCh, ch.duty);
+LightingController::ChannelState* LightingController::findById(const String& id) {
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (id.equalsIgnoreCase(channels_[i].id)) return &channels_[i];
+  }
+  return nullptr;
 }
 
 uint32_t LightingController::clampDuty(uint32_t duty) const {
@@ -85,211 +114,35 @@ uint32_t LightingController::clampDuty(uint32_t duty) const {
 uint32_t LightingController::percentToDuty(uint32_t pct) const {
   if (pct > 100) pct = 100;
   const uint32_t max = driver_.maxDuty();
-  return (max * pct) / 100;
+  // round to nearest
+  return (uint32_t)((pct * (uint64_t)max + 50) / 100);
 }
 
 uint32_t LightingController::mapUserValueToDuty(int32_t v) const {
   if (v <= 0) return 0;
-  if (v <= 100) return percentToDuty((uint32_t)v);
+
+  // Convenience mapping:
+  // 0..100  -> percent
+  // 101..255-> 8-bit
+  // 256..max-> raw
+  if (v <= 100) {
+    return percentToDuty((uint32_t)v);
+  }
   if (v <= 255) {
-    // 8-bit -> scale to resolution
     const uint32_t max = driver_.maxDuty();
-    return (max * (uint32_t)v) / 255;
+    return (uint32_t)((v * (uint64_t)max + 127) / 255);
   }
   return clampDuty((uint32_t)v);
 }
 
-void LightingController::setDuty(ChannelState& ch, uint32_t duty, const char* reason) {
-  duty = clampDuty(duty);
-  ch.duty = duty;
-  if (duty > 0) ch.lastOnDuty = duty;
-  applyOutput(ch);
-  publishChannelState(ch, reason);
+void LightingController::applyOutput(ChannelState& ch) {
+  const uint32_t duty = ch.on ? ch.duty : 0;
+  driver_.writeDuty(ch.ledcCh, duty);
 }
 
-void LightingController::setOn(ChannelState& ch, const char* reason) {
-  uint32_t duty = ch.lastOnDuty ? ch.lastOnDuty : percentToDuty(100);
-  setDuty(ch, duty, reason);
-}
-
-void LightingController::setOff(ChannelState& ch, const char* reason) {
-  setDuty(ch, 0, reason);
-}
-
-void LightingController::setDimmed(ChannelState& ch, const char* reason) {
-  if (!ch.dimmable) {
-    setOn(ch, "not_dimmable_on");
-    return;
-  }
-  setDuty(ch, percentToDuty(25), reason);
-}
-
-void LightingController::publishChannelState(const ChannelState& ch, const char* reason) {
-  if (!ctx_) return;
-
-  const uint32_t max = driver_.maxDuty();
-  const uint32_t pct = (max > 0) ? (ch.duty * 100) / max : 0;
-
-  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"id\":\"" + ch.id +
-                   "\",\"pin\":" + String(ch.pin) +
-                   ",\"dimmable\":" + (ch.dimmable ? "1" : "0") +
-                   ",\"on\":" + (ch.duty > 0 ? "1" : "0") +
-                   ",\"pwm\":" + String(ch.duty) +
-                   ",\"pct\":" + String(pct);
-  if (reason && reason[0]) {
-    payload += ",\"reason\":\"";
-    payload += reason;
-    payload += "\"";
-  }
-  payload += "}";
-
-  String topic = makeStateTopic(ch.id);
-  publish(topic.c_str(), payload, true);
-  publishStateSnapshot(reason);
-}
-
-void LightingController::publishStateSnapshot(const char* reason) {
-  if (!ctx_) return;
-  const uint32_t max = driver_.maxDuty();
-
-  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
-                   "\",\"up\":" + String(millis() / 1000) +
-                   ",\"t\":\"LIGHT\"";
-  if (reason && reason[0]) {
-    payload += String(",\"reason\":\"") + reason + "\"";
-  }
-  payload += ",\"ch\":[";
-  for (size_t i = 0; i < kChannelCount; i++) {
-    if (i) payload += ",";
-    const auto& ch = channels_[i];
-    const uint32_t pct = (max > 0) ? (ch.duty * 100) / max : 0;
-    payload += String("{\"id\":\"") + ch.id +
-               "\",\"on\":" + (ch.duty > 0 ? "1" : "0") +
-               ",\"pwm\":" + String(ch.duty) +
-               ",\"pct\":" + String(pct) + "}";
-  }
-  payload += "]}";
-
-  publish("lighting/state", payload, true);
-}
-
-void LightingController::publishMetricsIfDue(uint32_t nowMs) {
-  if (!ctx_) return;
-  if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
-  lastMetricMs_ = nowMs;
-  publishStateSnapshot("metric");
-}
-
-LightingController::ChannelState* LightingController::findChannelById(const String& id) {
-  for (auto& ch : channels_) {
-    if (id.equalsIgnoreCase(ch.id)) return &ch;
-  }
-  return nullptr;
-}
-
-bool LightingController::parseChannelIdFromTopic(const String& topic, String& outId) {
-  if (!topic.startsWith(kCmdPrefix) || !topic.endsWith(kCmdSuffix)) return false;
-  const int start = strlen(kCmdPrefix);
-  const int end = topic.length() - strlen(kCmdSuffix);
-  if (end <= start) return false;
-  outId = topic.substring(start, end);
-  return true;
-}
-
-bool LightingController::parseAndApplyCommand(ChannelState& ch, const String& payload, const char* /*topic*/) {
-  String p = payload;
-  p.trim();
-  if (!p.length()) return false;
-
-  // Try JSON first.
-  if (p[0] == '{') {
-    StaticJsonDocument<256> doc;
-    DeserializationError err = deserializeJson(doc, p);
-    if (err) {
-      log("WRN", "lighting json parse error", String("{\"err\":\"") + err.c_str() + "\"}");
-    } else {
-      const char* cmd = doc["cmd"] | doc["command"] | "";
-      String cmdS(cmd);
-      cmdS.trim();
-      cmdS.toUpperCase();
-
-      if (cmdS == "ON") {
-        setOn(ch, "json_on");
-        return true;
-      }
-      if (cmdS == "OFF") {
-        setOff(ch, "json_off");
-        return true;
-      }
-      if (cmdS == "DIM" || cmdS == "DIMMED") {
-        setDimmed(ch, "json_dim");
-        return true;
-      }
-
-      // PWM / duty
-      if (doc.containsKey("pwm") || doc.containsKey("duty") || cmdS == "PWM") {
-        int32_t v = doc["value"] | doc["pwm"] | doc["duty"] | 0;
-        const char* unit = doc["unit"] | "";
-        String unitS(unit);
-        unitS.toLowerCase();
-        uint32_t duty = 0;
-        if (unitS == "percent" || unitS == "%") {
-          duty = percentToDuty((uint32_t)max(0, min(100, (int)v)));
-        } else if (unitS == "8bit" || unitS == "byte") {
-          duty = mapUserValueToDuty(max(0, min(255, (int)v)));
-        } else {
-          duty = mapUserValueToDuty(v);
-        }
-        setDuty(ch, duty, "json_pwm");
-        return true;
-      }
-    }
-    // fall through to text parsing if JSON is malformed/unknown
-  }
-
-  String up = p;
-  up.toUpperCase();
-
-  if (up == "ON") {
-    setOn(ch, "on");
-    return true;
-  }
-  if (up == "OFF") {
-    setOff(ch, "off");
-    return true;
-  }
-  if (up == "DIM" || up == "DIMMED") {
-    setDimmed(ch, "dim");
-    return true;
-  }
-
-  // PWM forms: "PWM 123" / "PWM:123" / "PWM=123"
-  if (up.startsWith("PWM")) {
-    String rest = p.substring(3);
-    rest.trim();
-    if (rest.startsWith(":")) rest = rest.substring(1);
-    if (rest.startsWith("=")) rest = rest.substring(1);
-    rest.trim();
-    if (isNumberString(rest)) {
-      int32_t v = rest.toInt();
-      setDuty(ch, mapUserValueToDuty(v), "pwm");
-      return true;
-    }
-    log("WRN", "lighting PWM command missing/invalid value", String("{\"payload\":\"") + p + "\"}");
-    return false;
-  }
-
-  // Number alone
-  if (isNumberString(p)) {
-    int32_t v = p.toInt();
-    setDuty(ch, mapUserValueToDuty(v), "value");
-    return true;
-  }
-
-  log("WRN", "lighting unknown command", String("{\"payload\":\"") + p + "\"}");
-  return false;
+bool LightingController::publish(const char* topic, const String& payload, bool retained) const {
+  if (!ctx_) return false;
+  return ctx_->publish(topic, payload, retained);
 }
 
 void LightingController::log(const char* level, const String& msg) const {
@@ -302,7 +155,140 @@ void LightingController::log(const char* level, const String& msg, const String&
   ctx_->log(level, msg, dataJson);
 }
 
-bool LightingController::publish(const char* topic, const String& payload, bool retained) const {
-  if (!ctx_) return false;
-  return ctx_->publish(topic, payload, retained);
+void LightingController::publishChannelState(const ChannelState& ch, const char* reason) {
+  if (!ctx_) return;
+
+  const uint32_t max = driver_.maxDuty();
+  const uint32_t pct = (max == 0) ? 0 : (uint32_t)((ch.duty * (uint64_t)100 + (max / 2)) / max);
+
+  String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
+                   "\",\"up\":" + String(millis() / 1000) +
+                   ",\"id\":\"" + ch.id + "\"" +
+                   ",\"on\":" + String(ch.on ? 1 : 0) +
+                   ",\"duty\":" + String(ch.duty) +
+                   ",\"pct\":" + String(pct) +
+                   ",\"max\":" + String(max);
+
+  if (reason && reason[0]) {
+    payload += ",\"reason\":\"";
+    payload += reason;
+    payload += "\"";
+  }
+  payload += "}";
+
+  String topic = makeStateTopic(ch.id);
+  publish(topic.c_str(), payload, true);
+}
+
+void LightingController::onMosfetCommandTopic(const char* topic, const String& payload) {
+  if (!ctx_) return;
+
+  String id;
+  if (!parseChannelIdFromTopic(String(topic ? topic : ""), id)) {
+    log("WRN", String("bad topic: ") + (topic ? topic : ""));
+    return;
+  }
+
+  ChannelState* ch = findById(id);
+  if (!ch) {
+    log("WRN", String("unknown channel id: ") + id);
+    return;
+  }
+
+  // Try JSON first
+  bool handled = false;
+  {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (!err) {
+      String cmdS;
+      if (doc["cmd"].is<const char*>()) cmdS = doc["cmd"].as<const char*>();
+      cmdS = upperTrim(cmdS);
+
+      if (cmdS == "ON") {
+        ch->on = true;
+        handled = true;
+      } else if (cmdS == "OFF") {
+        ch->on = false;
+        handled = true;
+      } else if (cmdS == "DIM" || cmdS == "DIMMED") {
+        ch->on = true;
+        ch->duty = percentToDuty(ch->dimPercent);
+        handled = true;
+      } else if (cmdS == "PWM") {
+        int32_t v = 0;
+        if (doc["value"].is<int>()) v = doc["value"].as<int>();
+        else if (doc["pwm"].is<int>()) v = doc["pwm"].as<int>();
+        else if (doc["duty"].is<int>()) v = doc["duty"].as<int>();
+
+        String unit;
+        if (doc["unit"].is<const char*>()) unit = upperTrim(String(doc["unit"].as<const char*>()));
+
+        ch->on = true;
+        if (unit == "PERCENT" || unit == "%" ) {
+          ch->duty = percentToDuty((uint32_t)max(0, min(100, v)));
+        } else if (unit == "8BIT") {
+          const uint32_t maxd = driver_.maxDuty();
+          if (v < 0) v = 0;
+          if (v > 255) v = 255;
+          ch->duty = (uint32_t)((v * (uint64_t)maxd + 127) / 255);
+        } else {
+          ch->duty = mapUserValueToDuty(v);
+        }
+        handled = true;
+      } else if (doc["pwm"].is<int>() || doc["duty"].is<int>()) {
+        int32_t v = doc["pwm"].is<int>() ? doc["pwm"].as<int>() : doc["duty"].as<int>();
+        ch->on = (v > 0);
+        ch->duty = mapUserValueToDuty(v);
+        handled = true;
+      }
+    }
+  }
+
+  if (!handled) {
+    String s = payload;
+    String up = upperTrim(s);
+
+    if (up == "ON") {
+      ch->on = true;
+      handled = true;
+    } else if (up == "OFF") {
+      ch->on = false;
+      handled = true;
+    } else if (up == "DIM" || up == "DIMMED") {
+      ch->on = true;
+      ch->duty = percentToDuty(ch->dimPercent);
+      handled = true;
+    } else if (up.startsWith("PWM")) {
+      int32_t v = 0;
+      if (parseIntLoose(up, v)) {
+        ch->on = (v > 0);
+        ch->duty = mapUserValueToDuty(v);
+        handled = true;
+      }
+    } else {
+      // maybe it's just a number
+      int32_t v = 0;
+      if (parseIntLoose(up, v)) {
+        ch->on = (v > 0);
+        ch->duty = mapUserValueToDuty(v);
+        handled = true;
+      }
+    }
+  }
+
+  if (!handled) {
+    errorCount_++;
+    log("WRN", String("unhandled payload for ch ") + ch->id + ": " + payload);
+    publishChannelState(*ch, "bad_cmd");
+    return;
+  }
+
+  // If turning ON with duty=0, default to full (max) unless DIM/DUTY already set.
+  if (ch->on && ch->duty == 0) {
+    ch->duty = driver_.maxDuty();
+  }
+
+  applyOutput(*ch);
+  publishChannelState(*ch, "cmd");
 }

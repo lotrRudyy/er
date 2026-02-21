@@ -37,19 +37,12 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static LightingController lighting;
 
-static bool logFilter(const char* level, void* user) {
+static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<LightingController*>(user);
-  return module ? module->shouldAllowLog(level) : true;
+  return module ? module->onCmd(cmd, payload) : false;
 }
 
-static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
-  auto* module = static_cast<LightingController*>(user);
-  ErrorInfo err{};
-  if (module) err.count = module->errorCount();
-  buildHeartbeat(out, ctx, err);
-}
-
-static void mosfetCmdSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
+static void mosfetCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
   auto* module = static_cast<LightingController*>(user);
   if (module) module->onMosfetCommandTopic(topic, payload);
@@ -61,7 +54,6 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
-
   cfg.startEnabled = true;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
@@ -75,20 +67,11 @@ void setup() {
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
-  cfg.log.filter = logFilter;
-  cfg.log.filterUser = &lighting;
-  cfg.heartbeat.intervalMs = 20000;
-  cfg.heartbeat.builder = heartbeatBuilder;
-  cfg.heartbeat.user = &lighting;
 
-  cfg.commands.levelEnable = "INF";
-  cfg.commands.levelDisable = "INF";
-  cfg.commands.levelReboot = "INF";
   cfg.commands.allowReboot = true;
+  cfg.commands.levelReboot = "INF";
   cfg.commands.logPing = false;
   cfg.commands.levelPing = "DBG";
-  cfg.commands.logUnknown = true;
-  cfg.commands.levelUnknown = "WRN";
   cfg.commands.logUpdate = false;
   cfg.commands.levelUpdate = "INF";
   cfg.commands.cmdLogLevel = "DBG";
@@ -102,7 +85,8 @@ void setup() {
   cfg.ota.errLevel = "ERR";
 
   nodeCore.begin(cfg);
-  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCmdSubscription, &lighting);
+  nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
+  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
 
   NodeContext& ctx = nodeCore.context();
   lighting.begin(ctx);
