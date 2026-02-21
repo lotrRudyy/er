@@ -1,5 +1,6 @@
 #include "ctrl/lighting_controller.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <cstring>
 
@@ -7,6 +8,16 @@ namespace {
 
 constexpr const char* kCmdPrefix = "lighting/mosfet/";
 constexpr const char* kCmdSuffix = "/cmd";
+
+#ifndef LIGHTING_SERIAL_DEBUG
+#define LIGHTING_SERIAL_DEBUG 1
+#endif
+
+#if LIGHTING_SERIAL_DEBUG
+  #define SDBG(fmt, ...) do { if (Serial) Serial.printf("[lighting] " fmt "\n", ##__VA_ARGS__); } while(0)
+#else
+  #define SDBG(fmt, ...) do {} while(0)
+#endif
 
 String makeStateTopic(const char* id) {
   String t = "lighting/mosfet/";
@@ -26,7 +37,6 @@ bool parseIntLoose(const String& s, int32_t& out) {
   t.trim();
   if (!t.length()) return false;
 
-  // Accept "PWM 123", "PWM:123", "PWM=123"
   int idx = t.indexOf(' ');
   if (idx < 0) idx = t.indexOf(':');
   if (idx < 0) idx = t.indexOf('=');
@@ -43,6 +53,18 @@ bool parseIntLoose(const String& s, int32_t& out) {
 }
 
 } // namespace
+
+LightingController::LightingController() {
+  // set ids "1".."9"
+  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9"};
+  for (size_t i = 0; i < kChannelCount; i++) channels_[i].id = ids[i];
+}
+
+bool LightingController::mqttConnected() const {
+  if (!ctx_) return false;
+  auto* c = ctx_->mqttClient();
+  return c && c->connected();
+}
 
 bool LightingController::parseChannelIdFromTopic(const String& topic, String& outId) {
   if (!topic.startsWith(kCmdPrefix) || !topic.endsWith(kCmdSuffix)) return false;
@@ -72,6 +94,8 @@ void LightingController::begin(Core::NodeContext& ctx) {
   constexpr uint32_t kFreqHz = 2000;
   constexpr uint8_t kResBits = 12;
 
+  SDBG("controller.begin(): init pwm freq=%lu res=%u", (unsigned long)kFreqHz, (unsigned)kResBits);
+
   LightingChannelConfig cfg[kChannelCount];
   for (size_t i = 0; i < kChannelCount; i++) {
     channels_[i].pin = kPins[i];
@@ -79,32 +103,45 @@ void LightingController::begin(Core::NodeContext& ctx) {
     channels_[i].on = false;
     channels_[i].duty = 0;
     cfg[i] = {channels_[i].id, channels_[i].pin, channels_[i].ledcCh};
+    SDBG("ch%u id=%s pin=%u ledc=%u", (unsigned)(i + 1), channels_[i].id, (unsigned)channels_[i].pin, (unsigned)channels_[i].ledcCh);
   }
 
   driver_.begin(cfg, kChannelCount, kFreqHz, kResBits);
+  SDBG("pwm driver ready (maxDuty=%lu)", (unsigned long)driver_.maxDuty());
 
-  // Ensure outputs start OFF.
+  // Ensure outputs start OFF (but DON'T publish yet — MQTT not connected at boot)
   for (size_t i = 0; i < kChannelCount; i++) {
     applyOutput(channels_[i]);
-    publishChannelState(channels_[i], "boot");
   }
 
+  bootStatePublished_ = false;
+  lastMqttConnected_ = false;
   lastMetricMs_ = millis();
 }
 
 void LightingController::tick(uint32_t /*nowMs*/) {
-  // No periodic work needed. Kept for parity with other controllers.
+  const bool conn = mqttConnected();
+  if (conn != lastMqttConnected_) {
+    SDBG("MQTT connected=%d", (int)conn);
+    lastMqttConnected_ = conn;
+  }
+
+  // Publish retained initial state once, right after MQTT is connected
+  if (conn && !bootStatePublished_) {
+    SDBG("publishing retained boot state (all channels)");
+    publishAllStates("boot");
+    bootStatePublished_ = true;
+  }
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
-  // Lighting is controlled via lighting/mosfet/<id>/cmd, not <node>/cmd.
-  // Still log unknown node commands to avoid silent surprises.
   if (!ctx_) return false;
   String msg(cmd ? cmd : "");
   if (payload && payload[0]) {
     msg += " ";
     msg += payload;
   }
+  SDBG("node cmd (ignored): %s", msg.c_str());
   log("WRN", String("Unknown node CMD: ") + msg);
   return true;
 }
@@ -124,20 +161,12 @@ uint32_t LightingController::clampDuty(uint32_t duty) const {
 uint32_t LightingController::percentToDuty(uint32_t pct) const {
   if (pct > 100) pct = 100;
   const uint32_t max = driver_.maxDuty();
-  // round to nearest
   return (uint32_t)((pct * (uint64_t)max + 50) / 100);
 }
 
 uint32_t LightingController::mapUserValueToDuty(int32_t v) const {
   if (v <= 0) return 0;
-
-  // Convenience mapping:
-  // 0..100  -> percent
-  // 101..255-> 8-bit
-  // 256..max-> raw
-  if (v <= 100) {
-    return percentToDuty((uint32_t)v);
-  }
+  if (v <= 100) return percentToDuty((uint32_t)v);
   if (v <= 255) {
     const uint32_t max = driver_.maxDuty();
     return (uint32_t)((v * (uint64_t)max + 127) / 255);
@@ -148,11 +177,19 @@ uint32_t LightingController::mapUserValueToDuty(int32_t v) const {
 void LightingController::applyOutput(ChannelState& ch) {
   const uint32_t duty = ch.on ? ch.duty : 0;
   driver_.writeDuty(ch.ledcCh, duty);
+  SDBG("apply: id=%s on=%d duty=%lu", ch.id, (int)ch.on, (unsigned long)duty);
 }
 
 bool LightingController::publish(const char* topic, const String& payload, bool retained) const {
   if (!ctx_) return false;
+  if (!mqttConnected()) return false;  // <- quiet when offline
   return ctx_->publish(topic, payload, retained);
+}
+
+void LightingController::publishAllStates(const char* reason) {
+  for (size_t i = 0; i < kChannelCount; i++) {
+    publishChannelState(channels_[i], reason);
+  }
 }
 
 void LightingController::log(const char* level, const String& msg) const {
@@ -187,26 +224,34 @@ void LightingController::publishChannelState(const ChannelState& ch, const char*
   payload += "}";
 
   String topic = makeStateTopic(ch.id);
-  publish(topic.c_str(), payload, true);
+  const bool ok = publish(topic.c_str(), payload, true);
+  SDBG("state: id=%s on=%d duty=%lu pct=%lu reason=%s pub=%s",
+       ch.id, (int)ch.on, (unsigned long)ch.duty, (unsigned long)pct,
+       (reason ? reason : ""), ok ? "ok" : "skip/offline");
 }
 
 void LightingController::onMosfetCommandTopic(const char* topic, const String& payload) {
   if (!ctx_) return;
 
+  SDBG("RX: topic=%s payload=%s", topic ? topic : "?", payload.c_str());
+
   String id;
   if (!parseChannelIdFromTopic(String(topic ? topic : ""), id)) {
+    SDBG("RX: bad topic");
     log("WRN", String("bad topic: ") + (topic ? topic : ""));
     return;
   }
 
   ChannelState* ch = findById(id);
   if (!ch) {
+    SDBG("RX: unknown id=%s", id.c_str());
     log("WRN", String("unknown channel id: ") + id);
     return;
   }
 
-  // Try JSON first
   bool handled = false;
+
+  // JSON first
   {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload);
@@ -215,13 +260,9 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
       if (doc["cmd"].is<const char*>()) cmdS = doc["cmd"].as<const char*>();
       cmdS = upperTrim(cmdS);
 
-      if (cmdS == "ON") {
-        ch->on = true;
-        handled = true;
-      } else if (cmdS == "OFF") {
-        ch->on = false;
-        handled = true;
-      } else if (cmdS == "DIM" || cmdS == "DIMMED") {
+      if (cmdS == "ON") { ch->on = true; handled = true; }
+      else if (cmdS == "OFF") { ch->on = false; handled = true; }
+      else if (cmdS == "DIM" || cmdS == "DIMMED") {
         ch->on = true;
         ch->duty = percentToDuty(ch->dimPercent);
         handled = true;
@@ -235,8 +276,9 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
         if (doc["unit"].is<const char*>()) unit = upperTrim(String(doc["unit"].as<const char*>()));
 
         ch->on = true;
-        if (unit == "PERCENT" || unit == "%" ) {
-          ch->duty = percentToDuty((uint32_t)max(0, min(100, v)));
+        if (unit == "PERCENT" || unit == "%") {
+          v = max(0, min(100, v));
+          ch->duty = percentToDuty((uint32_t)v);
         } else if (unit == "8BIT") {
           const uint32_t maxd = driver_.maxDuty();
           if (v < 0) v = 0;
@@ -255,29 +297,16 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
     }
   }
 
+  // Text fallback
   if (!handled) {
-    String s = payload;
-    String up = upperTrim(s);
-
-    if (up == "ON") {
-      ch->on = true;
-      handled = true;
-    } else if (up == "OFF") {
-      ch->on = false;
-      handled = true;
-    } else if (up == "DIM" || up == "DIMMED") {
+    String up = upperTrim(payload);
+    if (up == "ON") { ch->on = true; handled = true; }
+    else if (up == "OFF") { ch->on = false; handled = true; }
+    else if (up == "DIM" || up == "DIMMED") {
       ch->on = true;
       ch->duty = percentToDuty(ch->dimPercent);
       handled = true;
-    } else if (up.startsWith("PWM")) {
-      int32_t v = 0;
-      if (parseIntLoose(up, v)) {
-        ch->on = (v > 0);
-        ch->duty = mapUserValueToDuty(v);
-        handled = true;
-      }
     } else {
-      // maybe it's just a number
       int32_t v = 0;
       if (parseIntLoose(up, v)) {
         ch->on = (v > 0);
@@ -289,15 +318,17 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
 
   if (!handled) {
     errorCount_++;
+    SDBG("RX: unhandled id=%s payload=%s", ch->id, payload.c_str());
     log("WRN", String("unhandled payload for ch ") + ch->id + ": " + payload);
     publishChannelState(*ch, "bad_cmd");
     return;
   }
 
-  // If turning ON with duty=0, default to full (max) unless DIM/DUTY already set.
   if (ch->on && ch->duty == 0) {
     ch->duty = driver_.maxDuty();
   }
+
+  SDBG("RX ok: id=%s on=%d duty=%lu", ch->id, (int)ch->on, (unsigned long)ch->duty);
 
   applyOutput(*ch);
   publishChannelState(*ch, "cmd");
