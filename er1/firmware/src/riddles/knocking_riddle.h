@@ -1,3 +1,4 @@
+// knocking_riddle.h
 #pragma once
 
 #include <Arduino.h>
@@ -28,7 +29,7 @@ private:
 
   static constexpr uint16_t kKnockThresholds[kSensorCount] = {700, 300, 1000};
 
-  // Global debounce / lockout (sequence acceptance). NOTE: sound is now played BEFORE this check.
+  // Global debounce / lockout (sequence acceptance). NOTE: sound is played BEFORE this check.
   static constexpr uint32_t kKnockDebounceMs = 200;
 
   // Window used to determine which sensor was hit (winner selection)
@@ -52,6 +53,9 @@ private:
   // Tracks in LittleFS root: /1.wav .. /4.wav
   static constexpr const char* kTrackPaths[5] = {
       nullptr, "/1.wav", "/2.wav", "/3.wav", "/4.wav"};
+
+  // Background silence to keep I2S clock + amp "awake"
+  static constexpr const char* kSilencePath = "/silence.wav";
 
   struct PiezoState {
     int pin;
@@ -83,6 +87,9 @@ private:
   unsigned long trackFallbackMs(uint8_t track) const;
   void serviceSound(uint32_t nowMs);
 
+  void startSilenceIfIdle();
+  void stopSilenceIfActive();
+
   void evaluateSequence();
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetSequence();
@@ -101,6 +108,10 @@ private:
 
   // FS listing over MQTT (once after MQTT connected)
   bool fsListed_ = false;
+
+  // Background silence state
+  bool silenceAvailable_ = false;
+  bool silenceActive_ = false;
 
   // Sound queue state
   uint8_t soundQueue_[kSoundQueueMax];

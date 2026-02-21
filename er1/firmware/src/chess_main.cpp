@@ -15,7 +15,7 @@ static const char* FW_DESC = "chess with new ota";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};  // chess node MAC - must stay unique
-static const IPAddress NET_IP(192, 168, 0, 13);
+static const IPAddress NET_IP(192, 168, 0, 14);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);

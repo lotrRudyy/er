@@ -1,7 +1,7 @@
+// knocking_riddle.cpp
 #include "knocking_riddle.h"
 #include <cstring>
 
-// Minimal JSON escaping for filenames (usually not needed, but safe)
 static String jsonEscape(const String& s) {
   String out;
   out.reserve(s.length() + 8);
@@ -19,7 +19,6 @@ static String jsonEscape(const String& s) {
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
 
-  // LittleFS (NO auto-format -> never wipes your sounds)
   if (!LittleFS.begin(false)) {
     audioOk_ = false;
     errorCount_++;
@@ -28,10 +27,12 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
     audioOk_ = true;
   }
 
-  // I2S -> MAX98357A
   audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
   audio_.setVolume(kAudioVolume);
-  audio_.setTone(0, 0, 15); // match your loudness/clarity setting
+  audio_.setTone(0, 0, 15);
+
+  silenceAvailable_ = audioOk_ && LittleFS.exists(kSilencePath);
+  silenceActive_ = false;
 
   for (int i = 0; i < kSensorCount; i++) {
     piezo_[i].pin = kPiezoPins[i];
@@ -59,24 +60,28 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   solved_ = false;
   fsListed_ = false;
 
+  // Start background silence immediately (keeps I2S clock + amp awake)
+  startSilenceIfIdle();
+
   publishState();
 }
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
 
-  // Keep audio pipeline alive
   if (audioOk_) {
     audio_.loop();
   }
 
-  // Publish FS listing over MQTT once (after MQTT is connected)
   publishLittleFsListingOnce();
 
   updatePiezoSamples(nowMs);
   handleKnockWindow(nowMs);
   evaluateSequenceIfDue(nowMs);
   serviceSound(nowMs);
+
+  // If no queued/active sound, keep the amp warm
+  startSilenceIfIdle();
 }
 
 bool KnockingRiddle::onCmd(const char* cmd, const char* /*payload*/) {
@@ -148,6 +153,25 @@ void KnockingRiddle::publishLittleFsListingOnce() {
   }
 }
 
+void KnockingRiddle::startSilenceIfIdle() {
+  if (!audioOk_ || !silenceAvailable_) return;
+  if (soundPlaying_) return;
+  if (!soundQueueEmpty()) return;
+  if (silenceActive_) return;
+
+  // Keep the I2S clock running; we keep volume at 0 so it's truly silent.
+  audio_.stopSong();
+  audio_.setVolume(0);
+  audio_.connecttoFS(LittleFS, kSilencePath);
+  silenceActive_ = true;
+}
+
+void KnockingRiddle::stopSilenceIfActive() {
+  if (!silenceActive_) return;
+  audio_.stopSong();
+  silenceActive_ = false;
+}
+
 void KnockingRiddle::updatePiezoSamples(uint32_t nowMs) {
   for (int i = 0; i < kSensorCount; i++) {
     PiezoState& ps = piezo_[i];
@@ -203,7 +227,7 @@ void KnockingRiddle::handleKnockWindow(uint32_t nowMs) {
       ",\"m1\":" + windowMax_[1] +
       ",\"m2\":" + windowMax_[2] + "}");
 
-  // Sound is queued immediately after the window closes (before global debounce gate)
+  // Queue sound immediately after window closes (BEFORE global debounce)
   playKnockSound(bestIdx);
 
   // Global debounce applies only to sequence acceptance
@@ -221,7 +245,6 @@ void KnockingRiddle::registerKnock(int idx, uint16_t /*raw*/, uint32_t nowMs) {
   if (seqLen_ < kSeqMaxLen) {
     seqBuf_[seqLen_++] = idx;
   }
-
   lastSeqActivityMs_ = nowMs;
 }
 
@@ -238,8 +261,6 @@ void KnockingRiddle::enqueueSound(uint8_t track, int8_t srcIdx) {
   if (!audioOk_) return;
   if (track < 1 || track > 4) return;
 
-  // Pack source index (0..2) and track (1..4) into one byte to keep the queue simple.
-  // srcIdx = -1 -> 0xF (unknown)
   uint8_t srcNibble = (srcIdx >= 0 && srcIdx < kSensorCount) ? (uint8_t)srcIdx : 0x0F;
   uint8_t packed = (uint8_t)((srcNibble << 4) | (track & 0x0F));
 
@@ -278,6 +299,8 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
     unsigned long needed = trackFallbackMs(currentTrack_);
     if (nowMs - lastSoundStartMs_ >= needed) {
       soundPlaying_ = false;
+      currentTrack_ = 0;
+      // Silence will be resumed by startSilenceIfIdle()
     }
     return;
   }
@@ -293,6 +316,12 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
 
   const char* path = kTrackPaths[track];
   if (!path) return;
+
+  // Stop background silence so we can start the real sound immediately
+  stopSilenceIfActive();
+
+  // Restore audible volume for real playback
+  audio_.setVolume(kAudioVolume);
 
   log("DBG", "SOUND_START",
       String("{\"t\":") + nowMs +
@@ -369,6 +398,7 @@ void KnockingRiddle::resetState(const char* reason) {
   if (audioOk_) {
     audio_.stopSong();
   }
+  silenceActive_ = false;
 
   const char* src = (reason && reason[0]) ? reason : "reset";
   String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";

@@ -3,52 +3,56 @@
 #include <cstring>
 
 #include "core_node.h"
-#include "riddles/knocking_riddle.h"
+#include "ctrl/lighting_controller.h"
 
 using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
-static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "3";
-static const char* FW_DESC = "trying to make sounds come faster";
+static const char* NODE_ID = "lighting";
+static const char* FW_VERSION = "1";
+static const char* FW_DESC = "lighting controller (9x mosfet pwm)";
 
 // ======================= NETWORK CONFIG ======================
-static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x51};  // knocking node MAC - must stay unique
-static const IPAddress NET_IP(192, 168, 0, 15);
+// NOTE: Set MAC/IP to whatever hardware this will run on.
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};  // lighting node MAC - must stay unique
+// NOTE: lighting takes over .12; other nodes shifted up by +1 (maglock unchanged)
+static const IPAddress NET_IP(192, 168, 0, 12);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
+// ======================= TOPICS ==============================
+static const char* TOPIC_MOSFET_CMD = "lighting/mosfet/+/cmd";
+
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
-static const char* OTA_PATH = "/node_firmware/knocking.bin";
+static const char* OTA_PATH = "/node_firmware/lighting.bin";
 static const char* OTA_PATH_PREFIX = "/node_firmware/";
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
 // ======================= CORE + MODULE =======================
 static NodeCore nodeCore;
-static KnockingRiddle riddle;
+static LightingController lighting;
 
 static bool logFilter(const char* level, void* user) {
-  auto* module = static_cast<KnockingRiddle*>(user);
+  auto* module = static_cast<LightingController*>(user);
   return module ? module->shouldAllowLog(level) : true;
 }
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
-  auto* module = static_cast<KnockingRiddle*>(user);
+  auto* module = static_cast<LightingController*>(user);
   ErrorInfo err{};
-  if (module) {
-    err.count = module->errorCount();
-  }
+  if (module) err.count = module->errorCount();
   buildHeartbeat(out, ctx, err);
 }
 
-static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
-  auto* module = static_cast<KnockingRiddle*>(user);
-  return module ? module->onCmd(cmd, payload) : false;
+static void mosfetCmdSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<LightingController*>(user);
+  if (module) module->onMosfetCommandTopic(topic, payload);
 }
 
 // ======================= ARDUINO LIFECYCLE ===================
@@ -57,6 +61,7 @@ void setup() {
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;
   cfg.fwDescription = FW_DESC;
+
   cfg.startEnabled = true;
 
   std::memcpy(cfg.net.mac, MAC_ADDR, sizeof(MAC_ADDR));
@@ -66,17 +71,15 @@ void setup() {
   cfg.net.subnet = NET_SUBNET;
   cfg.net.mqttServer = MQTT_SERVER;
   cfg.net.mqttPort = MQTT_PORT;
-  cfg.net.clientId = NODE_ID;
+  cfg.net.clientId = "lighting";
 
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
-  cfg.log.includeDataField = true;
   cfg.log.filter = logFilter;
-  cfg.log.filterUser = &riddle;
-
+  cfg.log.filterUser = &lighting;
   cfg.heartbeat.intervalMs = 20000;
   cfg.heartbeat.builder = heartbeatBuilder;
-  cfg.heartbeat.user = &riddle;
+  cfg.heartbeat.user = &lighting;
 
   cfg.commands.levelEnable = "INF";
   cfg.commands.levelDisable = "INF";
@@ -99,14 +102,14 @@ void setup() {
   cfg.ota.errLevel = "ERR";
 
   nodeCore.begin(cfg);
-  nodeCore.registerCommandHandler(moduleCommandHandler, &riddle);
+  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCmdSubscription, &lighting);
 
   NodeContext& ctx = nodeCore.context();
-  riddle.begin(ctx);
+  lighting.begin(ctx);
   ctx.log("INF", String("BOOT FW=") + FW_DESC + " rst=" + resetReasonShort());
 }
 
 void loop() {
   nodeCore.loop();
-  riddle.tick(millis());
+  lighting.tick(millis());
 }

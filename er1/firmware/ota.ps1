@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("maglock","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
+    [ValidateSet("maglock","lighting","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
     [string]$Target,
     [string]$Env,
     [string]$Dev,
@@ -20,6 +20,7 @@ try {
   # =====================
   $deployments = @{
       "maglock"      = @{ Env="maglock";      Dev="maglock";      CmdNode="maglock";      FirmwareName="maglock.bin" }
+      "lighting"     = @{ Env="lighting";     Dev="lighting";     CmdNode="lighting";     FirmwareName="lighting.bin" }
       "images_piano" = @{ Env="images_piano"; Dev="images_piano"; CmdNode="images_piano"; FirmwareName="images_piano.bin" }
       "chess"        = @{ Env="chess";        Dev="chess";        CmdNode="chess";        FirmwareName="chess.bin" }
       "knocking"     = @{ Env="knocking";     Dev="knocking";     CmdNode="knocking";     FirmwareName="knocking.bin" }

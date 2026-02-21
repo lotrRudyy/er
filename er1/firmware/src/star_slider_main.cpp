@@ -15,7 +15,7 @@ static const char* FW_DESC = "star_slider with new ota";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x52};  // star_slider node MAC - must stay unique
-static const IPAddress NET_IP(192, 168, 0, 17);
+static const IPAddress NET_IP(192, 168, 0, 18);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);
