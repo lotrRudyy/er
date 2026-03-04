@@ -21,7 +21,13 @@ private:
   static constexpr uint32_t kStepMs = 7000;
   static constexpr uint32_t kPauseMs = 5000;
   static constexpr uint32_t kCycleMs = kStepMs * 3 + kPauseMs;
-  static constexpr int kLedPins[4] = {26, 25, 16, 32};
+  static constexpr int kLedPins[4] = { 26, 25, 16, 32 };
+  /*
+    26 UV LEDs
+    25 Aquarius
+    16 Scorpio
+    32 Libra
+  */
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;

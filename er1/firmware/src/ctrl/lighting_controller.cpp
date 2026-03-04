@@ -84,11 +84,11 @@ void LightingController::begin(Core::NodeContext& ctx) {
     17,   // r2 schronk
     21,   // r1 bild
     22,   // r1 stuen
-    26,   // r3 cage
     14,   // r3 slider
+    26,   // r3 cage
     25,   // torch stiege
-    32,   // torch r2-r3
-    33,   // torch r2
+    33,   // torch r2-r3
+    32,   // torch r2
   };
 
   constexpr uint32_t kFreqHz = 2000;
