@@ -105,6 +105,13 @@ DEPLOYMENTS: dict[str, dict[str, object]] = {
         "firmware": "stop_timer.bin",
         "verify_nodes": ("stop_timer",),
     },
+    "lighting": {
+        "env": "lighting",
+        "dev": "lighting",
+        "cmd_node": "lighting",
+        "firmware": "lighting.bin",
+        "verify_nodes": ("lighting",),
+    },
 }
 
 
