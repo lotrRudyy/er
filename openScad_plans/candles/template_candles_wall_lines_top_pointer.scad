@@ -64,8 +64,41 @@ function candle_ang(i) = candle_angles[i];
 pointer_ang_local_deg = 90;
 
 // Wall marks
-global_top_marks    = [13,80,97,210,227,60,185,170,260,290,300,340];
-global_bottom_marks = [340,5,15,55,145,93,97,110,115,180,200,208,240,250,265,290];
+global_top_marks = [
+  // INSIDE (drives the solution totals)
+  20,
+  305, 315,
+  55,
+  220, 230,
+
+  // OUTSIDE (decorative / non-counting, but unambiguous)
+  171.551,
+  272.737,
+  140.867,
+  99.228,
+  341.915,
+  259.851
+];
+global_bottom_marks = [
+  // INSIDE (drives the solution totals)
+  332,
+  12, 20,
+  144,
+
+  // OUTSIDE (decorative / non-counting, but unambiguous)
+  272.864,
+  184.059,
+  282.167,
+  109.193,
+  210.018,
+  170.596,
+  241.864,
+  89.368,
+  194.146,
+  300.525,
+  230.619,
+  257.651
+];
 
 // =====================
 // HELPERS

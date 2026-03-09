@@ -5,7 +5,7 @@
 $fn = 64;
 
 // ---------- Parameter ----------
-stand_h      = 68;
+stand_h      = 80;
 round_h      = 20;
 round_r      = 7.5;
 

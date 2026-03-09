@@ -13,7 +13,7 @@ $fn = 96;
 // USER INPUT
 // ============================================================
 
-page_id = 0;        // 0..3 which hole/disk page
+page_id = 3;        // 0..3 which hole/disk page
 
 // Page size (A4 landscape) in mm
 page_w = 297;
@@ -74,10 +74,10 @@ levels = [0, 2, 3, 1];
 
 // nail_polar[i] = [angle_deg, distance_mm] (WORLD angle, distance from disk center)
 nail_polar = [
-  [220, 110.5],
-  [340, 150.5],
-  [140, 130.5],
-  [55, 120]
+  [220.000000, 11.050000],
+  [120.000000, 15.050000],
+  [220.000000, 13.050000],
+  [50.000000, 14.050000]
 ];
 
 // bridge_polar[i] = [center_angle_deg, distance_mm]
