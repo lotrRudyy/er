@@ -50,6 +50,7 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
     buttons_[i].prev = lvl;
   }
   solved_ = false;
+  retriggerArmed_ = true;
   gameActive_ = false;
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
@@ -126,6 +127,7 @@ void ImagesRiddle::resetState(const char* reason) {
   cancelAllDownHold(reason ? reason : "reset");
   bool wasSolved = solved_;
   solved_ = false;
+  retriggerArmed_ = true;
   if (reason) {
     String data = String("{\"src\":\"") + reason +
                   "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
@@ -144,6 +146,9 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
 
   if (!allPressed) {
     cancelAllDownHold("release");
+    if (solved_) {
+      retriggerArmed_ = true;
+    }
     return;
   }
 
@@ -158,14 +163,24 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
 
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
+
   if (!solved_) {
     solved_ = true;
+    retriggerArmed_ = false;
     log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
     publishSolvedEvent("images");
-  } else {
-    log("INF", "IMAGES_RETRIGGER", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
-    publishState();
+    openImagesMaglock();
+    return;
   }
+
+  if (!retriggerArmed_) {
+    log("DBG", "IMAGES_RETRIGGER_BLOCKED", "{\"reason\":\"still_all_pressed\"}");
+    return;
+  }
+
+  retriggerArmed_ = false;
+  log("INF", "IMAGES_RETRIGGER", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+  publishState();
   openImagesMaglock();
 }
 

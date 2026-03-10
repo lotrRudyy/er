@@ -300,10 +300,10 @@ function Invoke-OtaChildWithSoftStopSupport {
     }
 }
 
-$resolvedTargets = Resolve-OtaTargets -RequestedTargets $Target
+$resolvedTargets = @(Resolve-OtaTargets -RequestedTargets $Target)
 
 if ($resolvedTargets.Count -eq 1) {
-    Invoke-OtaSingleTarget -SingleTarget $resolvedTargets[0] -Env $Env -Dev $Dev -NoBuild:$NoBuild
+    Invoke-OtaSingleTarget -SingleTarget ([string]$resolvedTargets[0]) -Env $Env -Dev $Dev -NoBuild:$NoBuild
     exit 0
 }
 

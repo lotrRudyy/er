@@ -50,6 +50,7 @@ private:
 
   ButtonState buttons_[kButtonCount];
   bool solved_ = false;
+  bool retriggerArmed_ = true;
   bool gameActive_ = false;
   bool allDownHoldActive_ = false;
   uint32_t allDownHoldStartMs_ = 0;

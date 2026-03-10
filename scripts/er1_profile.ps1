@@ -663,13 +663,14 @@ function er1 {
             return
         }
         "ota" {
-            $targets = if ($cmdArgs -and $cmdArgs.Count -ge 1) { $cmdArgs } else { $null }
-            if (-not $targets -or $targets.Count -lt 1) { throw "Usage: er1 ota <device...|all>" }
+            $targets = @($cmdArgs)
+            if (-not $targets -or $targets.Length -lt 1) { throw "Usage: er1 ota <device...|all>" }
 
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
 
-            # Let ota.ps1 do build+upload+publish+verify and stream progress live.
-            & pwsh -NoProfile -File $otaScript -Target $targets
+            $pwshArgs = @("-NoProfile", "-File", $otaScript, "-Target") + $targets
+            & pwsh @pwshArgs
+
             if ($LASTEXITCODE -ne 0) { throw "ota.ps1 failed (exit $LASTEXITCODE)." }
             return
         }

@@ -131,6 +131,10 @@ void LightingController::begin(Core::NodeContext& ctx) {
   pianoTorchAtMs_ = 0;
   chessRoomPending_ = false;
   chessRoomAtMs_ = 0;
+  candlesFadeActive_ = false;
+  candlesFadeStartMs_ = 0;
+  candlesFadeFromDuty5_ = 0;
+  candlesFadeFromDuty6_ = 0;
 }
 
 void LightingController::tick(uint32_t nowMs) {
@@ -154,6 +158,29 @@ void LightingController::tick(uint32_t nowMs) {
   if (chessRoomPending_ && (uint32_t)(nowMs - chessRoomAtMs_) >= kProgressDelayMs) {
     chessRoomPending_ = false;
     runChessRoom("chess_delay");
+  }
+
+  if (candlesFadeActive_) {
+    const uint32_t elapsed = (uint32_t)(nowMs - candlesFadeStartMs_);
+    const uint32_t targetDuty = percentToDuty(30);
+
+    bool changed[kChannelCount] = {};
+
+    if (elapsed >= kCandlesFadeMs) {
+      candlesFadeActive_ = false;
+      changed[4] = setChannel("5", true, targetDuty);
+      changed[5] = setChannel("6", true, targetDuty);
+      publishChangedStates(changed, "candles_fade_done");
+    } else {
+      const uint32_t duty5 = candlesFadeFromDuty5_ -
+        (uint32_t)(((uint64_t)(candlesFadeFromDuty5_ - targetDuty) * elapsed) / kCandlesFadeMs);
+      const uint32_t duty6 = candlesFadeFromDuty6_ -
+        (uint32_t)(((uint64_t)(candlesFadeFromDuty6_ - targetDuty) * elapsed) / kCandlesFadeMs);
+
+      changed[4] = setChannel("5", true, duty5);
+      changed[5] = setChannel("6", true, duty6);
+      publishChangedStates(changed, "candles_fade");
+    }
   }
 }
 
@@ -188,6 +215,10 @@ void LightingController::onGameModeMessage(const String& msg) {
     pianoTorchAtMs_ = 0;
     chessRoomPending_ = false;
     chessRoomAtMs_ = 0;
+    candlesFadeActive_ = false;
+    candlesFadeStartMs_ = 0;
+    candlesFadeFromDuty5_ = 0;
+    candlesFadeFromDuty6_ = 0;
     applySceneInitial("game_start");
     log("INF", "LIGHT_SCENE_INGAME");
     return;
@@ -201,6 +232,10 @@ void LightingController::onGameModeMessage(const String& msg) {
   pianoTorchAtMs_ = 0;
   chessRoomPending_ = false;
   chessRoomAtMs_ = 0;
+  candlesFadeActive_ = false;
+  candlesFadeStartMs_ = 0;
+  candlesFadeFromDuty5_ = 0;
+  candlesFadeFromDuty6_ = 0;
   bool changed[kChannelCount] = {};
   for (size_t i = 0; i < kChannelCount; i++) changed[i] = setChannel(channels_[i].id, false, 0);
   publishChangedStates(changed, "standby");
@@ -340,8 +375,16 @@ void LightingController::handleProgressEvent(const char* rid) {
   if (strcmp(rid, "candles") == 0) {
     if (candlesSolvedSeen_) return;
     candlesSolvedSeen_ = true;
-    changed[4] = setChannelPercent("5", true, 30);
-    changed[5] = setChannelPercent("6", true, 30);
+
+    ChannelState* ch5 = findById("5");
+    ChannelState* ch6 = findById("6");
+    candlesFadeFromDuty5_ = ch5 ? (ch5->on ? ch5->duty : driver_.maxDuty()) : driver_.maxDuty();
+    candlesFadeFromDuty6_ = ch6 ? (ch6->on ? ch6->duty : driver_.maxDuty()) : driver_.maxDuty();
+    candlesFadeStartMs_ = millis();
+    candlesFadeActive_ = true;
+
+    changed[4] = setChannel("5", true, candlesFadeFromDuty5_);
+    changed[5] = setChannel("6", true, candlesFadeFromDuty6_);
     publishChangedStates(changed, "candles_solved");
     log("INF", "LIGHT_CANDLES_SOLVED");
     return;

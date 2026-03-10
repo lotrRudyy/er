@@ -80,5 +80,11 @@ private:
   bool chessRoomPending_ = false;
   uint32_t chessRoomAtMs_ = 0;
 
-  static constexpr uint32_t kProgressDelayMs = 3000;
+  bool candlesFadeActive_ = false;
+  uint32_t candlesFadeStartMs_ = 0;
+  uint32_t candlesFadeFromDuty5_ = 0;
+  uint32_t candlesFadeFromDuty6_ = 0;
+
+  static constexpr uint32_t kCandlesFadeMs = 5000;
+  static constexpr uint32_t kProgressDelayMs = 7000;
 };
