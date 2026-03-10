@@ -1,12 +1,12 @@
 #include "candles_riddle.h"
 
 #include <cstring>
+#include <strings.h>
 
 void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
   topicEvent_ = Core::topic(node, "evt");
-  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   topicCmdStarSky_ = Core::topic("star_sky", "cmd");
   topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
@@ -14,10 +14,7 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
     setLed(i, false);
   }
   initState();
-  // Configure ADC range for the microphone pins (helps prevent saturation)
-  // and take a one-time idle probe (for logs only).
   for (int i = 0; i < 4; i++) {
-    // 11dB extends measurable voltage range (Arduino-ESP32).
     analogSetPinAttenuation(kMicPins[i], ADC_11db);
   }
   // Many mic boards have a bias network that takes a moment to settle.
@@ -29,6 +26,7 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   calibrateBases();
   lastMetricMs_ = millis();
   gameActive_ = false;
+  moduleEnabled_ = true;
   publishState();
 }
 
@@ -74,7 +72,7 @@ void CandlesRiddle::calibrateBases() {
     }
 
     uint16_t avg = uint16_t(sum / uint32_t(samples));
-    metrics_[i].base = avg;  // informational only (for logs)
+    metrics_[i].base = avg;
 
     // Determine effective base
     micSaturated_[i] = 0;
@@ -113,7 +111,7 @@ void CandlesRiddle::tick(uint32_t nowMs) {
     return;
   }
 
-  if (ctx_->enabled()) {
+  if (ctx_->enabled() && moduleEnabled_) {
     if (!solved_) {
       for (int i = 0; i < 4; i++) {
         if (!lit_[i]) continue;
@@ -175,8 +173,7 @@ void CandlesRiddle::tick(uint32_t nowMs) {
 bool CandlesRiddle::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
 
-  // Images-style dedicated reset command (case-insensitive).
-  if (strcasecmp(cmd, "RESET_CANDLES") == 0) {
+  if (strcasecmp(cmd, "RESET_CANDLES") == 0 || strcasecmp(cmd, "RESET") == 0 || strcasecmp(cmd, "RELIGHT") == 0) {
     bool wasSolved = solved_;
     resetAll();
     String data = String("{\"src\":\"reset_candles\",\"was_solved\":") + (wasSolved ? "1" : "0") + "}";
@@ -185,21 +182,40 @@ bool CandlesRiddle::onCmd(const char* cmd, const char* payload) {
     return true;
   }
 
-  // NOTE: Core may normalize commands to uppercase before calling onCmd().
-  // Keep legacy comparisons uppercase.
-  if (strcmp(cmd, "RESET") == 0 || strcmp(cmd, "RELIGHT") == 0) {
-    resetAll();
-    log("INF", "CMD RESET -> relight+reset");
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_CANDLES") == 0) {
+    solved_ = true;
+    resetArmed_ = false;
+    log("INF", "CANDLES_FORCE_SOLVE");
+    publishSolvedEvent();
+    publishState();
     return true;
   }
 
-  if (strcmp(cmd, "CAL") == 0 || strcmp(cmd, "CALIB") == 0 || strcmp(cmd, "CALIBRATE") == 0) {
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    log("INF", "CANDLES_ENABLE");
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    log("INF", "CANDLES_DISABLE");
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "CAL") == 0 || strcasecmp(cmd, "CALIB") == 0 || strcasecmp(cmd, "CALIBRATE") == 0) {
     calibrateBases();
     log("INF", "CMD CALIBRATE -> recalibrated idle baselines");
     return true;
   }
 
-  // Keep legacy behavior: log unknown commands as WRN but consume them.
   String message(cmd);
   if (payload && payload[0]) {
     message += " ";
@@ -215,10 +231,6 @@ bool CandlesRiddle::shouldAllowLog(const char* level) {
     errorCount_++;
     return true;
   }
-  // Do not hard-disable logs here.
-  // The core already controls verbosity via runtime MQTT log level
-  // (<node>/log/level). If we return false here, DBG/INF logs will never
-  // be published regardless of the configured log level.
   return true;
 }
 
@@ -267,12 +279,14 @@ void CandlesRiddle::initState() {
   lastSeqActivityMs_ = 0;
   solved_ = false;
   solvedEventSent_ = false;
+  resetArmed_ = false;
+  tries_ = 0;
+  attemptedSequencesCount_ = 0;
+  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
+    attemptedSequences_[i][0] = '\0';
+  }
 }
 
-/**
- * Called only after we saw one sample exceed thrAbs in tick().
- * Now grab the next 50 samples (no delay). If >=60% are above thrAbs -> hit.
- */
 bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   static uint32_t lastTrig[4] = {0, 0, 0, 0};
   static constexpr uint32_t kRefractMs = 250;
@@ -281,7 +295,7 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   if (now - lastTrig[idx] < kRefractMs) return false;
 
   static constexpr int samples = 50;
-  static constexpr int needed = (samples * 60 + 99) / 100;  // ceil(0.60*samples) => 30
+  static constexpr int needed = (samples * 60 + 99) / 100;
 
   int over = 0;
   int minV = 4096;
@@ -297,7 +311,6 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
     if (v > maxV) maxV = v;
     if (v > thrAbs) over++;
 
-    // Accumulate metrics so publishMetricsIfDue() remains meaningful.
     MicMetric& mm = metrics_[idx];
     mm.sum += (uint32_t)v;
     mm.samples++;
@@ -308,7 +321,6 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   bool hit = (over >= needed);
   if (hit) lastTrig[idx] = now;
 
-  // Save last window stats for your existing per-mic telemetry
   lastRaw_[idx] = (uint16_t)lastRaw;
   lastAvgWin_[idx] = (uint16_t)(sum / (uint32_t)samples);
   lastMaxWin_[idx] = (uint16_t)maxV;
@@ -316,7 +328,6 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   lastNeeded_[idx] = (uint8_t)needed;
   lastHit_[idx] = hit ? 1 : 0;
 
-  // Log only on hit to avoid spam (you still get 10s telemetry in candles_mic)
   if (hit) {
     const int baseEff = effBase_[idx];
     String payload = String("{\"i\":") + idx +
@@ -366,16 +377,14 @@ void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
     log("INF", "SEQUENCE OK -> SOLVED");
     publishSolvedEvent();
   } else {
+    tries_++;
+    appendAttemptedSequence();
     if (progressed_ >= 4) {
-      // Full sequence entered but wrong: give players a moment before resetting,
-      // matching the normal sequence-timeout wait.
       resetArmed_ = true;
-      // Use the same timestamp domain as tick(nowMs) to avoid unsigned underflow
-      // when checking (nowMs - resetArmMs_) later in the same tick.
       resetArmMs_ = nowMs;
-      log("INF", "SEQUENCE FAIL (full) -> reset pending");
+      log("INF", String("SEQUENCE FAIL (full) -> reset pending seq=") + currentSequenceHyphen());
     } else {
-      log("INF", "SEQUENCE FAIL -> reset");
+      log("INF", String("SEQUENCE FAIL -> reset seq=") + currentSequenceHyphen());
       resetAll();
     }
   }
@@ -383,8 +392,6 @@ void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
 
 void CandlesRiddle::evaluateSequenceIfDue(uint32_t nowMs) {
   if (solved_ || progressed_ == 0) return;
-  // If we've already collected a full 4-step sequence, evaluation happens immediately.
-  // If a delayed reset is armed, don't re-evaluate.
   if (progressed_ >= 4 || resetArmed_) return;
   if (nowMs - lastSeqActivityMs_ < kSeqTimeoutMs) return;
   evaluateSequence(nowMs);
@@ -404,8 +411,6 @@ void CandlesRiddle::resetPuzzleState() {
 }
 
 void CandlesRiddle::flickerRelight(int cycles, int onMs, int offMs) {
-  // Alternate LEDs (0,2) and (1,3) instead of flickering all at once.
-  // This makes the relight feel less like a "hard reset" and more like a wave.
   for (int c = 0; c < cycles; c++) {
     setLed(0, true);
     setLed(2, true);
@@ -419,7 +424,6 @@ void CandlesRiddle::flickerRelight(int cycles, int onMs, int offMs) {
     setLed(3, true);
     delay(offMs);
   }
-  // Final state: all candles lit.
   for (int i = 0; i < 4; i++) setLed(i, true);
 }
 
@@ -445,23 +449,15 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
   lastMetricMs_ = nowMs;
 
-  // Compute per-mic rolling stats (from samples gathered during detectBlow scans).
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
     if (mm.samples > 0) mm.avg = mm.sum / mm.samples;
     else mm.avg = 0;
   }
 
-  // IMPORTANT: PubSubClient has a small max packet size by default (often 256 bytes).
-  // The previous "mics":[...] aggregate payload could exceed it and silently fail to publish.
-  // Emit one compact message per mic so we always get 1Hz telemetry.
-  const auto& topic = ctx_->config().topics.log;
-  Core::TimestampSource* tsSrc = ctx_->timestampSource();
-
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
 
-    // Compact data object (keep keys short; avoid large arrays).
     String d;
     d.reserve(160);
     d = String("{\"i\":") + i +
@@ -478,12 +474,9 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
         ",\"sat\":" + micSaturated_[i] +
         ",\"thr\":" + delta_[i] +
         "}";
-
-    // DBG path (subject to <node>/log/level).
     log("DBG", "candles_mic", d);
   }
 
-  // Reset accumulation for the next interval.
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
     mm.sum = 0;
@@ -492,17 +485,64 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   }
 }
 
+void CandlesRiddle::appendAttemptedSequence() {
+  if (attemptedSequencesCount_ >= kAttemptHistoryMax) return;
+  String seq = currentSequenceHyphen();
+  seq.toCharArray(attemptedSequences_[attemptedSequencesCount_], kAttemptStringMax);
+  attemptedSequencesCount_++;
+}
+
+String CandlesRiddle::currentSequenceHyphen() const {
+  String out;
+  for (int i = 0; i < progressed_; i++) {
+    if (i > 0) out += "-";
+    out += String(progress_[i] + 1);
+  }
+  return out;
+}
+
+String CandlesRiddle::currentSequenceJson() const {
+  String out = "[";
+  for (int i = 0; i < progressed_; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += String(progress_[i] + 1);
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
+String CandlesRiddle::attemptedSequencesJson() const {
+  String out = "[";
+  for (size_t i = 0; i < attemptedSequencesCount_; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += attemptedSequences_[i];
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
 
 void CandlesRiddle::publishState() {
   if (!ctx_) return;
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() == 0) return;
+
   String data;
-  data.reserve(220);
-  data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "1" : "0") +
-         ",\"en\":" + (gameActive_ && ctx_->enabled() ? "1" : "0") +
+  data.reserve(320);
+  data = String("{\"id\":\"candles\"") +
+         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+         ",\"enabled\":" + String((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? "true" : "false") +
+         ",\"solved\":" + String(solved_ ? "true" : "false") +
+         ",\"raw_state\":\"" + (solved_ ? "solved" : (progressed_ > 0 ? "progress" : "idle")) + "\"" +
+         ",\"tries\":" + String(tries_) +
+         ",\"sequence_current\":" + currentSequenceJson() +
+         ",\"attempted_sequences\":" + attemptedSequencesJson() +
          ",\"lit\":[" + (lit_[0] ? "1" : "0") + "," + (lit_[1] ? "1" : "0") + "," + (lit_[2] ? "1" : "0") + "," + (lit_[3] ? "1" : "0") + "]" +
          ",\"progressed\":" + progressed_ +
          "}";
+
   publish(topics.state.c_str(), "state", 1, data, nullptr, true);
 }

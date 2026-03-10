@@ -18,7 +18,9 @@ private:
   static constexpr bool kDevLog = false;
   static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kSeqTimeoutMs = 4500;
-  // LED pins (candle LEDs) in order: 1..4
+  static constexpr size_t kAttemptHistoryMax = 128;
+  static constexpr size_t kAttemptStringMax = 24;
+
   static constexpr int kLedPins[4] = {12, 14, 26, 25};
   static constexpr int kMicPins[4] = {33, 32, 35, 34};
   static constexpr int kOrder[4] = {2, 0, 3, 1};
@@ -46,13 +48,16 @@ private:
   void evaluateSequence(uint32_t nowMs);
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
-  // Default flicker duration is ~50% longer than before:
-  // 6*(120+90)=1260ms vs 6*(80+60)=840ms.
   void flickerRelight(int cycles = 6, int onMs = 120, int offMs = 90);
   void resetAll();
   void publishSolvedEvent();
   void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
+
+  void appendAttemptedSequence();
+  String currentSequenceHyphen() const;
+  String currentSequenceJson() const;
+  String attemptedSequencesJson() const;
 
   Core::NodeContext* ctx_ = nullptr;
   String topicEvent_;
@@ -65,19 +70,16 @@ private:
   uint32_t lastSeqActivityMs_ = 0;
   bool solved_ = false;
   bool solvedEventSent_ = false;
-  // When all 4 candles are blown but sequence is wrong, we delay the reset
-  // to match the normal sequence timeout behavior.
   bool resetArmed_ = false;
   uint32_t resetArmMs_ = 0;
   MicMetric metrics_[4]{};
   uint32_t lastMetricMs_ = 0;
-  // Last scan window stats per mic (updated whenever detectBlow() runs)
-  uint16_t lastRaw_[4] = {0,0,0,0};
-  uint16_t lastAvgWin_[4] = {0,0,0,0};
-  uint16_t lastMaxWin_[4] = {0,0,0,0};
-  uint8_t lastOver_[4] = {0,0,0,0};
-  uint8_t lastNeeded_[4] = {0,0,0,0};
-  uint8_t lastHit_[4] = {0,0,0,0};
+  uint16_t lastRaw_[4] = {0, 0, 0, 0};
+  uint16_t lastAvgWin_[4] = {0, 0, 0, 0};
+  uint16_t lastMaxWin_[4] = {0, 0, 0, 0};
+  uint8_t lastOver_[4] = {0, 0, 0, 0};
+  uint8_t lastNeeded_[4] = {0, 0, 0, 0};
+  uint8_t lastHit_[4] = {0, 0, 0, 0};
   int base_[4] = {1500, 1500, 1500, 1500};
   static constexpr int kBaseMin[4] = {1500, 1500, 1500, 1500};
   int effBase_[4] = {1500, 1500, 1500, 1500};
@@ -85,4 +87,9 @@ private:
   int delta_[4] = {120, 120, 120, 120};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
+  bool moduleEnabled_ = true;
+
+  uint32_t tries_ = 0;
+  char attemptedSequences_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
+  size_t attemptedSequencesCount_ = 0;
 };

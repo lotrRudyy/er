@@ -1,6 +1,7 @@
 #include "images_riddle.h"
 
 #include <cstring>
+#include <strings.h>
 
 namespace {
 
@@ -38,7 +39,6 @@ String withSrc(const String& dataJson, const String& src) {
 void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   ctx_ = &ctx;
   nodeId_ = (nodeId && nodeId[0]) ? nodeId : "images";
-  // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   topicLockImagesCmd_ = Core::topic("maglock", "lock/images/cmd");
 
   for (int i = 0; i < kButtonCount; i++) {
@@ -54,11 +54,11 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   solved_ = false;
   retriggerArmed_ = true;
   gameActive_ = false;
+  moduleEnabled_ = true;
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
 
-  // Safe boot: piano on the same ESP must start gated/standby until images is solved.
   ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
 
   publishState();
@@ -67,7 +67,6 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
 void ImagesRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
 
-  // Every fresh game start/off should re-arm images and gate piano again.
   ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
 
   resetState(inGame ? "game_start" : "game_off");
@@ -88,7 +87,7 @@ void ImagesRiddle::tick(uint32_t nowMs) {
     }
   }
 
-  if (!ctx_->enabled()) {
+  if (!ctx_->enabled() || !moduleEnabled_) {
     cancelAllDownHold("disabled");
     return;
   }
@@ -99,12 +98,45 @@ void ImagesRiddle::tick(uint32_t nowMs) {
 
 bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
-  if (strcasecmp(cmd, "RESET_IMAGES") == 0) {
+
+  if (strcasecmp(cmd, "RESET_IMAGES") == 0 || strcasecmp(cmd, "RESET") == 0) {
     ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
     resetState("reset_images");
     publishState();
     return true;
   }
+
+  if (strcasecmp(cmd, "SOLVE_IMAGES") == 0 || strcasecmp(cmd, "SOLVE") == 0) {
+    if (!solved_) {
+      solved_ = true;
+      retriggerArmed_ = false;
+      ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
+      publishSolvedEvent("images");
+      openImagesMaglock();
+    } else {
+      publishState();
+    }
+    return true;
+  }
+
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    cancelAllDownHold("disabled_cmd");
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
+    publishState();
+    return true;
+  }
+
   return false;
 }
 
@@ -132,6 +164,7 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
                " presses=" + b.presses;
   log("INF", msg);
   publishButtonMetricsOnChange(idx);
+  publishState();
 }
 
 void ImagesRiddle::resetState(const char* reason) {
@@ -179,7 +212,6 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
     solved_ = true;
     retriggerArmed_ = false;
 
-    // Gate open for piano on same ESP.
     ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
 
     log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
@@ -230,9 +262,6 @@ void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
 
   bool allPressedNow = true;
   for (int i = 0; i < kButtonCount; i++) {
-    // IMPORTANT: this function is called from inside the per-button scan loop.
-    // At this moment, buttons_[j].cur for j>idx may still contain the previous
-    // tick's value. Read pins directly to avoid reporting a stale all_pressed.
     if (digitalRead(buttons_[i].pin) != LOW) {
       allPressedNow = false;
       break;
@@ -283,7 +312,6 @@ void ImagesRiddle::publishMetricsIfDue() {
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
 
-  // Persist the gate again here too, so a solved-event path always leaves piano enabled.
   ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
 
   String data = String("{\"id\":\"") + rid + "\"}";
@@ -302,8 +330,24 @@ void ImagesRiddle::openImagesMaglock() {
 
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") +
-                "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
+
+  const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
+  const char* rawState = solved_ ? "solved" : "idle";
+
+  String data;
+  data.reserve(220);
+  data = String("{\"id\":\"images\"") +
+         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+         ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
+         ",\"solved\":" + String(solved_ ? "true" : "false") +
+         ",\"raw_state\":\"" + rawState + "\"" +
+         ",\"buttons\":{" +
+         "\"jesus\":" + String(buttons_[3].cur == LOW ? "true" : "false") + "," +
+         "\"blumen\":" + String(buttons_[2].cur == LOW ? "true" : "false") + "," +
+         "\"natur\":" + String(buttons_[0].cur == LOW ? "true" : "false") + "," +
+         "\"puppe\":" + String(buttons_[1].cur == LOW ? "true" : "false") +
+         "}}";
+
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, withSrc(data, nodeId_), nullptr, true);

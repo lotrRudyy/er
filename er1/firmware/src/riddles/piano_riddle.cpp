@@ -59,7 +59,6 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
     detectorStarted_ = true;
   }
 
-  // Start fresh progress on boot.
   solved_ = false;
   solvedPublished_ = false;
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
@@ -78,12 +77,10 @@ void PianoRiddle::setGameMode(bool inGame) {
 }
 
 void PianoRiddle::tick(uint32_t nowMs) {
-  // Piano is only truly active after images has been solved.
   if (detectorStarted_ && gameActive_ && imagesSolvedFromPrefs(prefs_)) {
     piano_detector_loop_once();
   }
   (void)nowMs;
-  // NO TIMEOUT. Ever.
 }
 
 bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
@@ -104,6 +101,23 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
     solvedPublished_ = false;
     if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
     resetProgress("cmd");
+    publishState();
+    return true;
+  }
+  if (equalsCmd(cmd, "SOLVE") || equalsCmd(cmd, "SOLVE_PIANO")) {
+    if (!solved_) {
+      solved_ = true;
+      if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
+      openLock();
+    }
+    if (!solvedPublished_) {
+      publishSolvedEvent();
+      solvedPublished_ = true;
+    }
+    publishState();
+    return true;
+  }
+  if (equalsCmd(cmd, "STATUS")) {
     publishState();
     return true;
   }
@@ -155,14 +169,23 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
   log("INF", compat, data);
 
-  // Piano remains in standby until images is solved, even though both are on the same ESP.
   if (!ctx_ || !gameActive_ || !imagesSolvedFromPrefs(prefs_) || !moduleEnabled_ || !ctx_->enabled()) return;
-  if (!isAccepted) return;
   if (predSafe[0] == '\0') return;
+
+  if (isAccepted) {
+    appendPlayed(predSafe);
+    appendPlayedEncoded(encodeWhiteKey(predSafe));
+    appendTopPrediction(predSafe);
+    appendCombinedPrediction(predSafe);
+  } else {
+    appendTopPrediction(predSafe);
+    appendCombinedPrediction(predSafe);
+    publishState();
+    return;
+  }
 
   const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 
-  // Correct next note -> append and advance
   if (expected && strcasecmp(predSafe, expected) == 0) {
     if (playedLen_ < kSequenceLen) {
       strncpy(played_[playedLen_], predSafe, kNoteMaxLen - 1);
@@ -171,33 +194,25 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     }
     seqPos_++;
 
-    // Emit sequence after every accepted note
     logCurrentSequence();
     publishState();
 
     if (seqPos_ >= kSequenceLen) {
-      // Only open lock the first time this riddle is solved
       if (!solved_) {
         openLock();
         solved_ = true;
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
-
-      // Publish solved event once
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
       }
-
-      // Rearm only for visual/state reset, not for another unlock
       resetProgress("solved");
       publishState();
     }
     return;
   }
 
-  // Mismatch: reset completely, then if this note can start the sequence,
-  // start with it (progress=1).
   resetProgress("mismatch");
   if (strcasecmp(predSafe, kSequence[0]) == 0) {
     seqPos_ = 1;
@@ -216,14 +231,42 @@ void PianoRiddle::publishState() {
   const bool imagesReady = imagesSolvedFromPrefs(prefs_);
   const bool effectiveActive = gameActive_ && imagesReady;
 
-  String data = String("{\"mode\":\"") + (effectiveActive ? "ingame" : "standby") +
-                "\",\"solved\":" + (solved_ ? "true" : "false") +
-                ",\"enabled\":" + (effectiveActive && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
-                ",\"images_ready\":" + (imagesReady ? "true" : "false") +
-                ",\"progress\":" + String(seqPos_) + "}";
+  String seqJson = "[";
+  for (size_t i = 0; i < playedLen_; ++i) {
+    if (i > 0) seqJson += ",";
+    seqJson += "\"";
+    seqJson += played_[i];
+    seqJson += "\"";
+  }
+  seqJson += "]";
+
+  String seqEncodedJson = "[";
+  for (size_t i = 0; i < playedLen_; ++i) {
+    if (i > 0) seqEncodedJson += ",";
+    seqEncodedJson += "\"";
+    seqEncodedJson += encodeWhiteKey(played_[i]);
+    seqEncodedJson += "\"";
+  }
+  seqEncodedJson += "]";
+
+  String full = String("{\"id\":\"") + srcId_ +
+                "\",\"mode\":\"" + (effectiveActive ? "ingame" : "standby") +
+                "\",\"enabled\":" + (effectiveActive && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
+                ",\"solved\":" + (solved_ ? "true" : "false") +
+                ",\"raw_state\":\"" + (solved_ ? "solved" : (seqPos_ > 0 ? "progress" : "idle")) +
+                "\",\"images_ready\":" + (imagesReady ? "true" : "false") +
+                ",\"progress\":" + String(seqPos_) +
+                ",\"played_notes\":" + joinJsonArray(playedNotes_, playedNotesLen_) +
+                ",\"played_encoded_notes\":" + joinJsonArray(playedEncodedNotes_, playedEncodedNotesLen_) +
+                ",\"top_predictions\":" + joinJsonArray(topPredictions_, topPredictionsLen_) +
+                ",\"played_encoded_plus_predictions\":" + joinJsonArray(combinedPredictions_, combinedPredictionsLen_) +
+                ",\"sequence\":" + seqJson +
+                ",\"sequence_encoded\":" + seqEncodedJson +
+                "}";
+
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, withSrc(data, srcId_), nullptr, true);
+    publish(topics.state.c_str(), "state", 1, withSrc(full, srcId_), nullptr, true);
   }
 }
 
@@ -250,6 +293,10 @@ void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;
   playedLen_ = 0;
   memset(played_, 0, sizeof(played_));
+  playedNotesLen_ = 0;
+  playedEncodedNotesLen_ = 0;
+  topPredictionsLen_ = 0;
+  combinedPredictionsLen_ = 0;
   if (reason) {
     String data = String("{\"reason\":\"") + reason + "\"}";
     log("DBG", "PIANO_PROGRESS_RESET", data);
@@ -268,6 +315,52 @@ void PianoRiddle::logCurrentSequence() const {
   String data = String("{\"seq\":\"") + seq + "\",\"progress\":" + String(seqPos_) + "}";
   log("INF", "PIANO_SEQ", data);
   log("DBG", "PIANO_SEQ", data);
+}
+
+String PianoRiddle::encodeWhiteKey(const char* note) const {
+  if (!note || !note[0]) return "";
+  struct MapEntry { const char* note; const char* code; };
+  static const MapEntry kMap[] = {
+    {"f2","A"},{"g2","B"},{"a2","C"},{"b2","D"},
+    {"c3","E"},{"d3","F"},{"e3","G"},{"f3","H"},
+    {"g3","I"},{"a3","J"},{"b3","K"},{"c4","L"},
+    {"d4","M"},{"e4","N"},{"f4","O"},{"g4","P"},
+    {"a4","Q"},{"b4","R"},{"c5","S"},{"d5","T"},
+    {"e5","U"},{"f5","V"},{"g5","W"},{"a5","X"},
+    {"b5","Y"},{"c6","Z"}
+  };
+  for (const auto& entry : kMap) {
+    if (strcasecmp(note, entry.note) == 0) return String(entry.code);
+  }
+  return String(note);
+}
+
+String PianoRiddle::joinJsonArray(const String* values, size_t count) const {
+  String out = "[";
+  for (size_t i = 0; i < count; ++i) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += values[i];
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
+void PianoRiddle::appendPlayed(const char* note) {
+  if (playedNotesLen_ < kHistoryMax) playedNotes_[playedNotesLen_++] = String(note);
+}
+
+void PianoRiddle::appendPlayedEncoded(const String& encoded) {
+  if (playedEncodedNotesLen_ < kHistoryMax) playedEncodedNotes_[playedEncodedNotesLen_++] = encoded;
+}
+
+void PianoRiddle::appendTopPrediction(const char* note) {
+  if (topPredictionsLen_ < kHistoryMax) topPredictions_[topPredictionsLen_++] = String(note);
+}
+
+void PianoRiddle::appendCombinedPrediction(const char* note) {
+  if (combinedPredictionsLen_ < kHistoryMax) combinedPredictions_[combinedPredictionsLen_++] = encodeWhiteKey(note);
 }
 
 bool PianoRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,

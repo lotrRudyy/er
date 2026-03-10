@@ -17,7 +17,7 @@
 $fn = 128;
 
 // ===================== USER SETTINGS =====================
-constellation_idx = 4;     // 0=Leo,1=Pisces,2=Libra,3=Aquarius,4=Sagittarius,5=Scorpio,6=Gemini,7=Only Purple
+constellation_idx = 2;     // 0=Leo,1=Pisces,2=Libra,3=Aquarius,4=Sagittarius,5=Scorpio,6=Gemini,7=Only Purple
 mode = "3D";               // "2D" for SVG/DXF export, "3D" for preview/printing
 
 // Reference geometry
@@ -67,6 +67,7 @@ purple_fixed = [
   [-27.744, 62.246],
   [56.916, 54.136],
   [-60.857, 51.901],
+  [31, 36],
   [-42.013, 22.437],
   [54.238, 20.798],
   [-67.640, 19.542],
@@ -143,7 +144,7 @@ zodiac_fixed = [
     [5, -43],
     [-17, -15],
     [33, -12],
-    [28, 35] // de led isch kaputt glab i
+    [68, 38] // de led isch kaputt glab i
   ],
 
   // 4 — Sagittarius
@@ -164,11 +165,11 @@ zodiac_fixed = [
   [
     [-25, -47],
     [-53, -60],
-    [-65, -40],
-    [-58, -25],
-    [-47, -5],
-    [-18, 4],
-    [-6, -13],
+    [-62, -41],
+    [-54, -21],
+    [-47, 2],
+    [-6, -9.5],
+    [67, 40],
     [41, 50],
     [20, 48],
     [37, 19]

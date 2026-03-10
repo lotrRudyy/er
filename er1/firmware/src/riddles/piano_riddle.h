@@ -37,6 +37,13 @@ private:
   bool equalsCmd(const char* cmd, const char* ref) const;
   void setModuleEnabled(bool en);
 
+  String encodeWhiteKey(const char* note) const;
+  String joinJsonArray(const String* values, size_t count) const;
+  void appendPlayed(const char* note);
+  void appendPlayedEncoded(const String& encoded);
+  void appendTopPrediction(const char* note);
+  void appendCombinedPrediction(const char* note);
+
   Core::NodeContext* ctx_ = nullptr;
   Preferences* prefs_ = nullptr;
 
@@ -69,7 +76,21 @@ private:
   };
   */
 
-  static constexpr size_t kNoteMaxLen = 8;  // incl null terminator
+  static constexpr size_t kNoteMaxLen = 8;
+  static constexpr size_t kHistoryMax = 128;
+
   char played_[kSequenceLen][kNoteMaxLen] = {{0}};
   size_t playedLen_ = 0;
+
+  String playedNotes_[kHistoryMax];
+  size_t playedNotesLen_ = 0;
+
+  String playedEncodedNotes_[kHistoryMax];
+  size_t playedEncodedNotesLen_ = 0;
+
+  String topPredictions_[kHistoryMax];
+  size_t topPredictionsLen_ = 0;
+
+  String combinedPredictions_[kHistoryMax];
+  size_t combinedPredictionsLen_ = 0;
 };

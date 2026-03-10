@@ -42,7 +42,7 @@ private:
   String nodeId_;
 
   static constexpr int kButtonCount = 4;
-  static constexpr int kButtonPins[kButtonCount] = {27, 13, 14, 32}; //13: Puppe, 14: Blumen, 32: Jesus, 27: Berge
+  static constexpr int kButtonPins[kButtonCount] = {27, 13, 14, 32}; // 27:natur, 13:puppe, 14:blumen, 32:jesus
   static constexpr uint32_t kDebounceMs = 30;
   static constexpr uint32_t kEdgeMinLogMs = 100;
   static constexpr uint32_t kMetricIntervalMs = 1000;
@@ -52,6 +52,7 @@ private:
   bool solved_ = false;
   bool retriggerArmed_ = true;
   bool gameActive_ = false;
+  bool moduleEnabled_ = true;
   bool allDownHoldActive_ = false;
   uint32_t allDownHoldStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
