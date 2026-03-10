@@ -1,5 +1,6 @@
 #include "star_sky_riddle.h"
 #include <cstring>
+#include <strings.h>
 
 namespace {
 constexpr uint32_t kLedcFreq = 1000;
@@ -10,6 +11,7 @@ constexpr const char* kPrefsKey = "candles";
 void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "star_sky";
+  (void)node;
   // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
   loadState();
   for (int i = 0; i < 4; i++) {
@@ -22,6 +24,7 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   cycleStartMs_ = millis();
   lastMetricMs_ = millis();
   gameActive_ = false;
+  moduleEnabled_ = true;
   setAllStripsOff();
   publishState();
 }
@@ -37,7 +40,7 @@ void StarSkyRiddle::setGameMode(bool inGame) {
 
 void StarSkyRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
-  if (gameActive_ && ctx_->enabled()) {
+  if (gameActive_ && moduleEnabled_ && ctx_->enabled()) {
     applyPattern(nowMs);
   } else {
     setAllStripsOff();
@@ -46,7 +49,9 @@ void StarSkyRiddle::tick(uint32_t nowMs) {
 }
 
 bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
-  if (cmd && strcasecmp(cmd, "RESET_STAR_SKY") == 0) {
+  if (!cmd) return false;
+
+  if (strcasecmp(cmd, "RESET_STAR_SKY") == 0 || strcasecmp(cmd, "RESET") == 0) {
     bool wasSolved = candlesSolved_;
     candlesSolved_ = false;
     persistState();
@@ -57,7 +62,37 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
     return true;
   }
 
-  if (cmd && String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_STAR_SKY") == 0) {
+    if (!gameActive_) setGameMode(true);
+    if (!candlesSolved_) {
+      candlesSolved_ = true;
+      persistState();
+      cycleStartMs_ = millis();
+      log("INF", "STAR_SKY_FORCE_SOLVE");
+    }
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    setAllStripsOff();
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
+    publishState();
+    return true;
+  }
+
+  if (String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
     if (!gameActive_) setGameMode(true);
     if (!candlesSolved_) {
       candlesSolved_ = true;
@@ -190,7 +225,19 @@ void StarSkyRiddle::loadState() {
 
 void StarSkyRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"candles\":" + (candlesSolved_ ? "true" : "false") + "}";
+
+  const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
+  const char* rawState = candlesSolved_ ? "solved" : "idle";
+
+  String data =
+      String("{\"id\":\"star_sky\"") +
+      ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+      ",\"enabled\":" + (effectiveEnabled ? "true" : "false") +
+      ",\"solved\":" + (candlesSolved_ ? "true" : "false") +
+      ",\"raw_state\":\"" + rawState + "\"" +
+      ",\"candles\":" + (candlesSolved_ ? "true" : "false") +
+      "}";
+
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, data, nullptr, true);

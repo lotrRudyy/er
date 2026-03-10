@@ -17,7 +17,7 @@
 $fn = 128;
 
 // ===================== USER SETTINGS =====================
-constellation_idx = 2;     // 0=Leo,1=Pisces,2=Libra,3=Aquarius,4=Sagittarius,5=Scorpio,6=Gemini,7=Only Purple
+constellation_idx = 7;     // 0=Leo,1=Pisces,2=Libra,3=Aquarius,4=Sagittarius,5=Scorpio,6=Gemini,7=Only Purple
 mode = "3D";               // "2D" for SVG/DXF export, "3D" for preview/printing
 
 // Reference geometry

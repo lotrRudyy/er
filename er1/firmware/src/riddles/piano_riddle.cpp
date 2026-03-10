@@ -64,6 +64,7 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
   resetProgress("boot");
   gameActive_ = false;
+  moduleEnabled_ = true;
   publishState();
 }
 
@@ -77,7 +78,7 @@ void PianoRiddle::setGameMode(bool inGame) {
 }
 
 void PianoRiddle::tick(uint32_t nowMs) {
-  if (detectorStarted_ && gameActive_ && imagesSolvedFromPrefs(prefs_)) {
+  if (detectorStarted_ && gameActive_ && imagesSolvedFromPrefs(prefs_) && moduleEnabled_ && ctx_ && ctx_->enabled()) {
     piano_detector_loop_once();
   }
   (void)nowMs;

@@ -1,5 +1,6 @@
 #include "chess_riddle.h"
 #include <cstring>
+#include <strings.h>
 
 // W5500 CS pin used by core ethernet bring-up.
 // Keep it HIGH whenever touching RFID readers.
@@ -31,6 +32,7 @@ void ChessRiddle::begin(Core::NodeContext& ctx) {
 
   lastPollMs_ = millis();
   gameActive_ = false;
+  moduleEnabled_ = true;
   publishState();
 }
 
@@ -42,6 +44,9 @@ void ChessRiddle::setGameMode(bool inGame) {
 
 void ChessRiddle::tick(uint32_t nowMs) {
   if (!gameActive_) return;
+  if (!moduleEnabled_) return;
+  if (!ctx_ || !ctx_->enabled()) return;
+
   // Round robin: one reader per tick interval
   if (nowMs - lastPollMs_ < perReaderMs_) return;
   lastPollMs_ = nowMs;
@@ -71,11 +76,39 @@ void ChessRiddle::tick(uint32_t nowMs) {
 
 bool ChessRiddle::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
-  if (strcasecmp(cmd, "RESET_CHESS") == 0) {
+
+  if (strcasecmp(cmd, "RESET_CHESS") == 0 || strcasecmp(cmd, "RESET") == 0) {
     resetState("reset_chess");
     publishState();
     return true;
   }
+
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_CHESS") == 0) {
+    riddleState_ = RiddleState::Solved;
+    lastSolvedMs_ = millis();
+    solvedCount_++;
+    publishSolvedEvent();
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
+    publishState();
+    return true;
+  }
+
   // Keep same behavior: log unknown commands, but don't crash.
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
@@ -303,10 +336,15 @@ void ChessRiddle::publishState() {
   }
 
   const String data =
-      String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") +
-      "\",\"state\":\"" + stateName +
-      "\",\"solved_count\":" + solvedCount_ +
-      ",\"enabled\":" + (gameActive_ && ctx_->enabled() ? "true" : "false") + "}";
+      String("{\"id\":\"chess\"") +
+      ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+      ",\"enabled\":" + ((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? String("true") : String("false")) +
+      ",\"solved\":" + ((riddleState_ == RiddleState::Solved) ? String("true") : String("false")) +
+      ",\"raw_state\":\"" + stateName + "\"" +
+      ",\"state\":\"" + stateName + "\"" +
+      ",\"solved_count\":" + solvedCount_ +
+      ",\"reader_labels\":" + readerLabelsJson() +
+      "}";
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
@@ -394,6 +432,20 @@ void ChessRiddle::logFullTable() const {
   }
 
   log("INF", msg);
+}
+
+String ChessRiddle::readerLabelsJson() const {
+  String out = "{";
+  out += "\"queen\":\"";
+  out += presentLabelFromUid(readerUid_[0]);
+  out += "\",\"knight\":\"";
+  out += presentLabelFromUid(readerUid_[1]);
+  out += "\",\"rook\":\"";
+  out += presentLabelFromUid(readerUid_[2]);
+  out += "\",\"king\":\"";
+  out += presentLabelFromUid(readerUid_[3]);
+  out += "\"}";
+  return out;
 }
 
 void ChessRiddle::log(const char* level, const String& msg) const {

@@ -29,6 +29,9 @@ private:
     {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (pov von spieler: links)
   };
 
+  static constexpr size_t kAttemptHistoryMax = 64;
+  static constexpr size_t kAttemptStringMax = 64;
+
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
@@ -46,13 +49,18 @@ private:
   void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
+  const char* labelForUid(const byte* uid, uint8_t len) const;
+  String currentOrderString() const;
+  String attemptedStarSignsJson() const;
+  String readerLabelsJson() const;
+  void appendAttemptedOrder();
+
   Core::NodeContext* ctx_ = nullptr;
   Preferences* prefs_ = nullptr;
   MFRC522 readers_[kReaderCount] = {
     MFRC522(kRc522SsPins[0], kRc522RstPins[0]),
     MFRC522(kRc522SsPins[1], kRc522RstPins[1]),
     MFRC522(kRc522SsPins[2], kRc522RstPins[2])};
-
 
   bool tagValid_[kReaderCount] = {false, false, false};
   byte tagUid_[kReaderCount][4] = {{0}};
@@ -68,4 +76,8 @@ private:
   uint32_t lastMetricMs_ = 0;
   mutable uint32_t errorCount_ = 0;
   bool gameActive_ = false;
+  bool moduleEnabled_ = true;
+
+  char attemptedStarSigns_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
+  size_t attemptedStarSignsCount_ = 0;
 };

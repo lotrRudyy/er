@@ -21,7 +21,7 @@ public:
 
 private:
   enum class GameMode : uint8_t {
-    Off = 0,
+    Standby = 0,
     InGame,
     Maint
   };
@@ -87,7 +87,7 @@ private:
   Core::NodeContext* ctx_ = nullptr;
   MaglockDriver driver_;
   Preferences* prefs_ = nullptr;
-  GameMode gameMode_ = GameMode::Off;
+  GameMode gameMode_ = GameMode::Standby;
   uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;

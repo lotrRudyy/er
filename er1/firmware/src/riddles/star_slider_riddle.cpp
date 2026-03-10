@@ -1,6 +1,7 @@
 #include "star_slider_riddle.h"
 
 #include <cstring>
+#include <strings.h>
 
 void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
@@ -41,13 +42,12 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   for (uint8_t i = 0; i < kReaderCount; i++) {
     readers_[i].PCD_Init();
 
-    // 🔥 Max antenna gain (largest read radius)
+    // Max antenna gain (largest read radius)
     readers_[i].PCD_SetAntennaGain(MFRC522::RxGain_max);
 
     tagValid_[i] = false;
     tagSize_[i] = 0;
   }
-
 
   bool hasStoredSolve = prefs_ && prefs_->isKey("solved");
   solvedFlag_ = prefs_ ? prefs_->getBool("solved", false) : false;
@@ -60,7 +60,12 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
     log("INF", "STATE default solved=0 (no prefs)");
   }
   gameActive_ = false;
+  moduleEnabled_ = true;
   solvedFlag_ = false;
+  attemptedStarSignsCount_ = 0;
+  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
+    attemptedStarSigns_[i][0] = '\0';
+  }
   if (prefs_) prefs_->putBool("solved", false);
   publishState();
 }
@@ -83,9 +88,38 @@ bool StarSliderRiddle::onCmd(const char* cmd, const char* payload) {
   (void)payload;
   if (!cmd) return false;
 
-  // Images-style dedicated reset command (case-insensitive).
-  if (strcasecmp(cmd, "RESET_STAR_SLIDER") == 0) {
+  if (strcasecmp(cmd, "RESET_STAR_SLIDER") == 0 || strcasecmp(cmd, "RESET") == 0) {
     resetState("reset_star_slider");
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_STAR_SLIDER") == 0) {
+    solvedFlag_ = true;
+    solveAttempts_++;
+    solveSuccess_++;
+    if (prefs_) {
+      prefs_->putBool("solved", true);
+      log("INF", "STATE save solved=1");
+    }
+    publishSolvedEvent(solveAttempts_);
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
     publishState();
     return true;
   }
@@ -100,6 +134,10 @@ void StarSliderRiddle::resetState(const char* reason) {
   solvedFlag_ = false;
   solveAttempts_ = 0;
   solveSuccess_ = 0;
+  attemptedStarSignsCount_ = 0;
+  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
+    attemptedStarSigns_[i][0] = '\0';
+  }
 
   // Clear last read snapshot.
   for (uint8_t i = 0; i < kReaderCount; i++) {
@@ -210,6 +248,62 @@ bool StarSliderRiddle::isCurrentPatternCorrect() const {
   return true;
 }
 
+const char* StarSliderRiddle::labelForUid(const byte* uid, uint8_t len) const {
+  if (len < 4 || !uid) return "none";
+  if (uidEquals(uid, kUidExpected[0], 4)) return "scorpio";
+  if (uidEquals(uid, kUidExpected[1], 4)) return "aquarius";
+  if (uidEquals(uid, kUidExpected[2], 4)) return "libra";
+  return "unknown";
+}
+
+String StarSliderRiddle::currentOrderString() const {
+  String out;
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    if (i > 0) out += "-";
+    if (tagValid_[i] && tagSize_[i] >= 4) {
+      out += labelForUid(tagUid_[i], tagSize_[i]);
+    } else {
+      out += "none";
+    }
+  }
+  return out;
+}
+
+void StarSliderRiddle::appendAttemptedOrder() {
+  if (attemptedStarSignsCount_ >= kAttemptHistoryMax) return;
+  String order = currentOrderString();
+  order.toCharArray(attemptedStarSigns_[attemptedStarSignsCount_], kAttemptStringMax);
+  attemptedStarSignsCount_++;
+}
+
+String StarSliderRiddle::attemptedStarSignsJson() const {
+  String out = "[";
+  for (size_t i = 0; i < attemptedStarSignsCount_; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += attemptedStarSigns_[i];
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
+String StarSliderRiddle::readerLabelsJson() const {
+  String out = "[";
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    if (tagValid_[i] && tagSize_[i] >= 4) {
+      out += labelForUid(tagUid_[i], tagSize_[i]);
+    } else {
+      out += "none";
+    }
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
 void StarSliderRiddle::evaluateSolveAttempt() {
   // Snapshot should be taken ONLY here (button press).
   // Clear snapshot first so stale reads can't survive a failed read.
@@ -225,6 +319,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
   }
 
   solveAttempts_++;
+  appendAttemptedOrder();
 
   if (isCurrentPatternCorrect()) {
     solvedFlag_ = true;
@@ -256,6 +351,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
     }
     data += "}";
     log("INF", "pattern WRONG", data);
+    publishState();
   }
 }
 
@@ -271,7 +367,7 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
   // Evaluate on PRESS (active-low), not release.
   if (raw == LOW && !btnWasPressed_) {
     btnWasPressed_ = true;
-    if (gameActive_ && ctx_ && ctx_->enabled()) {
+    if (gameActive_ && moduleEnabled_ && ctx_ && ctx_->enabled()) {
       evaluateSolveAttempt();
     } else {
       log("WRN", "button press while DISABLED");
@@ -309,9 +405,18 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
 
 void StarSliderRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solvedFlag_ ? "true" : "false") +
-                ",\"attempts\":" + solveAttempts_ +
-                ",\"success\":" + solveSuccess_ + "}";
+  String data =
+      String("{\"id\":\"star_slider\"") +
+      ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+      ",\"enabled\":" + ((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? String("true") : String("false")) +
+      ",\"solved\":" + (solvedFlag_ ? "true" : "false") +
+      ",\"raw_state\":\"" + (solvedFlag_ ? "solved" : "idle") + "\"" +
+      ",\"tries\":" + String(solveAttempts_) +
+      ",\"attempted_star_signs\":" + attemptedStarSignsJson() +
+      ",\"reader_labels\":" + readerLabelsJson() +
+      ",\"attempts\":" + String(solveAttempts_) +
+      ",\"success\":" + String(solveSuccess_) +
+      "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, data, nullptr, true);
