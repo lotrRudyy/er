@@ -153,12 +153,12 @@ void LightingController::tick(uint32_t nowMs) {
     bootStatePublished_ = true;
   }
 
-  if (pianoTorchPending_ && (int32_t)(nowMs - pianoTorchDueMs_) >= 0) {
+  if (pianoTorchPending_ && (nowMs - pianoTorchDueMs_ >= kProgressDelayMs)) {
     pianoTorchPending_ = false;
     runPianoTorch("piano_delay");
-  }
+}
 
-  if (chessRoomPending_ && (int32_t)(nowMs - chessRoomDueMs_) >= 0) {
+  if (chessRoomPending_ && (nowMs - chessRoomDueMs_ >= kProgressDelayMs)) {
     chessRoomPending_ = false;
     runChessRoom("chess_delay");
   }
@@ -369,7 +369,7 @@ void LightingController::handleProgressEvent(const char* rid) {
     publishChangedStates(changed, "piano_solved");
 
     pianoTorchPending_ = true;
-    pianoTorchDueMs_ = millis() + kProgressDelayMs;
+    pianoTorchDueMs_ = millis();   // store start time
 
     log("INF", "LIGHT_PIANO_SOLVED");
     return;
@@ -383,7 +383,7 @@ void LightingController::handleProgressEvent(const char* rid) {
     publishChangedStates(changed, "chess_solved");
 
     chessRoomPending_ = true;
-    chessRoomDueMs_ = millis() + kProgressDelayMs;
+    chessRoomDueMs_ = millis();
 
     log("INF", "LIGHT_CHESS_SOLVED");
     return;
