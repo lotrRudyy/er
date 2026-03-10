@@ -7,11 +7,17 @@ param(
 )
 
 # ota.ps1
-# - Supports:
-#     pwsh -File ota.ps1 -Target maglock
-#     pwsh -File ota.ps1 -Target maglock lighting candles
-#     pwsh -File ota.ps1 -Target all
-# - In multi-target mode, press Q to stop after the current node finishes.
+# Supports:
+#   pwsh -File ota.ps1 -Target maglock
+#   pwsh -File ota.ps1 -Target maglock lighting candles
+#   pwsh -File ota.ps1 -Target all
+#
+# In multi-target mode:
+#   Press Q to stop after the current node finishes.
+#
+# Safety:
+# - Each target is resolved from the deployment map independently.
+# - Guard rails prevent Env/Dev mismatches (for example building lighting and flashing maglock).
 
 $scriptDir = Split-Path -Parent $PSCommandPath
 
@@ -43,18 +49,19 @@ function Resolve-OtaTargets {
         [string[]]$RequestedTargets
     )
 
-    if (-not $RequestedTargets -or $RequestedTargets.Count -eq 0) {
+    $requested = @($RequestedTargets)
+    if (-not $requested -or $requested.Length -eq 0) {
         throw "Usage: ota.ps1 -Target <device...|all>"
     }
 
-    if ($RequestedTargets -contains "all") {
-        return $allTargets
+    if ($requested -contains "all") {
+        return @($allTargets)
     }
 
     $seen = @{}
     $resolved = New-Object System.Collections.Generic.List[string]
 
-    foreach ($t in $RequestedTargets) {
+    foreach ($t in $requested) {
         if (-not $deployments.ContainsKey($t)) {
             throw "Unknown target '$t'"
         }
@@ -64,7 +71,7 @@ function Resolve-OtaTargets {
         }
     }
 
-    return $resolved.ToArray()
+    return @($resolved.ToArray())
 }
 
 function Get-FirmwareMainPath {
@@ -128,6 +135,34 @@ function Invoke-ProcessWithTimeout {
     }
 }
 
+function Assert-TargetMapping {
+    param(
+        [Parameter(Mandatory=$true)][string]$SingleTarget,
+        [Parameter(Mandatory=$true)][string]$ResolvedEnv,
+        [Parameter(Mandatory=$true)][string]$ResolvedDev,
+        [Parameter(Mandatory=$true)][string]$CmdNode,
+        [Parameter(Mandatory=$true)][string]$FirmwareName
+    )
+
+    $cfg = $deployments[$SingleTarget]
+    if (-not $cfg) {
+        throw "Internal error: deployment map missing for '$SingleTarget'"
+    }
+
+    if ($ResolvedEnv -ne $cfg.Env) {
+        throw "Guard failure for '$SingleTarget': Env mismatch. Expected '$($cfg.Env)', got '$ResolvedEnv'."
+    }
+    if ($ResolvedDev -ne $cfg.Dev) {
+        throw "Guard failure for '$SingleTarget': Dev mismatch. Expected '$($cfg.Dev)', got '$ResolvedDev'."
+    }
+    if ($CmdNode -ne $cfg.CmdNode) {
+        throw "Guard failure for '$SingleTarget': CmdNode mismatch. Expected '$($cfg.CmdNode)', got '$CmdNode'."
+    }
+    if ($FirmwareName -ne $cfg.FirmwareName) {
+        throw "Guard failure for '$SingleTarget': FirmwareName mismatch. Expected '$($cfg.FirmwareName)', got '$FirmwareName'."
+    }
+}
+
 function Invoke-OtaSingleTarget {
     param(
         [Parameter(Mandatory=$true)][string]$SingleTarget,
@@ -143,10 +178,20 @@ function Invoke-OtaSingleTarget {
         }
 
         $cfg = $deployments[$SingleTarget]
-        if (-not $Env) { $Env = $cfg.Env }
-        if (-not $Dev) { $Dev = $cfg.Dev }
+
+        # Resolve strictly from the deployment map unless the caller explicitly
+        # provides matching values. This prevents cross-target mixups.
+        if ([string]::IsNullOrWhiteSpace($Env)) {
+            $Env = $cfg.Env
+        }
+        if ([string]::IsNullOrWhiteSpace($Dev)) {
+            $Dev = $cfg.Dev
+        }
+
         $cmdNode = $cfg.CmdNode
         $firmwareName = $cfg.FirmwareName
+
+        Assert-TargetMapping -SingleTarget $SingleTarget -ResolvedEnv $Env -ResolvedDev $Dev -CmdNode $cmdNode -FirmwareName $firmwareName
 
         Write-Host ("== TARGET = {0}  Env={1}  Dev={2}  CmdNode={3}  Firmware={4} ==" -f $SingleTarget, $Env, $Dev, $cmdNode, $firmwareName)
 
@@ -317,7 +362,9 @@ foreach ($singleTarget in $resolvedTargets) {
     Write-Host ("================ OTA {0} ================" -f $singleTarget) -ForegroundColor Cyan
 
     try {
-        Invoke-OtaChildWithSoftStopSupport -SingleTarget $singleTarget -NoBuild:$NoBuild
+        # IMPORTANT: in multi-target mode, do not forward outer Env/Dev.
+        # Each child run must resolve its own correct deployment mapping.
+        Invoke-OtaChildWithSoftStopSupport -SingleTarget ([string]$singleTarget) -NoBuild:$NoBuild
     }
     catch {
         $failures += ("{0}: {1}" -f $singleTarget, $_.Exception.Message)
