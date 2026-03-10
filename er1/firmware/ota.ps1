@@ -248,15 +248,20 @@ function Invoke-OtaSingleTarget {
         $sshExe = "C:\WINDOWS\System32\OpenSSH\ssh.exe"
         $scpExe = "C:\WINDOWS\System32\OpenSSH\scp.exe"
 
-        $sshBaseArgs = @(
+        # Fully non-interactive and quiet.
+        # NUL is correct on Windows for "discard known_hosts writes".
+        $sshCommonArgs = @(
             "-o","BatchMode=yes",
             "-o","StrictHostKeyChecking=no",
-            "-o","UserKnownHostsFile=/dev/null",
+            "-o","UserKnownHostsFile=NUL",
+            "-o","LogLevel=ERROR",
             "-o","ConnectTimeout=10",
             "-o","ServerAliveInterval=2",
-            "-o","ServerAliveCountMax=4",
-            "-q"
+            "-o","ServerAliveCountMax=4"
         )
+
+        # ssh only: -n disconnects stdin so it cannot wait for keyboard input
+        $sshExecArgs = @("-n") + $sshCommonArgs
 
         function Get-FileSha256Hex {
             param([string]$Path)
@@ -266,16 +271,28 @@ function Invoke-OtaSingleTarget {
         $fwSize = (Get-Item $firmwarePath).Length
         Write-Host ("== Uploading firmware to Pi as {0}  ({1} bytes) ==" -f $firmwareName, $fwSize)
 
-        & $sshExe @sshBaseArgs "$piUser@$piHost" "mkdir -p '$piFirmwareDir'"
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to create firmware directory on Pi at $piFirmwareDir"
+        & $sshExe @sshExecArgs "$piUser@$piHost" "mkdir -p '$piFirmwareDir'"
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -ne 0) {
+            throw "Failed to create firmware directory on Pi at $piFirmwareDir (exit $sshExit)"
         }
 
         $remotePath = "$piUser@${piHost}:$piFirmwareDir/$firmwareName"
-        $scpArgs = @("-B", "-C") + $sshBaseArgs + @($firmwarePath, $remotePath)
+
+        # -B = batch mode
+        # -q = quiet
+        # -O = force legacy SCP protocol (avoids some Windows/OpenSSH weirdness)
+        $scpArgs = @("-B", "-q", "-O", "-C") + $sshCommonArgs + @($firmwarePath, $remotePath)
+
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        Invoke-ProcessWithTimeout -FilePath $scpExe -ArgumentList $scpArgs -TimeoutSec 60 -What "SCP upload"
+        & $scpExe @scpArgs
+        $scpExit = $LASTEXITCODE
         $sw.Stop()
+
+        if ($scpExit -ne 0) {
+            throw "SCP upload failed (exit $scpExit)"
+        }
+
         Write-Host ("== Upload finished in {0:n2}s ==" -f $sw.Elapsed.TotalSeconds)
 
         $url = "http://$httpHost/node_firmware/$firmwareName"
@@ -307,9 +324,10 @@ function Invoke-OtaSingleTarget {
             "--up-max", "10"
         ) -join " "
 
-        & $sshExe @sshBaseArgs "$piUser@$piHost" $remoteCmd
-        if ($LASTEXITCODE -ne 0) {
-            throw "ota_publish.py failed"
+        & $sshExe @sshExecArgs "$piUser@$piHost" $remoteCmd
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -ne 0) {
+            throw "ota_publish.py failed (exit $sshExit)"
         }
 
         Write-Host "== DONE =="
