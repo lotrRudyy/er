@@ -664,7 +664,7 @@ function er1 {
         }
         "ota" {
             $target = if ($cmdArgs -and $cmdArgs.Count -ge 1) { $cmdArgs[0] } else { $null }
-            if (-not $target) { throw "Usage: er1 ota <device>" }
+            if (-not $target) { throw "Usage: er1 ota <device|all>" }
 
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
 

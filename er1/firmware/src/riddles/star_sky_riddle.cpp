@@ -56,7 +56,7 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
     }
     return true;
   }
-  
+
   String message(cmd ? cmd : "");
   if (payload && payload[0]) {
     message += " ";

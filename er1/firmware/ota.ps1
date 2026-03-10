@@ -1,10 +1,53 @@
 param(
-    [ValidateSet("maglock","lighting","images_piano","chess","knocking","candles","star_sky","star_slider","stop_timer")]
+    [Parameter(Mandatory=$true)]
+    [ValidateSet("all","maglock","lighting","images_piano","chess","knocking","candles","star_sky","star_slider")]
     [string]$Target,
     [string]$Env,
     [string]$Dev,
-    [switch]$NoBuild
+    [string]$CmdNode
 )
+
+if ($Target -eq "all") {
+    $nodes = @(
+        "maglock",
+        "lighting",
+        "images_piano",
+        "chess",
+        "knocking",
+        "candles",
+        "star_sky",
+        "star_slider"
+    )
+
+    $failures = @()
+
+    foreach ($n in $nodes) {
+        Write-Host ""
+        Write-Host "===== OTA $n =====" -ForegroundColor Cyan
+
+        try {
+            & pwsh -NoProfile -File $PSCommandPath -Target $n
+            if ($LASTEXITCODE -ne 0) {
+                throw "ota.ps1 failed for $n (exit $LASTEXITCODE)"
+            }
+        }
+        catch {
+            Write-Host "FAILED: $n" -ForegroundColor Red
+            $failures += $n
+        }
+    }
+
+    Write-Host ""
+    if ($failures.Count -gt 0) {
+        Write-Host "The following nodes failed:" -ForegroundColor Red
+        $failures | ForEach-Object { Write-Host " - $_" }
+        exit 1
+    }
+    else {
+        Write-Host "All OTA updates finished successfully." -ForegroundColor Green
+        exit 0
+    }
+}
 
 # ota.ps1 (Phase 2)
 # - Legacy OTA fields removed: no more "build" token passed to ota_publish.py
@@ -27,7 +70,6 @@ try {
       "candles"      = @{ Env="candles";      Dev="candles";      CmdNode="candles";      FirmwareName="candles.bin" }
       "star_sky"     = @{ Env="star_sky";     Dev="star_sky";     CmdNode="star_sky";     FirmwareName="star_sky.bin" }
       "star_slider"  = @{ Env="star_slider";  Dev="star_slider";  CmdNode="star_slider";  FirmwareName="star_slider.bin" }
-      "stop_timer"   = @{ Env="stop_timer";   Dev="stop_timer";   CmdNode="stop_timer";   FirmwareName="stop_timer.bin" }
   }
 
   if (-not $Target) { throw "Usage: ota.ps1 <target>" }
@@ -90,9 +132,8 @@ try {
 
   $sshBaseArgs = @(
       "-o","BatchMode=yes",
-      "-o","ConnectTimeout=5",
-      "-o","ServerAliveInterval=2",
-      "-o","ServerAliveCountMax=4"
+      "-o", "ConnectTimeout=10",
+      "-o", "StrictHostKeyChecking=accept-new"
   )
 
   function Invoke-ProcessWithTimeout {
@@ -127,7 +168,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Failed to create firmware directory on Pi at $piFirmwareDir" }
 
   $remotePath = "$piUser@${piHost}:$piFirmwareDir/$firmwareName"
-  $scpArgs = @("-C") + $sshBaseArgs + @($firmwarePath, $remotePath)
+  $scpArgs = @("-B", "-C") + $sshBaseArgs + @($firmwarePath, $remotePath)
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   Invoke-ProcessWithTimeout -FilePath "scp" -ArgumentList $scpArgs -TimeoutSec 60 -What "SCP upload"
   $sw.Stop()

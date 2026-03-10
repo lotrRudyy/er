@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "chess";
-static const char* FW_VERSION = "1";
+static const char* FW_VERSION = "2";
 static const char* FW_DESC = "chess with new ota";
 
 // ======================= NETWORK CONFIG ======================

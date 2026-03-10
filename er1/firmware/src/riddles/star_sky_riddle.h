@@ -24,9 +24,9 @@ private:
   static constexpr int kLedPins[4] = { 26, 25, 16, 32 };
   /*
     26 UV LEDs
-    25 Aquarius
-    16 Scorpio
-    32 Libra
+    25 Libra
+    16 Aquarius
+    32 Scorpio
   */
 
   void log(const char* level, const String& msg) const;
