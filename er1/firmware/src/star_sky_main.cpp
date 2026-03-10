@@ -68,13 +68,15 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   String msg = payload;
   msg.trim();
   msg.toUpperCase();
-  module->setGameMode(msg == "INGAME");
+  module->setGameMode(false);
 }
 
 static void candlesEventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
   auto* module = static_cast<StarSkyRiddle*>(user);
-  if (module) module->handleCandlesEvent(payload);
+  if (!module) return;
+  module->setGameMode(true);
+  module->handleCandlesEvent(payload);
 }
 
 // ======================= ARDUINO LIFECYCLE ===================

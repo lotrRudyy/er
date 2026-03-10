@@ -58,7 +58,7 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
   }
 
   if (cmd && String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
-    if (!gameActive_) return true;
+    if (!gameActive_) setGameMode(true);
     if (!candlesSolved_) {
       candlesSolved_ = true;
       persistState();
