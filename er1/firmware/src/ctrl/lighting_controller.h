@@ -17,6 +17,20 @@ public:
     uint8_t dimPercent = 25;      // default DIM/DIMMED
   };
 
+  struct FadePair {
+    bool active = false;
+    const char* idA = nullptr;
+    const char* idB = nullptr;
+    uint32_t startMs = 0;
+    uint32_t durationMs = 0;
+    uint32_t fromDutyA = 0;
+    uint32_t fromDutyB = 0;
+    uint32_t toDutyA = 0;
+    uint32_t toDutyB = 0;
+    const char* tickReason = nullptr;
+    const char* doneReason = nullptr;
+  };
+
   LightingController();
 
   void begin(Core::NodeContext& ctx);
@@ -45,9 +59,20 @@ private:
   void handleProgressEvent(const char* rid);
   void runPianoTorch(const char* reason);
   void runChessRoom(const char* reason);
-  bool setChannel(const char* id, bool on, uint32_t duty);
+
+  bool setChannel(const char* id, bool on, uint32_t duty, bool preserveZeroDutyWhenOn = false);
   bool setChannelPercent(const char* id, bool on, uint32_t pct);
   void publishChangedStates(const bool changed[], const char* reason);
+
+  void resetFade(FadePair& fade);
+  void startFadePair(FadePair& fade,
+                     const char* idA, const char* idB,
+                     uint32_t fromDutyA, uint32_t fromDutyB,
+                     uint32_t toDutyA, uint32_t toDutyB,
+                     uint32_t durationMs,
+                     const char* tickReason,
+                     const char* doneReason);
+  void updateFadePair(FadePair& fade, uint32_t nowMs);
 
   bool publish(const char* topic, const String& payload, bool retained) const;
   void publishChannelState(const ChannelState& ch, const char* reason);
@@ -81,11 +106,10 @@ private:
   bool chessRoomPending_ = false;
   uint32_t chessRoomDueMs_ = 0;
 
-  bool candlesFadeActive_ = false;
-  uint32_t candlesFadeStartMs_ = 0;
-  uint32_t candlesFadeFromDuty5_ = 0;
-  uint32_t candlesFadeFromDuty6_ = 0;
+  FadePair pianoFade_{};
+  FadePair chessFade_{};
+  FadePair candlesFade_{};
 
-  static constexpr uint32_t kCandlesFadeMs = 5000;
+  static constexpr uint32_t kFadeMs = 5000;
   static constexpr uint32_t kProgressDelayMs = 7000;
 };
