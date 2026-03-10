@@ -376,8 +376,11 @@ void LightingController::updateFadePair(FadePair& fade, uint32_t nowMs) {
   ChannelState* chA = findById(String(fade.idA));
   ChannelState* chB = findById(String(fade.idB));
 
-  if (chA) changed[(size_t)chA->ledcCh] = setChannel(fade.idA, true, dutyA, true);
-  if (chB) changed[(size_t)chB->ledcCh] = setChannel(fade.idB, true, dutyB, true);
+  const bool onA = (dutyA > 0) || !fade.active;
+  const bool onB = (dutyB > 0) || !fade.active;
+
+  if (chA) changed[(size_t)chA->ledcCh] = setChannel(fade.idA, onA, dutyA, true);
+  if (chB) changed[(size_t)chB->ledcCh] = setChannel(fade.idB, onB, dutyB, true);
 
   publishChangedStates(changed, reason);
 }
@@ -405,9 +408,9 @@ void LightingController::runPianoTorch(const char* reason) {
 void LightingController::runChessRoom(const char* reason) {
   bool changed[kChannelCount] = {};
 
-  // Force both channels on at 0 first so the fade starts from fully dark.
-  changed[4] = setChannel("5", true, 0, true);
-  changed[5] = setChannel("6", true, 0, true);
+  // Keep both channels fully OFF until the fade loop starts driving them.
+  changed[4] = setChannel("5", false, 0);
+  changed[5] = setChannel("6", false, 0);
   publishChangedStates(changed, reason);
 
   startFadePair(
