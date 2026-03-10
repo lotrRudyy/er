@@ -668,8 +668,8 @@ function er1 {
 
             $otaScript = Join-Path $erRepoRoot "er1\firmware\ota.ps1"
 
-            $pwshArgs = @("-NoProfile", "-File", $otaScript, "-Target") + $targets
-            & pwsh @pwshArgs
+            $targetArg = ($targets -join ",")
+            & pwsh -NoProfile -File $otaScript -Target $targetArg
 
             if ($LASTEXITCODE -ne 0) { throw "ota.ps1 failed (exit $LASTEXITCODE)." }
             return

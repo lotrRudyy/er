@@ -250,10 +250,12 @@ function Invoke-OtaSingleTarget {
 
         $sshBaseArgs = @(
             "-o","BatchMode=yes",
-            "-o","StrictHostKeyChecking=accept-new",
+            "-o","StrictHostKeyChecking=no",
+            "-o","UserKnownHostsFile=/dev/null",
             "-o","ConnectTimeout=10",
             "-o","ServerAliveInterval=2",
-            "-o","ServerAliveCountMax=4"
+            "-o","ServerAliveCountMax=4",
+            "-q"
         )
 
         function Get-FileSha256Hex {
