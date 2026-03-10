@@ -13,7 +13,7 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "6";
+static const char* FW_VERSION = "7";
 static const char* FW_DESC = "images_piano with new ota changed piano password";
 
 // ======================= NETWORK CONFIG ======================

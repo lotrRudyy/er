@@ -59,7 +59,7 @@ private:
   // lol
   static constexpr size_t kSequenceLen = 3;
   static constexpr const char* const kSequence[kSequenceLen] = {
-      "c4", "e4", "c4"
+      "c4", "f4", "c4"
   };
   /*
   // APERTUS
