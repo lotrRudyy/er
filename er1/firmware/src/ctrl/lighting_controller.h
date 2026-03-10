@@ -110,6 +110,6 @@ private:
   FadePair chessFade_{};
   FadePair candlesFade_{};
 
-  static constexpr uint32_t kFadeMs = 15000;
+  static constexpr uint32_t kFadeMs = 7000;
   static constexpr uint32_t kProgressDelayMs = 7000;
 };
