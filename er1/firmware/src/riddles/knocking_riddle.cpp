@@ -60,14 +60,23 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   solved_ = false;
   fsListed_ = false;
 
-  // Start background silence immediately (keeps I2S clock + amp awake)
-  startSilenceIfIdle();
+  gameActive_ = false;
+  publishState();
+}
 
+void KnockingRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  resetState(inGame ? "game_enable" : "game_standby");
+  if (gameActive_) {
+    startSilenceIfIdle();
+  }
   publishState();
 }
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
+
+  if (!gameActive_) return;
 
   if (audioOk_) {
     audio_.loop();
@@ -407,7 +416,7 @@ void KnockingRiddle::resetState(const char* reason) {
 
 void KnockingRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, data, nullptr, true);

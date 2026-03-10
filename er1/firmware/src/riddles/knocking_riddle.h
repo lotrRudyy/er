@@ -14,6 +14,7 @@ public:
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
+  void setGameMode(bool inGame);
 
   // Kept name for compatibility with older code paths (was DFPlayer)
   bool dfReady() const { return audioOk_; }
@@ -135,4 +136,5 @@ private:
 
   mutable uint32_t errorCount_ = 0;
   bool solved_ = false;
+  bool gameActive_ = false;
 };

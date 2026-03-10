@@ -9,6 +9,7 @@ public:
   void begin(Core::NodeContext& ctx, const char* nodeId = nullptr);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
+  void setGameMode(bool inGame);
 
 private:
   struct ButtonState {
@@ -49,6 +50,7 @@ private:
 
   ButtonState buttons_[kButtonCount];
   bool solved_ = false;
+  bool gameActive_ = false;
   bool allDownHoldActive_ = false;
   uint32_t allDownHoldStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;

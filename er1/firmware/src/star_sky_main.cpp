@@ -25,6 +25,9 @@ static constexpr uint16_t MQTT_PORT = 1883;
 // ======================= TOPICS ==============================
 static String TOPIC_CANDLES_EVENT = Core::topic("candles", "evt");
 
+// ======================= TOPICS ==============================
+static const char* TOPIC_GAME = "game/state";
+
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
@@ -56,6 +59,16 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<StarSkyRiddle*>(user);
   return module ? module->onCmd(cmd, payload) : false;
+}
+
+static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  if (!module) return;
+  String msg = payload;
+  msg.trim();
+  msg.toUpperCase();
+  module->setGameMode(msg == "INGAME");
 }
 
 static void candlesEventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
@@ -115,6 +128,7 @@ void setup() {
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &starSky);
+  nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &starSky);
   nodeCore.registerSubscription(TOPIC_CANDLES_EVENT.c_str(), candlesEventSubscription, &starSky);
 
   NodeContext& ctx = nodeCore.context();

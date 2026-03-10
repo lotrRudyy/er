@@ -30,10 +30,18 @@ void ChessRiddle::begin(Core::NodeContext& ctx) {
   initReadersNoSpiBegin();
 
   lastPollMs_ = millis();
+  gameActive_ = false;
+  publishState();
+}
+
+void ChessRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  resetState(inGame ? "game_enable" : "game_standby");
   publishState();
 }
 
 void ChessRiddle::tick(uint32_t nowMs) {
+  if (!gameActive_) return;
   // Round robin: one reader per tick interval
   if (nowMs - lastPollMs_ < perReaderMs_) return;
   lastPollMs_ = nowMs;
@@ -295,9 +303,10 @@ void ChessRiddle::publishState() {
   }
 
   const String data =
-      String("{\"state\":\"") + stateName +
+      String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") +
+      "\",\"state\":\"" + stateName +
       "\",\"solved_count\":" + solvedCount_ +
-      ",\"enabled\":" + (ctx_->enabled() ? "true" : "false") + "}";
+      ",\"enabled\":" + (gameActive_ && ctx_->enabled() ? "true" : "false") + "}";
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {

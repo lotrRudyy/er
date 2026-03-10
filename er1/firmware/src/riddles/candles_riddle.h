@@ -9,6 +9,7 @@ public:
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
+  void setGameMode(bool inGame);
 
   uint32_t errorCount() const { return errorCount_; }
   bool shouldAllowLog(const char* level);
@@ -38,6 +39,7 @@ private:
   bool publish(const char* topic, const String& payload, bool retained = false) const;
 
   void setLed(int idx, bool on);
+  void setAllLeds(bool on);
   void initState();
   void calibrateBases();
   bool detectBlow(int idx, int thrAbs);
@@ -82,4 +84,5 @@ private:
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
   int delta_[4] = {120, 120, 120, 120};
   uint32_t errorCount_ = 0;
+  bool gameActive_ = false;
 };
