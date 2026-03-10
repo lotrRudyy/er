@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "star_sky";
-static const char* FW_VERSION = "5";
+static const char* FW_VERSION = "6";
 static const char* FW_DESC = "star_sky with new ota";
 
 // ======================= NETWORK CONFIG ======================
@@ -104,7 +104,7 @@ void setup() {
   cfg.log.filter = logFilter;
   cfg.log.filterUser = &starSky;
 
-  cfg.heartbeat.intervalMs = 20000;
+  cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &starSky;
 

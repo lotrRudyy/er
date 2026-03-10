@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "5";
+static const char* FW_VERSION = "6";
 static const char* FW_DESC = "trying to make sounds come faster";
 
 // ======================= NETWORK CONFIG ======================
@@ -97,7 +97,7 @@ void setup() {
   cfg.log.filter = logFilter;
   cfg.log.filterUser = &riddle;
 
-  cfg.heartbeat.intervalMs = 20000;
+  cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &riddle;
 

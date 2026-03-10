@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "chess";
-static const char* FW_VERSION = "5";
+static const char* FW_VERSION = "6";
 static const char* FW_DESC = "chess with new ota";
 
 // ======================= NETWORK CONFIG ======================
@@ -92,7 +92,7 @@ void setup() {
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
 
-  cfg.heartbeat.intervalMs = 20000;
+  cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &chess;
 

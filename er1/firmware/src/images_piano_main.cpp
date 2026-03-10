@@ -13,7 +13,7 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "8";
+static const char* FW_VERSION = "9";
 static const char* FW_DESC = "images_piano with new ota changed piano password";
 
 // ======================= NETWORK CONFIG ======================
@@ -87,7 +87,7 @@ void setup() {
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
   cfg.log.includeDataField = true;
-  cfg.heartbeat.intervalMs = 20000;
+  cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.commands.levelEnable = "INF";
   cfg.commands.levelDisable = "INF";

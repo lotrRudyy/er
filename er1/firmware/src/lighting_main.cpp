@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "15";
+static const char* FW_VERSION = "16";
 static const char* FW_DESC = "lighting controller (9x mosfet pwm)";
 
 // ======================= NETWORK CONFIG ======================
@@ -137,7 +137,7 @@ void setup() {
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
 
   // ✅ ENABLE HEARTBEAT (this makes lighting/hb overwrite the retained "offline")
-  cfg.heartbeat.intervalMs = 20000;
+  cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &lighting;
 
