@@ -248,8 +248,6 @@ function Invoke-OtaSingleTarget {
         $sshExe = "C:\WINDOWS\System32\OpenSSH\ssh.exe"
         $scpExe = "C:\WINDOWS\System32\OpenSSH\scp.exe"
 
-        # Fully non-interactive and quiet.
-        # NUL is correct on Windows for "discard known_hosts writes".
         $sshCommonArgs = @(
             "-o","BatchMode=yes",
             "-o","StrictHostKeyChecking=no",
@@ -260,7 +258,6 @@ function Invoke-OtaSingleTarget {
             "-o","ServerAliveCountMax=4"
         )
 
-        # ssh only: -n disconnects stdin so it cannot wait for keyboard input
         $sshExecArgs = @("-n") + $sshCommonArgs
 
         function Get-FileSha256Hex {
@@ -279,9 +276,6 @@ function Invoke-OtaSingleTarget {
 
         $remotePath = "$piUser@${piHost}:$piFirmwareDir/$firmwareName"
 
-        # -B = batch mode
-        # -q = quiet
-        # -O = force legacy SCP protocol (avoids some Windows/OpenSSH weirdness)
         $scpArgs = @("-B", "-q", "-O", "-C") + $sshCommonArgs + @($firmwarePath, $remotePath)
 
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -405,10 +399,21 @@ function Invoke-OtaChildWithSoftStopSupport {
 
 function Write-OtaSummary {
     param(
-        [Parameter(Mandatory=$true)][string[]]$Requested,
-        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Succeeded,
-        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Skipped,
-        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Failed,
+        [Parameter(Mandatory=$true)]
+        [string[]]$Requested,
+
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
+        [System.Collections.ArrayList]$Succeeded,
+
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
+        [System.Collections.ArrayList]$Skipped,
+
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
+        [System.Collections.ArrayList]$Failed,
+
         [bool]$StoppedEarly = $false
     )
 

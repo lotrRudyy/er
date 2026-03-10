@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "star_slider";
-static const char* FW_VERSION = "8";
+static const char* FW_VERSION = "9";
 static const char* FW_DESC = "star_slider with new ota";
 
 // ======================= NETWORK CONFIG ======================

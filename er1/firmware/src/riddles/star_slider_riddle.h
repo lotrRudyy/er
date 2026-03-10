@@ -30,7 +30,7 @@ private:
   };
 
   static constexpr size_t kAttemptHistoryMax = 64;
-  static constexpr size_t kAttemptStringMax = 96;
+  static constexpr size_t kAttemptStringMax = 128;
 
 /*
   1: skorpion      "r0":"3a-55-55-d2","r1":"1a-b8-4d-d2","r2":"7a-dc-4f-d2"
