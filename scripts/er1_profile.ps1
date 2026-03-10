@@ -700,7 +700,7 @@ function er1 {
             return
         }
 
-        "log" {
+                "log" {
             # Subcommands first
             if ($cmdArgs -and $cmdArgs.Count -gt 0) {
                 $sub = $cmdArgs[0].ToLowerInvariant()
@@ -731,10 +731,15 @@ function er1 {
 
             $argsNoSave = @()
             $saveRequested = $false
+            $includeHeartbeats = $false
 
             if ($cmdArgs) {
                 foreach ($a in $cmdArgs) {
-                    if ($a -and $a.ToLowerInvariant() -eq "--save") { $saveRequested = $true }
+                    if (-not $a) { continue }
+
+                    $aLower = $a.ToLowerInvariant()
+                    if ($aLower -eq "--save") { $saveRequested = $true }
+                    elseif ($aLower -eq "-hb" -or $aLower -eq "--hb") { $includeHeartbeats = $true }
                     else { $argsNoSave += $a }
                 }
             }
@@ -776,6 +781,8 @@ function er1 {
                 if ($useAll) {
                     $tmpl = @'
 bash -lc '
+INCLUDE_HB=__INCLUDE_HB__
+
 cur=""
 curDay=""
 while true; do
@@ -786,7 +793,11 @@ while true; do
     curDay="$day"
     echo "=== [er1 log] following $file ==="
     if [ -n "$cur" ]; then kill "$cur" 2>/dev/null || true; fi
-    tail -n 0 -f "$file" &
+    if [ "$INCLUDE_HB" = "1" ]; then
+      tail -n 0 -f "$file" &
+    else
+      tail -n 0 -f "$file" | grep -vE "/hb( |$)" &
+    fi
     cur=$!
   fi
 
@@ -794,11 +805,12 @@ while true; do
 done
 '
 '@
-                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir)
+                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir).Replace("__INCLUDE_HB__", $(if ($includeHeartbeats) { "1" } else { "0" }))
                 } else {
                     $tmpl = @'
 bash -lc '
 FILTER="__FILTER__"
+INCLUDE_HB=__INCLUDE_HB__
 
 cur=""
 curDay=""
@@ -810,7 +822,11 @@ while true; do
     curDay="$day"
     echo "=== [er1 log] following $file (filter) ==="
     if [ -n "$cur" ]; then kill "$cur" 2>/dev/null || true; fi
-    tail -n 0 -f "$file" | grep -E "$FILTER" &
+    if [ "$INCLUDE_HB" = "1" ]; then
+      tail -n 0 -f "$file" | grep -E "$FILTER" &
+    else
+      tail -n 0 -f "$file" | grep -vE "/hb( |$)" | grep -E "$FILTER" &
+    fi
     cur=$!
   fi
 
@@ -818,7 +834,7 @@ while true; do
 done
 '
 '@
-                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir).Replace("__FILTER__", $regexEsc)
+                    $remoteFollow = $tmpl.Replace("__LOGDIR__", $er1RemoteLogDir).Replace("__FILTER__", $regexEsc).Replace("__INCLUDE_HB__", $(if ($includeHeartbeats) { "1" } else { "0" }))
                 }
 
                 ssh -t $er1Pi $remoteFollow
@@ -829,18 +845,34 @@ done
 
             if ($errors) {
                 if ($useAll) {
-                    $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
+                    if ($includeHeartbeats) {
+                        $remoteCmd = "cd ~/er1; grep '""lv"":""ERR""' $todayFile | tail -n $localN"
+                    } else {
+                        $remoteCmd = "cd ~/er1; grep -vE '/hb( |$)' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                    }
                 } else {
                     # Escape regex for single-quoted grep -E
                     $regexEsc2 = $regex -replace "'", "'\''"
-                    $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                    if ($includeHeartbeats) {
+                        $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | grep '""lv"":""ERR""' | tail -n $localN"
+                    } else {
+                        $remoteCmd = "cd ~/er1; grep -vE '/hb( |$)' $todayFile | grep -E '$regexEsc2' | grep '""lv"":""ERR""' | tail -n $localN"
+                    }
                 }
             } else {
                 if ($useAll) {
-                    $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
+                    if ($includeHeartbeats) {
+                        $remoteCmd = "cd ~/er1; tail -n $localN $todayFile"
+                    } else {
+                        $remoteCmd = "cd ~/er1; grep -vE '/hb( |$)' $todayFile | tail -n $localN"
+                    }
                 } else {
                     $regexEsc2 = $regex -replace "'", "'\''"
-                    $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | tail -n $localN"
+                    if ($includeHeartbeats) {
+                        $remoteCmd = "cd ~/er1; grep -E '$regexEsc2' $todayFile | tail -n $localN"
+                    } else {
+                        $remoteCmd = "cd ~/er1; grep -vE '/hb( |$)' $todayFile | grep -E '$regexEsc2' | tail -n $localN"
+                    }
                 }
             }
 
@@ -858,7 +890,6 @@ done
             Write-Host "[er1 log] Saved -> $outPath" -ForegroundColor Green
             return
         }
-
         "logs" {
             $sub = if ($cmdArgs -and $cmdArgs.Count -gt 0) { $cmdArgs[0].ToLowerInvariant() } else { "pretty" }
             switch ($sub) {

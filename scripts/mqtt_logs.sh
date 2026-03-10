@@ -23,13 +23,15 @@ subscribe_stream() {
   local include_dbg="${INCLUDE_DBG:-0}"
   local include_time="${INCLUDE_TIME_STATE:-0}"
   local subs=(-t "+/log" -t "+/hb" -t "+/evt" -t "+/state" -t "+/ota")
+
   if [[ "$include_dbg" == "1" ]]; then
     subs+=(-t "+/dbg")
   fi
+
   if [[ "$include_time" != "1" ]]; then
-    mosquitto_sub -h "$BROKER" "${subs[@]}" -T "time/state" -0 -v
+    mosquitto_sub -h "$BROKER" "${subs[@]}" -T "time/state" -v
   else
-    mosquitto_sub -h "$BROKER" "${subs[@]}" -0 -v
+    mosquitto_sub -h "$BROKER" "${subs[@]}" -v
   fi
 }
 
@@ -37,22 +39,23 @@ write_stream() {
   local echo_output="$1"
   ensure_log_dir
 
-  local current_date file today stamped
-  current_date=$(date +%d.%m.%Y)
+  local current_date file today stamped line escaped
+  current_date="$(date +%d.%m.%Y)"
   file="$(log_file_for_date "$current_date")"
 
-  # -0 from mosquitto_sub makes each message NUL-terminated, so we can
-  # capture multiline payloads as a single record and escape newlines.
-  subscribe_stream | while IFS= read -r -d '' line; do
-    today=$(date +%d.%m.%Y)
+  # Read one MQTT message per line.
+  # Note: without mosquitto_sub -0, multiline payloads will be split across lines.
+  subscribe_stream | while IFS= read -r line; do
+    today="$(date +%d.%m.%Y)"
     if [[ "$today" != "$current_date" ]]; then
       current_date="$today"
       file="$(log_file_for_date "$current_date")"
     fi
 
-    local escaped="${line//$'\n'/\\n}"
+    escaped="${line//$'\n'/\\n}"
     stamped="$(timestamp) $escaped"
     echo "$stamped" >> "$file"
+
     if [[ "$echo_output" == "yes" ]]; then
       echo "$stamped"
     fi
