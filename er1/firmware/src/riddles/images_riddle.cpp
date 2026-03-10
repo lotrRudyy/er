@@ -4,6 +4,8 @@
 
 namespace {
 
+constexpr const char* kImagesSolvedPrefKey = "images_solved";
+
 String prefixedMessage(const char* prefix, const String& msg) {
   String out(prefix);
   out += msg;
@@ -55,11 +57,19 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
+
+  // Safe boot: piano on the same ESP must start gated/standby until images is solved.
+  ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
+
   publishState();
 }
 
 void ImagesRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
+
+  // Every fresh game start/off should re-arm images and gate piano again.
+  ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
+
   resetState(inGame ? "game_start" : "game_off");
   publishState();
 }
@@ -90,6 +100,7 @@ void ImagesRiddle::tick(uint32_t nowMs) {
 bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
   if (strcasecmp(cmd, "RESET_IMAGES") == 0) {
+    ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
     resetState("reset_images");
     publishState();
     return true;
@@ -167,6 +178,10 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   if (!solved_) {
     solved_ = true;
     retriggerArmed_ = false;
+
+    // Gate open for piano on same ESP.
+    ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
+
     log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
     publishSolvedEvent("images");
     openImagesMaglock();
@@ -267,6 +282,10 @@ void ImagesRiddle::publishMetricsIfDue() {
 
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
+
+  // Persist the gate again here too, so a solved-event path always leaves piano enabled.
+  ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
+
   String data = String("{\"id\":\"") + rid + "\"}";
   const auto& topics = ctx_->config().topics;
   if (topics.evt.length() > 0) {
@@ -283,7 +302,8 @@ void ImagesRiddle::openImagesMaglock() {
 
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") +
+                "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, withSrc(data, nodeId_), nullptr, true);

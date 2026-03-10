@@ -76,9 +76,10 @@ private:
   bool candlesSolvedSeen_ = false;
 
   bool pianoTorchPending_ = false;
-  uint32_t pianoTorchAtMs_ = 0;
+  uint32_t pianoTorchDueMs_ = 0;
+
   bool chessRoomPending_ = false;
-  uint32_t chessRoomAtMs_ = 0;
+  uint32_t chessRoomDueMs_ = 0;
 
   bool candlesFadeActive_ = false;
   uint32_t candlesFadeStartMs_ = 0;

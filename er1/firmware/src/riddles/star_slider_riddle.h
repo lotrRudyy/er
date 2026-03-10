@@ -24,9 +24,9 @@ private:
   static constexpr uint32_t kPollIntervalMs = 150;      // kept (unused now; button-only evaluation)
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint8_t kUidExpected[kReaderCount][4] = {
-    {0x3A, 0x55, 0x55, 0xD2}, // r0 scorpio (gonz rechts)
+    {0x3A, 0x55, 0x55, 0xD2}, // r0 scorpio (pov von spieler: rechts)
     {0x9A, 0x71, 0x4C, 0xD2}, // r1 aquarius
-    {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (gonz links)
+    {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (pov von spieler: links)
   };
 
   void log(const char* level, const String& msg) const;

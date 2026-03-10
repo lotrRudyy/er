@@ -7,6 +7,12 @@
 namespace {
 PianoRiddle* gPianoRiddle = nullptr;
 
+constexpr const char* kPrefsImagesSolvedKey = "images_solved";
+
+bool imagesSolvedFromPrefs(Preferences* prefs) {
+  return prefs ? prefs->getBool(kPrefsImagesSolvedKey, false) : false;
+}
+
 String withSrc(const String& dataJson, const String& src) {
   const char* srcVal = (src.length() > 0) ? src.c_str() : "";
   if (dataJson.length() == 0) {
@@ -53,7 +59,7 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
     detectorStarted_ = true;
   }
 
-  // Start fresh progress on boot (no timeout tracking exists anymore)
+  // Start fresh progress on boot.
   solved_ = false;
   solvedPublished_ = false;
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
@@ -72,7 +78,8 @@ void PianoRiddle::setGameMode(bool inGame) {
 }
 
 void PianoRiddle::tick(uint32_t nowMs) {
-  if (detectorStarted_ && gameActive_) {
+  // Piano is only truly active after images has been solved.
+  if (detectorStarted_ && gameActive_ && imagesSolvedFromPrefs(prefs_)) {
     piano_detector_loop_once();
   }
   (void)nowMs;
@@ -141,14 +148,15 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   data += ",\"top\":[{\"p\":\""; data += t1Safe; data += "\",\"s\":"; data += String(t1s, 6); data += "},";
   data += "{\"p\":\""; data += t2Safe; data += "\",\"s\":"; data += String(t2s, 6); data += "},";
   data += "{\"p\":\""; data += t3Safe; data += "\",\"s\":"; data += String(t3s, 6); data += "}],";
-  data += "\"pos\":"; data += String(seqPos_); data += ",";
+  data += "\"pos\":"; data += String(seqPos_) + ",";
   data += "\"solved\":"; data += solved_ ? "true" : "false";
+  data += ",\"images_ready\":"; data += imagesSolvedFromPrefs(prefs_) ? "true" : "false";
   data += "}";
 
   log("INF", compat, data);
 
-  // Still allow replay even if already solved (so it can re-open lock).
-  if (!ctx_ || !gameActive_ || !moduleEnabled_ || !ctx_->enabled()) return;
+  // Piano remains in standby until images is solved, even though both are on the same ESP.
+  if (!ctx_ || !gameActive_ || !imagesSolvedFromPrefs(prefs_) || !moduleEnabled_ || !ctx_->enabled()) return;
   if (!isAccepted) return;
   if (predSafe[0] == '\0') return;
 
@@ -204,8 +212,14 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
 void PianoRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") +
-                ",\"enabled\":" + (gameActive_ && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
+
+  const bool imagesReady = imagesSolvedFromPrefs(prefs_);
+  const bool effectiveActive = gameActive_ && imagesReady;
+
+  String data = String("{\"mode\":\"") + (effectiveActive ? "ingame" : "standby") +
+                "\",\"solved\":" + (solved_ ? "true" : "false") +
+                ",\"enabled\":" + (effectiveActive && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
+                ",\"images_ready\":" + (imagesReady ? "true" : "false") +
                 ",\"progress\":" + String(seqPos_) + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {

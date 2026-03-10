@@ -127,10 +127,13 @@ void LightingController::begin(Core::NodeContext& ctx) {
   pianoSolvedSeen_ = false;
   chessSolvedSeen_ = false;
   candlesSolvedSeen_ = false;
+
   pianoTorchPending_ = false;
-  pianoTorchAtMs_ = 0;
+  pianoTorchDueMs_ = 0;
+
   chessRoomPending_ = false;
-  chessRoomAtMs_ = 0;
+  chessRoomDueMs_ = 0;
+
   candlesFadeActive_ = false;
   candlesFadeStartMs_ = 0;
   candlesFadeFromDuty5_ = 0;
@@ -150,12 +153,12 @@ void LightingController::tick(uint32_t nowMs) {
     bootStatePublished_ = true;
   }
 
-  if (pianoTorchPending_ && (uint32_t)(nowMs - pianoTorchAtMs_) >= kProgressDelayMs) {
+  if (pianoTorchPending_ && (int32_t)(nowMs - pianoTorchDueMs_) >= 0) {
     pianoTorchPending_ = false;
     runPianoTorch("piano_delay");
   }
 
-  if (chessRoomPending_ && (uint32_t)(nowMs - chessRoomAtMs_) >= kProgressDelayMs) {
+  if (chessRoomPending_ && (int32_t)(nowMs - chessRoomDueMs_) >= 0) {
     chessRoomPending_ = false;
     runChessRoom("chess_delay");
   }
@@ -211,14 +214,18 @@ void LightingController::onGameModeMessage(const String& msg) {
     pianoSolvedSeen_ = false;
     chessSolvedSeen_ = false;
     candlesSolvedSeen_ = false;
+
     pianoTorchPending_ = false;
-    pianoTorchAtMs_ = 0;
+    pianoTorchDueMs_ = 0;
+
     chessRoomPending_ = false;
-    chessRoomAtMs_ = 0;
+    chessRoomDueMs_ = 0;
+
     candlesFadeActive_ = false;
     candlesFadeStartMs_ = 0;
     candlesFadeFromDuty5_ = 0;
     candlesFadeFromDuty6_ = 0;
+
     applySceneInitial("game_start");
     log("INF", "LIGHT_SCENE_INGAME");
     return;
@@ -228,14 +235,18 @@ void LightingController::onGameModeMessage(const String& msg) {
     log("INF", String("LIGHT_GAME_MODE ") + trimmed);
   }
   inGame_ = false;
+
   pianoTorchPending_ = false;
-  pianoTorchAtMs_ = 0;
+  pianoTorchDueMs_ = 0;
+
   chessRoomPending_ = false;
-  chessRoomAtMs_ = 0;
+  chessRoomDueMs_ = 0;
+
   candlesFadeActive_ = false;
   candlesFadeStartMs_ = 0;
   candlesFadeFromDuty5_ = 0;
   candlesFadeFromDuty6_ = 0;
+
   bool changed[kChannelCount] = {};
   for (size_t i = 0; i < kChannelCount; i++) changed[i] = setChannel(channels_[i].id, false, 0);
   publishChangedStates(changed, "standby");
@@ -352,11 +363,14 @@ void LightingController::handleProgressEvent(const char* rid) {
   if (strcmp(rid, "piano") == 0) {
     if (pianoSolvedSeen_) return;
     pianoSolvedSeen_ = true;
+
     changed[0] = setChannel("1", true, driver_.maxDuty());
     changed[1] = setChannel("2", true, driver_.maxDuty());
     publishChangedStates(changed, "piano_solved");
+
     pianoTorchPending_ = true;
-    pianoTorchAtMs_ = millis();
+    pianoTorchDueMs_ = millis() + kProgressDelayMs;
+
     log("INF", "LIGHT_PIANO_SOLVED");
     return;
   }
@@ -364,10 +378,13 @@ void LightingController::handleProgressEvent(const char* rid) {
   if (strcmp(rid, "chess") == 0) {
     if (chessSolvedSeen_) return;
     chessSolvedSeen_ = true;
+
     changed[7] = setChannel("8", true, driver_.maxDuty());
     publishChangedStates(changed, "chess_solved");
+
     chessRoomPending_ = true;
-    chessRoomAtMs_ = millis();
+    chessRoomDueMs_ = millis() + kProgressDelayMs;
+
     log("INF", "LIGHT_CHESS_SOLVED");
     return;
   }
@@ -386,6 +403,7 @@ void LightingController::handleProgressEvent(const char* rid) {
     changed[4] = setChannel("5", true, candlesFadeFromDuty5_);
     changed[5] = setChannel("6", true, candlesFadeFromDuty6_);
     publishChangedStates(changed, "candles_solved");
+
     log("INF", "LIGHT_CANDLES_SOLVED");
     return;
   }
