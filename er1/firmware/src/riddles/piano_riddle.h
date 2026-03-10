@@ -56,18 +56,18 @@ private:
   static constexpr const char* kPrefsImagesSolvedKey = "images_solved";
 
   // Sequence (case-insensitive compare)
-  /*
   // lol
   static constexpr size_t kSequenceLen = 3;
   static constexpr const char* const kSequence[kSequenceLen] = {
       "c4", "e4", "c4"
   };
-  */
+  /*
   // APERTUS
   static constexpr size_t kSequenceLen = 7;
   static constexpr const char* const kSequence[kSequenceLen] = {
       "f2", "g4", "c3", "b4", "d5", "e5", "c5"
   };
+  */
 
   static constexpr size_t kNoteMaxLen = 8;  // incl null terminator
   char played_[kSequenceLen][kNoteMaxLen] = {{0}};
