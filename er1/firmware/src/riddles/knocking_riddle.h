@@ -58,6 +58,9 @@ private:
   // Background silence to keep I2S clock + amp "awake"
   static constexpr const char* kSilencePath = "/silence.wav";
 
+  static constexpr size_t kAttemptHistoryMax = 64;
+  static constexpr size_t kAttemptStringMax = 48;
+
   struct PiezoState {
     int pin;
     uint32_t sum;
@@ -91,9 +94,14 @@ private:
   void startSilenceIfIdle();
   void stopSilenceIfActive();
 
-  void evaluateSequence();
+  void evaluateSequence(bool timeoutAttempt = false);
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetSequence();
+
+  void appendAttemptedSequence();
+  String currentSequenceHyphen() const;
+  String currentSequenceJson() const;
+  String attemptedSequencesJson() const;
 
   void publishSolvedEvent();
   void publishState();
@@ -134,7 +142,12 @@ private:
   int seqLen_ = 0;
   uint32_t lastSeqActivityMs_ = 0;
 
+  char attemptedSequences_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
+  size_t attemptedSequencesCount_ = 0;
+  uint32_t tries_ = 0;
+
   mutable uint32_t errorCount_ = 0;
   bool solved_ = false;
   bool gameActive_ = false;
+  bool moduleEnabled_ = true;
 };

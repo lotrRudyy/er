@@ -1,6 +1,7 @@
 // knocking_riddle.cpp
 #include "knocking_riddle.h"
 #include <cstring>
+#include <strings.h>
 
 static String jsonEscape(const String& s) {
   String out;
@@ -59,6 +60,12 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
 
   solved_ = false;
   fsListed_ = false;
+  moduleEnabled_ = true;
+  tries_ = 0;
+  attemptedSequencesCount_ = 0;
+  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
+    attemptedSequences_[i][0] = '\0';
+  }
 
   gameActive_ = false;
   publishState();
@@ -75,7 +82,6 @@ void KnockingRiddle::setGameMode(bool inGame) {
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
-
   if (!gameActive_) return;
 
   if (audioOk_) {
@@ -84,9 +90,12 @@ void KnockingRiddle::tick(uint32_t nowMs) {
 
   publishLittleFsListingOnce();
 
-  updatePiezoSamples(nowMs);
-  handleKnockWindow(nowMs);
-  evaluateSequenceIfDue(nowMs);
+  if (moduleEnabled_ && ctx_->enabled()) {
+    updatePiezoSamples(nowMs);
+    handleKnockWindow(nowMs);
+    evaluateSequenceIfDue(nowMs);
+  }
+
   serviceSound(nowMs);
 
   // If no queued/active sound, keep the amp warm
@@ -95,11 +104,35 @@ void KnockingRiddle::tick(uint32_t nowMs) {
 
 bool KnockingRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (!cmd) return false;
-  if (strcasecmp(cmd, "RESET_KNOCKING") == 0) {
+
+  if (strcasecmp(cmd, "RESET_KNOCKING") == 0 || strcasecmp(cmd, "RESET") == 0) {
     resetState("reset_knocking");
     publishState();
     return true;
   }
+
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_KNOCKING") == 0) {
+    publishSolvedEvent();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "ENABLE") == 0) {
+    moduleEnabled_ = true;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DISABLE") == 0) {
+    moduleEnabled_ = false;
+    publishState();
+    return true;
+  }
+
+  if (strcasecmp(cmd, "STATUS") == 0) {
+    publishState();
+    return true;
+  }
+
   return false;
 }
 
@@ -249,7 +282,7 @@ void KnockingRiddle::handleKnockWindow(uint32_t nowMs) {
 }
 
 void KnockingRiddle::registerKnock(int idx, uint16_t /*raw*/, uint32_t nowMs) {
-  if (!ctx_->enabled()) return;
+  if (!moduleEnabled_ || !ctx_->enabled()) return;
 
   if (seqLen_ < kSeqMaxLen) {
     seqBuf_[seqLen_++] = idx;
@@ -344,7 +377,7 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
   soundPlaying_ = true;
 }
 
-void KnockingRiddle::evaluateSequence() {
+void KnockingRiddle::evaluateSequence(bool timeoutAttempt) {
   if (seqLen_ == 0) return;
 
   bool ok = (seqLen_ == kSeqExpectLen);
@@ -359,7 +392,12 @@ void KnockingRiddle::evaluateSequence() {
     publishSolvedEvent();
     resetSequence();
   } else {
-    log("DBG", "SEQ_FAIL", String("{\"t\":") + millis() + ",\"len\":" + seqLen_ + "}");
+    tries_++;
+    appendAttemptedSequence();
+    log("DBG", "SEQ_FAIL",
+        String("{\"t\":") + millis() +
+        ",\"len\":" + seqLen_ +
+        ",\"timeout\":" + (timeoutAttempt ? "1" : "0") + "}");
     enqueueSound(4, -1);
     resetSequence();
   }
@@ -368,12 +406,52 @@ void KnockingRiddle::evaluateSequence() {
 void KnockingRiddle::evaluateSequenceIfDue(uint32_t nowMs) {
   if (seqLen_ == 0) return;
   if (nowMs - lastSeqActivityMs_ < kSeqTimeoutMs) return;
-  evaluateSequence();
+  evaluateSequence(true);
 }
 
 void KnockingRiddle::resetSequence() {
   seqLen_ = 0;
   lastSeqActivityMs_ = 0;
+}
+
+void KnockingRiddle::appendAttemptedSequence() {
+  if (attemptedSequencesCount_ >= kAttemptHistoryMax) return;
+  String seq = currentSequenceHyphen();
+  seq.toCharArray(attemptedSequences_[attemptedSequencesCount_], kAttemptStringMax);
+  attemptedSequencesCount_++;
+}
+
+String KnockingRiddle::currentSequenceHyphen() const {
+  String out;
+  for (int i = 0; i < seqLen_; i++) {
+    if (i > 0) out += "-";
+    out += String(seqBuf_[i] + 1);
+  }
+  return out;
+}
+
+String KnockingRiddle::currentSequenceJson() const {
+  String out = "[";
+  for (int i = 0; i < seqLen_; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += String(seqBuf_[i] + 1);
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
+String KnockingRiddle::attemptedSequencesJson() const {
+  String out = "[";
+  for (size_t i = 0; i < attemptedSequencesCount_; i++) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += attemptedSequences_[i];
+    out += "\"";
+  }
+  out += "]";
+  return out;
 }
 
 void KnockingRiddle::publishSolvedEvent() {
@@ -416,7 +494,17 @@ void KnockingRiddle::resetState(const char* reason) {
 
 void KnockingRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
+  String data =
+      String("{\"id\":\"knocking\"") +
+      ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+      ",\"enabled\":" + ((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? String("true") : String("false")) +
+      ",\"solved\":" + (solved_ ? "true" : "false") +
+      ",\"raw_state\":\"" + (solved_ ? "solved" : (seqLen_ > 0 ? "progress" : "idle")) + "\"" +
+      ",\"tries\":" + String(tries_) +
+      ",\"sequence_current\":" + currentSequenceJson() +
+      ",\"attempted_sequences\":" + attemptedSequencesJson() +
+      "}";
+
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, data, nullptr, true);
