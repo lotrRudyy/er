@@ -55,9 +55,9 @@ private:
   static constexpr const char* kPrefsSolvedKey = "piano_solved";
 
   // Sequence (case-insensitive compare)
-  static constexpr size_t kSequenceLen = 15;
+  static constexpr size_t kSequenceLen = 3;
   static constexpr const char* const kSequence[kSequenceLen] = {
-      "e4", "e4", "f4", "g4", "g4", "f4", "e4", "d4", "c4", "c4", "d4", "e4", "e4", "d4", "d4",
+      "c4", "e4", "c4"
   };
 
   static constexpr size_t kNoteMaxLen = 8;  // incl null terminator
