@@ -168,21 +168,20 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     publishState();
 
     if (seqPos_ >= kSequenceLen) {
-      // Always open lock on full match (even if already solved)
-      openLock();
-
-      // Persist solved once
+      // Only open lock the first time this riddle is solved
       if (!solved_) {
+        openLock();
         solved_ = true;
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
+
       // Publish solved event once
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
       }
 
-      // Rearm for replay
+      // Rearm only for visual/state reset, not for another unlock
       resetProgress("solved");
       publishState();
     }

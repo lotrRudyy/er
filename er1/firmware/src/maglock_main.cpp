@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "maglock";
-static const char* FW_VERSION = "7";
+static const char* FW_VERSION = "8";
 static const char* FW_DESC = "maglock with new ota";
 
 // ======================= NETWORK CONFIG ======================

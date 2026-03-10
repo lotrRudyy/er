@@ -7,6 +7,7 @@ namespace {
 constexpr const char* kLockCmdPrefix = "maglock/lock/";
 constexpr const char* kLockStatePrefix = "maglock/lock/";
 constexpr const char* kLockCmdSuffix = "/cmd";
+constexpr const char* kPrefsGameModeKey = "game_mode";
 
 String makeLockStateTopic(const char* id) {
   String topic = kLockStatePrefix;
@@ -30,6 +31,8 @@ bool parseLockIdFromTopic(const String& topic, String& outId) {
 
 void MaglockController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+  prefs_ = &ctx.prefs();
+  bootMs_ = millis();
 
   MaglockChannelConfig channels[kLockCount];
   for (size_t i = 0; i < kLockCount; i++) {
@@ -37,15 +40,29 @@ void MaglockController::begin(Core::NodeContext& ctx) {
     locks_[i].coilOn = false;
     locks_[i].pulsing = false;
     locks_[i].cooldown = false;
+    locks_[i].bootGuard = false;
     locks_[i].pulseStartMs = 0;
     locks_[i].cooldownStartMs = 0;
     locks_[i].pulseCount = 0;
   }
 
   driver_.begin(channels, kLockCount);
+
+  // Force dangerous fail-secure outputs OFF immediately on boot and
+  // start a boot guard so they cannot be retriggered right away.
   for (auto& lk : locks_) {
+    if (lk.mode == LockMode::FailSecure) {
+      lk.coilOn = false;
+      lk.pulsing = false;
+      lk.cooldown = true;
+      lk.bootGuard = true;
+      lk.cooldownStartMs = bootMs_;
+    }
     applyLockOutput(lk);
   }
+
+  // SAFETY: always boot into OFF/standby locally.
+  loadGameMode();
 
   lastMetricMs_ = millis();
   applyHeartbeatInterval();
@@ -99,16 +116,19 @@ void MaglockController::onGameModeMessage(const String& msg) {
                   "\",\"to\":\"" + modeName(gameMode_) + "\"}";
     log("INF", "gameMode changed", data);
     applyHeartbeatInterval();
+    persistGameMode();
   }
 
   if (gameMode_ == GameMode::InGame) {
     if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, "game_start");
     if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, "game_start");
+  } else {
+    // Any non-InGame mode should force fail-secure outputs safe.
+    forceAllFailSecureOff("mode_safe");
   }
 
   publishStateSnapshot();
 }
-
 
 void MaglockController::onLockCommandTopic(const char* topic, const String& payload) {
   // Canonical lock control interface:
@@ -166,6 +186,8 @@ void MaglockController::publishLockState(const LockState& lk, const char* reason
   payload += lk.coilOn ? "1" : "0";
   payload += ",\"pulses\":";
   payload += String(lk.pulseCount);
+  payload += ",\"bootGuard\":";
+  payload += lk.bootGuard ? "1" : "0";
   payload += "}";
   publish(topic.c_str(), payload);
   publishStateSnapshot();
@@ -180,18 +202,77 @@ MaglockController::LockState* MaglockController::findLockById(const String& id) 
   return nullptr;
 }
 
+void MaglockController::forceAllFailSecureOff(const char* reason) {
+  for (auto& lk : locks_) {
+    if (lk.mode != LockMode::FailSecure) continue;
+
+    bool changed = lk.coilOn || lk.pulsing;
+
+    lk.coilOn = false;
+    lk.pulsing = false;
+    lk.cooldown = true;
+    lk.bootGuard = true;
+    lk.cooldownStartMs = millis();
+
+    applyLockOutput(lk);
+
+    if (changed) {
+      publishLockState(lk, reason);
+    }
+  }
+}
+
+void MaglockController::persistGameMode() {
+  if (!prefs_) return;
+
+  const char* modeStr = "OFF";
+  switch (gameMode_) {
+    case GameMode::InGame: modeStr = "INGAME"; break;
+    case GameMode::Maint: modeStr = "MAINT"; break;
+    case GameMode::Off:
+    default: modeStr = "OFF"; break;
+  }
+
+  prefs_->putString(kPrefsGameModeKey, modeStr);
+}
+
+void MaglockController::loadGameMode() {
+  if (!prefs_) {
+    gameMode_ = GameMode::Off;
+    return;
+  }
+
+  String stored = prefs_->getString(kPrefsGameModeKey, "OFF");
+  stored.trim();
+  stored.toUpperCase();
+
+  // SAFETY CHOICE: never auto-resume game mode on boot.
+  gameMode_ = GameMode::Off;
+
+  String data = String("{\"stored\":\"") + stored + "\",\"boot\":\"OFF\"}";
+  log("INF", "MAGLOCK_BOOT_MODE", data);
+}
+
 void MaglockController::startPulse(LockState& lk, const char* reason) {
   if (lk.mode != LockMode::FailSecure) {
     log("WRN", String("OPEN on non-failsecure via pulse: ") + lk.id);
     return;
   }
-  if (lk.pulsing || lk.cooldown) {
-    log("WRN", String("OPEN ignored (pulse/cooldown active) for ") + lk.id);
+
+  if (gameMode_ == GameMode::Off) {
+    log("WRN", String("OPEN ignored while OFF for ") + lk.id);
     return;
   }
+
+  if (lk.pulsing || lk.cooldown || lk.bootGuard) {
+    log("WRN", String("OPEN ignored (pulse/cooldown/bootguard active) for ") + lk.id);
+    return;
+  }
+
   lk.coilOn = true;
   lk.pulsing = true;
   lk.cooldown = false;
+  lk.bootGuard = false;
   lk.pulseStartMs = millis();
   lk.pulseCount++;
   applyLockOutput(lk);
@@ -206,6 +287,7 @@ void MaglockController::setFailSafe(LockState& lk, bool locked, const char* reas
   lk.coilOn = locked;
   lk.pulsing = false;
   lk.cooldown = false;
+  lk.bootGuard = false;
   applyLockOutput(lk);
   publishLockState(lk, reason);
 }
@@ -214,15 +296,33 @@ void MaglockController::updatePulseTimers(uint32_t nowMs) {
   for (auto& lk : locks_) {
     if (lk.mode != LockMode::FailSecure) continue;
 
+    // Hard safety cutoff in case normal pulse completion is missed.
+    if (lk.coilOn && (nowMs - lk.pulseStartMs >= kHardCutoffMs)) {
+      lk.coilOn = false;
+      lk.pulsing = false;
+      lk.cooldown = true;
+      lk.bootGuard = false;
+      lk.cooldownStartMs = nowMs;
+      applyLockOutput(lk);
+      publishLockState(lk, "hard_cutoff");
+      continue;
+    }
+
     if (lk.pulsing && (nowMs - lk.pulseStartMs >= kPulseMs)) {
       lk.pulsing = false;
       lk.coilOn = false;
       applyLockOutput(lk);
       publishLockState(lk, "pulse_done");
       lk.cooldown = true;
+      lk.bootGuard = false;
       lk.cooldownStartMs = nowMs;
     }
-    if (lk.cooldown && (nowMs - lk.cooldownStartMs >= kCooldownMs)) {
+
+    if (lk.bootGuard && (nowMs - lk.cooldownStartMs >= kBootGuardMs)) {
+      lk.bootGuard = false;
+      lk.cooldown = false;
+      publishLockState(lk, "boot_guard_done");
+    } else if (lk.cooldown && !lk.bootGuard && (nowMs - lk.cooldownStartMs >= kCooldownMs)) {
       lk.cooldown = false;
       publishLockState(lk, "cooldown_done");
     }
@@ -261,6 +361,8 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
     payload += locks_[i].pulsing ? "1" : "0";
     payload += ",\"cooldown\":";
     payload += locks_[i].cooldown ? "1" : "0";
+    payload += ",\"bootGuard\":";
+    payload += locks_[i].bootGuard ? "1" : "0";
     payload += "}";
   }
   payload += "]}";
@@ -290,6 +392,8 @@ void MaglockController::publishStateSnapshot() {
     data += locks_[i].pulsing ? "1" : "0";
     data += ",\"cooldown\":";
     data += locks_[i].cooldown ? "1" : "0";
+    data += ",\"bootGuard\":";
+    data += locks_[i].bootGuard ? "1" : "0";
     data += "}";
   }
   data += "]}";
@@ -318,6 +422,9 @@ void MaglockController::handleLockCommand(LockState& lk, const String& cmd) {
     if (lk.mode == LockMode::FailSecure) {
       lk.coilOn = false;
       lk.pulsing = false;
+      lk.cooldown = true;
+      lk.bootGuard = false;
+      lk.cooldownStartMs = millis();
       applyLockOutput(lk);
       publishLockState(lk, "cmd:CLOSE");
     } else {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 #include "core_node.h"
 #include "maglock_driver.h"
@@ -38,13 +39,16 @@ private:
     bool coilOn = false;
     bool pulsing = false;
     bool cooldown = false;
+    bool bootGuard = false;
     uint32_t pulseStartMs = 0;
     uint32_t cooldownStartMs = 0;
     uint32_t pulseCount = 0;
   };
 
   static constexpr uint32_t kPulseMs = 1000;
+  static constexpr uint32_t kHardCutoffMs = 1200;
   static constexpr uint32_t kCooldownMs = 10000;
+  static constexpr uint32_t kBootGuardMs = 10000;
   static constexpr uint32_t kMetricIntervalMs = 10000;
 
   static constexpr size_t kLockCount = 5;
@@ -68,6 +72,10 @@ private:
   void handleLockCommand(LockState& lk, const String& cmd);
   void handleLockCommandTopicInternal(const String& topic, const String& payload);
 
+  void forceAllFailSecureOff(const char* reason);
+  void persistGameMode();
+  void loadGameMode();
+
   uint32_t hbIntervalForMode(GameMode mode) const;
   void applyHeartbeatInterval();
   void log(const char* level, const String& msg) const;
@@ -78,7 +86,9 @@ private:
 
   Core::NodeContext* ctx_ = nullptr;
   MaglockDriver driver_;
+  Preferences* prefs_ = nullptr;
   GameMode gameMode_ = GameMode::Off;
+  uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
   String topicDbg_;
