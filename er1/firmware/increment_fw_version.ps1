@@ -21,7 +21,7 @@ function Get-FirmwareMainPath {
     throw "Unable to locate firmware main for '$DeviceName'. Checked: $p and $p2"
 }
 
-function Increment-VersionString {
+function Update-VersionString {
     param([string]$Version)
 
     if ($Version -match '^\d+$') {
@@ -49,7 +49,7 @@ if (-not $match.Success) {
 }
 
 $oldVersion = $match.Groups[1].Value
-$newVersion = Increment-VersionString -Version $oldVersion
+$newVersion = Update-VersionString -Version $oldVersion
 
 $newContent = [regex]::Replace(
     $content,

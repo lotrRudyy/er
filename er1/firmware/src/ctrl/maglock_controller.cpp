@@ -120,12 +120,15 @@ void MaglockController::onGameModeMessage(const String& msg) {
   }
 
   if (gameMode_ == GameMode::InGame) {
-    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, "game_start");
-    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, "game_start");
-  } else {
-    // Any non-InGame mode should force fail-secure outputs safe.
-    forceAllFailSecureOff("mode_safe");
-  }
+  if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, "game_start");
+  if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, "game_start");
+} else {
+  // Any non-InGame mode should force fail-secure outputs safe
+  // and open the fail-safe room locks.
+  forceAllFailSecureOff("mode_safe");
+  if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, "standby_open");
+  if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, false, "standby_open");
+}
 
   publishStateSnapshot();
 }
