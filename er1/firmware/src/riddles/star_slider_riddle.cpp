@@ -248,11 +248,39 @@ bool StarSliderRiddle::isCurrentPatternCorrect() const {
   return true;
 }
 
-const char* StarSliderRiddle::labelForUid(const byte* uid, uint8_t len) const {
-  if (len < 4 || !uid) return "none";
-  if (uidEquals(uid, kUidExpected[0], 4)) return "scorpio";
-  if (uidEquals(uid, kUidExpected[1], 4)) return "aquarius";
-  if (uidEquals(uid, kUidExpected[2], 4)) return "libra";
+const char* StarSliderRiddle::labelForUid(uint8_t readerIdx, const byte* uid, uint8_t len) const {
+  if (readerIdx >= kReaderCount || len < 4 || !uid) return "none";
+
+  switch (readerIdx) {
+    case 0:
+      if (uidEquals(uid, kUidExpected[0], 4)) return "scorpio";
+      if (uid[0] == 0x5A && uid[1] == 0xDF && uid[2] == 0x53 && uid[3] == 0xD2) return "gemini";
+      if (uid[0] == 0x10 && uid[1] == 0x57 && uid[2] == 0x51 && uid[3] == 0x2F) return "libra";
+      if (uid[0] == 0x4A && uid[1] == 0x72 && uid[2] == 0x4E && uid[3] == 0xD2) return "sagittarius";
+      if (uid[0] == 0x10 && uid[1] == 0x1E && uid[2] == 0x51 && uid[3] == 0x2F) return "aquarius";
+      if (uid[0] == 0xDA && uid[1] == 0x47 && uid[2] == 0x50 && uid[3] == 0xD2) return "pisces";
+      if (uid[0] == 0xEA && uid[1] == 0x99 && uid[2] == 0x4F && uid[3] == 0xD2) return "leo";
+      break;
+    case 1:
+      if (uid[0] == 0x1A && uid[1] == 0xB8 && uid[2] == 0x4D && uid[3] == 0xD2) return "scorpio";
+      if (uid[0] == 0x6A && uid[1] == 0x88 && uid[2] == 0x4F && uid[3] == 0xD2) return "gemini";
+      if (uid[0] == 0x4A && uid[1] == 0xE7 && uid[2] == 0x4B && uid[3] == 0xD2) return "libra";
+      if (uid[0] == 0x5A && uid[1] == 0x11 && uid[2] == 0x4F && uid[3] == 0xD2) return "sagittarius";
+      if (uidEquals(uid, kUidExpected[1], 4)) return "aquarius";
+      if (uid[0] == 0xFA && uid[1] == 0x44 && uid[2] == 0x4F && uid[3] == 0xD2) return "pisces";
+      if (uid[0] == 0x5A && uid[1] == 0x7A && uid[2] == 0x4C && uid[3] == 0xD2) return "leo";
+      break;
+    case 2:
+      if (uid[0] == 0x7A && uid[1] == 0xDC && uid[2] == 0x4F && uid[3] == 0xD2) return "scorpio";
+      if (uid[0] == 0xFA && uid[1] == 0x51 && uid[2] == 0x53 && uid[3] == 0xD2) return "gemini";
+      if (uidEquals(uid, kUidExpected[2], 4)) return "libra";
+      if (uid[0] == 0x4A && uid[1] == 0x8F && uid[2] == 0x4E && uid[3] == 0xD2) return "sagittarius";
+      if (uid[0] == 0x7A && uid[1] == 0x4B && uid[2] == 0x4E && uid[3] == 0xD2) return "aquarius";
+      if (uid[0] == 0x3A && uid[1] == 0xF3 && uid[2] == 0x4E && uid[3] == 0xD2) return "pisces";
+      if (uid[0] == 0x9A && uid[1] == 0x1E && uid[2] == 0x4B && uid[3] == 0xD2) return "leo";
+      break;
+  }
+
   return "unknown";
 }
 
@@ -261,7 +289,7 @@ String StarSliderRiddle::currentOrderString() const {
   for (uint8_t i = 0; i < kReaderCount; i++) {
     if (i > 0) out += "-";
     if (tagValid_[i] && tagSize_[i] >= 4) {
-      out += labelForUid(tagUid_[i], tagSize_[i]);
+      out += labelForUid(i, tagUid_[i], tagSize_[i]);
     } else {
       out += "none";
     }
@@ -271,8 +299,8 @@ String StarSliderRiddle::currentOrderString() const {
 
 void StarSliderRiddle::appendAttemptedOrder() {
   if (attemptedStarSignsCount_ >= kAttemptHistoryMax) return;
-  String order = currentOrderString();
-  order.toCharArray(attemptedStarSigns_[attemptedStarSignsCount_], kAttemptStringMax);
+  String snapshot = currentAttemptPositionsJson();
+  snapshot.toCharArray(attemptedStarSigns_[attemptedStarSignsCount_], kAttemptStringMax);
   attemptedStarSignsCount_++;
 }
 
@@ -280,9 +308,7 @@ String StarSliderRiddle::attemptedStarSignsJson() const {
   String out = "[";
   for (size_t i = 0; i < attemptedStarSignsCount_; i++) {
     if (i > 0) out += ",";
-    out += "\"";
     out += attemptedStarSigns_[i];
-    out += "\"";
   }
   out += "]";
   return out;
@@ -294,7 +320,7 @@ String StarSliderRiddle::readerLabelsJson() const {
     if (i > 0) out += ",";
     out += "\"";
     if (tagValid_[i] && tagSize_[i] >= 4) {
-      out += labelForUid(tagUid_[i], tagSize_[i]);
+      out += labelForUid(i, tagUid_[i], tagSize_[i]);
     } else {
       out += "none";
     }
@@ -302,6 +328,28 @@ String StarSliderRiddle::readerLabelsJson() const {
   }
   out += "]";
   return out;
+}
+
+String StarSliderRiddle::readerPositionsJson() const {
+  String out = "{";
+  for (uint8_t i = 0; i < kReaderCount; i++) {
+    if (i > 0) out += ",";
+    out += "\"r";
+    out += String(i);
+    out += "\":\"";
+    if (tagValid_[i] && tagSize_[i] >= 4) {
+      out += labelForUid(i, tagUid_[i], tagSize_[i]);
+    } else {
+      out += "none";
+    }
+    out += "\"";
+  }
+  out += "}";
+  return out;
+}
+
+String StarSliderRiddle::currentAttemptPositionsJson() const {
+  return String("{\"attempt\":") + String(solveAttempts_) + ",\"positions\":" + readerPositionsJson() + "}";
 }
 
 void StarSliderRiddle::evaluateSolveAttempt() {
@@ -328,11 +376,11 @@ void StarSliderRiddle::evaluateSolveAttempt() {
       prefs_->putBool("solved", true);
       log("INF", "STATE save solved=1");
     }
-    log("INF", "pattern SOLVED");
+    log("INF", "pattern SOLVED", currentAttemptPositionsJson());
     publishSolvedEvent(solveAttempts_);
     publishState();
   } else {
-    String data = "{";
+    String data = String("{\"attempt\":") + String(solveAttempts_) + ",\"positions\":" + readerPositionsJson() + ",\"uids\":{";
     for (uint8_t i = 0; i < kReaderCount; i++) {
       if (i > 0) data += ",";
       data += "\"r";
@@ -349,7 +397,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
       }
       data += "\"";
     }
-    data += "}";
+    data += "}}";
     log("INF", "pattern WRONG", data);
     publishState();
   }
@@ -414,6 +462,8 @@ void StarSliderRiddle::publishState() {
       ",\"tries\":" + String(solveAttempts_) +
       ",\"attempted_star_signs\":" + attemptedStarSignsJson() +
       ",\"reader_labels\":" + readerLabelsJson() +
+      ",\"reader_positions\":" + readerPositionsJson() +
+      ",\"last_attempt_positions\":" + (attemptedStarSignsCount_ > 0 ? String(attemptedStarSigns_[attemptedStarSignsCount_ - 1]) : String("null")) +
       ",\"attempts\":" + String(solveAttempts_) +
       ",\"success\":" + String(solveSuccess_) +
       "}";

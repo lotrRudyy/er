@@ -30,16 +30,16 @@ private:
   };
 
   static constexpr size_t kAttemptHistoryMax = 64;
-  static constexpr size_t kAttemptStringMax = 64;
+  static constexpr size_t kAttemptStringMax = 96;
 
 /*
-  1: skorpion	    "r0":"3a-55-55-d2","r1":"1a-b8-4d-d2","r2":"7a-dc-4f-d2"
-  2: gemini	      "r0":"5a-df-53-d2","r1":"6a-88-4f-d2","r2":"fa-51-53-d2"
-  3: libera	      "r0":"10-57-51-2f","r1":"4a-e7-4b-d2","r2":"3a-09-51-d2"
-  4: sagittarius	"r0":"4a-72-4e-d2","r1":"5a-11-4f-d2","r2":"4a-8f-4e-d2"
-  5: aquarius	    "r0":"10-1e-51-2f","r1":"9a-71-4c-d2","r2":"7a-4b-4e-d2"
-  6: pisces	      "r0":"da-47-50-d2","r1":"fa-44-4f-d2","r2":"3a-f3-4e-d2"
-  7: leo	        "r0":"ea-99-4f-d2","r1":"5a-7a-4c-d2","r2":"9a-1e-4b-d2"
+  1: skorpion      "r0":"3a-55-55-d2","r1":"1a-b8-4d-d2","r2":"7a-dc-4f-d2"
+  2: gemini        "r0":"5a-df-53-d2","r1":"6a-88-4f-d2","r2":"fa-51-53-d2"
+  3: libera        "r0":"10-57-51-2f","r1":"4a-e7-4b-d2","r2":"3a-09-51-d2"
+  4: sagittarius   "r0":"4a-72-4e-d2","r1":"5a-11-4f-d2","r2":"4a-8f-4e-d2"
+  5: aquarius      "r0":"10-1e-51-2f","r1":"9a-71-4c-d2","r2":"7a-4b-4e-d2"
+  6: pisces        "r0":"da-47-50-d2","r1":"fa-44-4f-d2","r2":"3a-f3-4e-d2"
+  7: leo           "r0":"ea-99-4f-d2","r1":"5a-7a-4c-d2","r2":"9a-1e-4b-d2"
 */
 
   void log(const char* level, const String& msg) const;
@@ -59,10 +59,12 @@ private:
   void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
-  const char* labelForUid(const byte* uid, uint8_t len) const;
+  const char* labelForUid(uint8_t readerIdx, const byte* uid, uint8_t len) const;
   String currentOrderString() const;
   String attemptedStarSignsJson() const;
   String readerLabelsJson() const;
+  String readerPositionsJson() const;
+  String currentAttemptPositionsJson() const;
   void appendAttemptedOrder();
 
   Core::NodeContext* ctx_ = nullptr;

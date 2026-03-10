@@ -326,6 +326,10 @@ function Invoke-OtaSingleTarget {
 
         & $sshExe @sshExecArgs "$piUser@$piHost" $remoteCmd
         $sshExit = $LASTEXITCODE
+        if ($sshExit -eq 2) {
+            Write-Host ("== SKIPPED: {0} did not come online for OTA verify; likely offline/disconnected ==" -f $SingleTarget) -ForegroundColor Yellow
+            exit 20
+        }
         if ($sshExit -ne 0) {
             throw "ota_publish.py failed (exit $sshExit)"
         }
@@ -380,9 +384,42 @@ function Invoke-OtaChildWithSoftStopSupport {
         Start-Sleep -Milliseconds 200
     }
 
+    if ($p.ExitCode -eq 20) {
+        return [pscustomobject]@{
+            Target = $SingleTarget
+            Status = "Skipped"
+            Reason = "offline/disconnected"
+        }
+    }
+
     if ($p.ExitCode -ne 0) {
         throw "ota.ps1 failed for $SingleTarget (exit $($p.ExitCode))."
     }
+
+    return [pscustomobject]@{
+        Target = $SingleTarget
+        Status = "OK"
+        Reason = ""
+    }
+}
+
+function Write-OtaSummary {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Requested,
+        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Succeeded,
+        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Skipped,
+        [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Failed,
+        [bool]$StoppedEarly = $false
+    )
+
+    Write-Host ""
+    Write-Host "================ OTA SUMMARY ================" -ForegroundColor Cyan
+    Write-Host ("Requested : {0}" -f ($Requested -join ", "))
+    Write-Host ("Succeeded : {0}" -f $(if ($Succeeded.Count -gt 0) { $Succeeded -join ", " } else { "-" })) -ForegroundColor Green
+    Write-Host ("Skipped   : {0}" -f $(if ($Skipped.Count -gt 0) { $Skipped -join "; " } else { "-" })) -ForegroundColor Yellow
+    Write-Host ("Failed    : {0}" -f $(if ($Failed.Count -gt 0) { $Failed -join "; " } else { "-" })) -ForegroundColor Red
+    Write-Host ("Stopped   : {0}" -f $(if ($StoppedEarly) { "yes" } else { "no" }))
+    Write-Host "=============================================" -ForegroundColor Cyan
 }
 
 $requestedTargets = Normalize-RequestedTargets -RawTarget $Target
@@ -394,7 +431,10 @@ if ($resolvedTargets.Count -eq 1) {
 }
 
 $script:StopAfterCurrent = $false
-$failures = @()
+$failures = New-Object System.Collections.ArrayList
+$skipped = New-Object System.Collections.ArrayList
+$succeeded = New-Object System.Collections.ArrayList
+$stoppedEarly = $false
 
 Write-Host "Press Q at any time to stop after the current node finishes." -ForegroundColor Yellow
 
@@ -403,22 +443,33 @@ foreach ($singleTarget in $resolvedTargets) {
     Write-Host ("================ OTA {0} ================" -f $singleTarget) -ForegroundColor Cyan
 
     try {
-        Invoke-OtaChildWithSoftStopSupport -SingleTarget ([string]$singleTarget) -NoBuild:$NoBuild
+        $result = Invoke-OtaChildWithSoftStopSupport -SingleTarget ([string]$singleTarget) -NoBuild:$NoBuild
+
+        if ($result -and $result.Status -eq "Skipped") {
+            [void]$skipped.Add(("{0}: {1}" -f $singleTarget, $result.Reason))
+            Write-Host ("SKIPPED: {0}" -f $singleTarget) -ForegroundColor Yellow
+            Write-Host ("couldn't update {0}: {1}" -f $singleTarget, $result.Reason) -ForegroundColor Yellow
+        }
+        else {
+            [void]$succeeded.Add([string]$singleTarget)
+        }
     }
     catch {
-        $failures += ("{0}: {1}" -f $singleTarget, $_.Exception.Message)
+        [void]$failures.Add(("{0}: {1}" -f $singleTarget, $_.Exception.Message))
         Write-Host ("FAILED: {0}" -f $singleTarget) -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
     }
 
     if ($script:StopAfterCurrent) {
+        $stoppedEarly = $true
         Write-Host ""
         Write-Host "Stopped before starting the next node." -ForegroundColor Yellow
         break
     }
 }
 
-Write-Host ""
+Write-OtaSummary -Requested $resolvedTargets -Succeeded $succeeded -Skipped $skipped -Failed $failures -StoppedEarly:$stoppedEarly
+
 if ($failures.Count -gt 0) {
     throw ("OTA failed for {0} target(s): {1}" -f $failures.Count, ($failures -join "; "))
 }
