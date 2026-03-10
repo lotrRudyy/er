@@ -136,6 +136,9 @@ try {
       "-o", "StrictHostKeyChecking=accept-new"
   )
 
+  $sshExe = "C:\WINDOWS\System32\OpenSSH\ssh.exe"
+  $scpExe = "C:\WINDOWS\System32\OpenSSH\scp.exe"
+
   function Invoke-ProcessWithTimeout {
       param(
           [Parameter(Mandatory=$true)][string]$FilePath,
@@ -143,15 +146,31 @@ try {
           [int]$TimeoutSec = 60,
           [string]$What = "process"
       )
-      $p = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -NoNewWindow -PassThru
+
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $FilePath
+      $psi.UseShellExecute = $false
+      $psi.RedirectStandardOutput = $false
+      $psi.RedirectStandardError = $false
+      $psi.CreateNoWindow = $true
+
+      foreach ($arg in $ArgumentList) {
+          [void]$psi.ArgumentList.Add($arg)
+      }
+
+      $p = New-Object System.Diagnostics.Process
+      $p.StartInfo = $psi
+      [void]$p.Start()
+
       $deadline = (Get-Date).AddSeconds($TimeoutSec)
       while (-not $p.HasExited) {
           Start-Sleep -Milliseconds 100
           if ((Get-Date) -gt $deadline) {
-              try { Stop-Process -Id $p.Id -Force } catch {}
+              try { $p.Kill() } catch {}
               throw "$What timed out after ${TimeoutSec}s"
           }
       }
+
       if ($p.ExitCode -ne 0) { throw "$What failed (exit $($p.ExitCode))" }
   }
   function Get-FileSha256Hex([string]$Path) {
@@ -164,13 +183,13 @@ try {
   $fwSize = (Get-Item $firmwarePath).Length
   Write-Host ("== Uploading firmware to Pi as {0}  ({1} bytes) ==" -f $firmwareName, $fwSize)
 
-  & ssh @sshBaseArgs "$piUser@$piHost" "mkdir -p '$piFirmwareDir'"
+  & $sshExe @sshBaseArgs "$piUser@$piHost" "mkdir -p '$piFirmwareDir'"
   if ($LASTEXITCODE -ne 0) { throw "Failed to create firmware directory on Pi at $piFirmwareDir" }
 
   $remotePath = "$piUser@${piHost}:$piFirmwareDir/$firmwareName"
   $scpArgs = @("-B", "-C") + $sshBaseArgs + @($firmwarePath, $remotePath)
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
-  Invoke-ProcessWithTimeout -FilePath "scp" -ArgumentList $scpArgs -TimeoutSec 60 -What "SCP upload"
+  Invoke-ProcessWithTimeout -FilePath $scpExe -ArgumentList $scpArgs -TimeoutSec 60 -What "SCP upload"
   $sw.Stop()
   Write-Host ("== Upload finished in {0:n2}s ==" -f $sw.Elapsed.TotalSeconds)
 
@@ -207,7 +226,7 @@ try {
       "--up-max", "10"
   ) -join " "
 
-  & ssh @sshBaseArgs "$piUser@$piHost" $remoteCmd
+  & $sshExe @sshBaseArgs "$piUser@$piHost" $remoteCmd
   if ($LASTEXITCODE -ne 0) { throw "ota_publish.py failed" }
 
   Write-Host "== DONE =="

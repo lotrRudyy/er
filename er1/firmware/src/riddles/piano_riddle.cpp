@@ -54,12 +54,25 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   }
 
   // Start fresh progress on boot (no timeout tracking exists anymore)
+  solved_ = false;
+  solvedPublished_ = false;
+  if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
   resetProgress("boot");
+  gameActive_ = false;
+  publishState();
+}
+
+void PianoRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  solved_ = false;
+  solvedPublished_ = false;
+  if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
+  resetProgress(inGame ? "game_start" : "game_off");
   publishState();
 }
 
 void PianoRiddle::tick(uint32_t nowMs) {
-  if (detectorStarted_) {
+  if (detectorStarted_ && gameActive_) {
     piano_detector_loop_once();
   }
   (void)nowMs;
@@ -135,7 +148,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   log("INF", compat, data);
 
   // Still allow replay even if already solved (so it can re-open lock).
-  if (!ctx_ || !moduleEnabled_ || !ctx_->enabled()) return;
+  if (!ctx_ || !gameActive_ || !moduleEnabled_ || !ctx_->enabled()) return;
   if (!isAccepted) return;
   if (predSafe[0] == '\0') return;
 
@@ -192,8 +205,8 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
 void PianoRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") +
-                ",\"enabled\":" + (moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") +
+                ",\"enabled\":" + (gameActive_ && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
                 ",\"progress\":" + String(seqPos_) + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {

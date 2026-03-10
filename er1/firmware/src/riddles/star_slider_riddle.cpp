@@ -59,10 +59,20 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   } else {
     log("INF", "STATE default solved=0 (no prefs)");
   }
+  gameActive_ = false;
+  solvedFlag_ = false;
+  if (prefs_) prefs_->putBool("solved", false);
+  publishState();
+}
+
+void StarSliderRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  resetState(inGame ? "game_enable" : "game_standby");
   publishState();
 }
 
 void StarSliderRiddle::tick(uint32_t nowMs) {
+  if (!gameActive_) return;
   // IMPORTANT:
   // No RFID polling here. Riddle evaluation happens ONLY on button press.
   handleButton(nowMs);
@@ -261,7 +271,7 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
   // Evaluate on PRESS (active-low), not release.
   if (raw == LOW && !btnWasPressed_) {
     btnWasPressed_ = true;
-    if (ctx_ && ctx_->enabled()) {
+    if (gameActive_ && ctx_ && ctx_->enabled()) {
       evaluateSolveAttempt();
     } else {
       log("WRN", "button press while DISABLED");
@@ -299,7 +309,7 @@ void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
 
 void StarSliderRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"solved\":") + (solvedFlag_ ? "true" : "false") +
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solvedFlag_ ? "true" : "false") +
                 ",\"attempts\":" + solveAttempts_ +
                 ",\"success\":" + solveSuccess_ + "}";
   const auto& topics = ctx_->config().topics;

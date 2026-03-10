@@ -10,6 +10,7 @@ public:
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
+  void setGameMode(bool inGame);
 
   uint32_t errorCount() const { return errorCount_; }
   bool candlesSolved() const { return candlesSolved_; }
@@ -50,4 +51,5 @@ private:
   uint32_t cycleStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
+  bool gameActive_ = false;
 };

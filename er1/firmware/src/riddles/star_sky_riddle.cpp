@@ -17,14 +17,27 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
     ledcAttachPin(kLedPins[i], i);
     setStripRaw(i, 0);
   }
+  candlesSolved_ = false;
+  persistState();
   cycleStartMs_ = millis();
   lastMetricMs_ = millis();
+  gameActive_ = false;
+  setAllStripsOff();
+  publishState();
+}
+
+void StarSkyRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  candlesSolved_ = false;
+  persistState();
+  cycleStartMs_ = millis();
+  setAllStripsOff();
   publishState();
 }
 
 void StarSkyRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
-  if (ctx_->enabled()) {
+  if (gameActive_ && ctx_->enabled()) {
     applyPattern(nowMs);
   } else {
     setAllStripsOff();
@@ -45,6 +58,7 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
   }
 
   if (cmd && String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
+    if (!gameActive_) setGameMode(true);
     if (!candlesSolved_) {
       candlesSolved_ = true;
       persistState();
@@ -67,12 +81,13 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
 }
 
 void StarSkyRiddle::handleCandlesEvent(const String& payload) {
-  if (payload.indexOf("\"type\"") == -1 || payload.indexOf("\"riddle_solved\"") == -1) {
+  const bool isCandlesSolved =
+      (payload.indexOf("\"rid\":\"candles\"") >= 0 && payload.indexOf("\"event\":\"SOLVED\"") >= 0) ||
+      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0);
+  if (!isCandlesSolved) {
     return;
   }
-  if (payload.indexOf("\"id\":\"candles\"") == -1) {
-    return;
-  }
+  if (!gameActive_) return;
   if (!candlesSolved_) {
     candlesSolved_ = true;
     persistState();
@@ -106,7 +121,7 @@ bool StarSkyRiddle::publish(const char* topic, const String& payload, bool retai
 }
 
 void StarSkyRiddle::applyPattern(uint32_t nowMs) {
-  if (!candlesSolved_) {
+  if (!gameActive_ || !candlesSolved_) {
     setAllStripsOff();
     return;
   }
@@ -175,7 +190,7 @@ void StarSkyRiddle::loadState() {
 
 void StarSkyRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"candles\":") + (candlesSolved_ ? "true" : "false") + "}";
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"candles\":" + (candlesSolved_ ? "true" : "false") + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, data, nullptr, true);

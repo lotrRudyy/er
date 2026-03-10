@@ -11,7 +11,7 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
     pinMode(kLedPins[i], OUTPUT);
-    setLed(i, true);
+    setLed(i, false);
   }
   initState();
   // Configure ADC range for the microphone pins (helps prevent saturation)
@@ -28,6 +28,19 @@ void CandlesRiddle::begin(Core::NodeContext& ctx) {
   delay(1500);
   calibrateBases();
   lastMetricMs_ = millis();
+  gameActive_ = false;
+  publishState();
+}
+
+void CandlesRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  if (inGame) {
+    resetPuzzleState();
+    setAllLeds(true);
+  } else {
+    resetPuzzleState();
+    setAllLeds(false);
+  }
   publishState();
 }
 
@@ -93,6 +106,12 @@ void CandlesRiddle::calibrateBases() {
 
 void CandlesRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
+
+  if (!gameActive_) {
+    setAllLeds(false);
+    publishMetricsIfDue(nowMs);
+    return;
+  }
 
   if (ctx_->enabled()) {
     if (!solved_) {
@@ -227,6 +246,10 @@ bool CandlesRiddle::publish(const char* topic, const String& payload, bool retai
 void CandlesRiddle::setLed(int idx, bool on) {
   digitalWrite(kLedPins[idx], on ? HIGH : LOW);
   lit_[idx] = on;
+}
+
+void CandlesRiddle::setAllLeds(bool on) {
+  for (int i = 0; i < 4; i++) setLed(i, on);
 }
 
 void CandlesRiddle::initState() {
@@ -475,9 +498,9 @@ void CandlesRiddle::publishState() {
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() == 0) return;
   String data;
-  data.reserve(200);
-  data = String("{\"solved\":") + (solved_ ? "1" : "0") +
-         ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
+  data.reserve(220);
+  data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "1" : "0") +
+         ",\"en\":" + (gameActive_ && ctx_->enabled() ? "1" : "0") +
          ",\"lit\":[" + (lit_[0] ? "1" : "0") + "," + (lit_[1] ? "1" : "0") + "," + (lit_[2] ? "1" : "0") + "," + (lit_[3] ? "1" : "0") + "]" +
          ",\"progressed\":" + progressed_ +
          "}";

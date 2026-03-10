@@ -22,8 +22,11 @@ public:
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
 
-  // Node-level commands (<node>/cmd). Not used for MOSFET control.
+  // Node-level commands (<node>/cmd).
   bool onCmd(const char* cmd, const char* payload);
+
+  void onGameModeMessage(const String& msg);
+  void onEventTopic(const char* topic, const String& payload);
 
   // Called by NodeCore subscription callback for lighting/mosfet/<id>/cmd
   void onMosfetCommandTopic(const char* topic, const String& payload);
@@ -38,6 +41,13 @@ private:
   uint32_t mapUserValueToDuty(int32_t v) const;
 
   void applyOutput(ChannelState& ch);
+  void applySceneInitial(const char* reason);
+  void handleProgressEvent(const char* rid);
+  void runPianoTorch(const char* reason);
+  void runChessRoom(const char* reason);
+  bool setChannel(const char* id, bool on, uint32_t duty);
+  bool setChannelPercent(const char* id, bool on, uint32_t pct);
+  void publishChangedStates(const bool changed[], const char* reason);
 
   bool publish(const char* topic, const String& payload, bool retained) const;
   void publishChannelState(const ChannelState& ch, const char* reason);
@@ -59,4 +69,16 @@ private:
 
   bool bootStatePublished_ = false;
   bool lastMqttConnected_ = false;
+
+  bool inGame_ = false;
+  bool pianoSolvedSeen_ = false;
+  bool chessSolvedSeen_ = false;
+  bool candlesSolvedSeen_ = false;
+
+  bool pianoTorchPending_ = false;
+  uint32_t pianoTorchAtMs_ = 0;
+  bool chessRoomPending_ = false;
+  uint32_t chessRoomAtMs_ = 0;
+
+  static constexpr uint32_t kProgressDelayMs = 3000;
 };

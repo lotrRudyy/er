@@ -50,14 +50,22 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
     buttons_[i].prev = lvl;
   }
   solved_ = false;
+  gameActive_ = false;
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
   publishState();
 }
 
+void ImagesRiddle::setGameMode(bool inGame) {
+  gameActive_ = inGame;
+  resetState(inGame ? "game_start" : "game_off");
+  publishState();
+}
+
 void ImagesRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
+  if (!gameActive_) return;
 
   for (int i = 0; i < kButtonCount; i++) {
     ButtonState& b = buttons_[i];
@@ -73,8 +81,6 @@ void ImagesRiddle::tick(uint32_t nowMs) {
     cancelAllDownHold("disabled");
     return;
   }
-
-  if (solved_) return;
 
   handleAllDownHold(nowMs);
   publishMetricsIfDue();
@@ -152,11 +158,15 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
 
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
-  solved_ = true;
-  log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
-  publishSolvedEvent("images");
+  if (!solved_) {
+    solved_ = true;
+    log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+    publishSolvedEvent("images");
+  } else {
+    log("INF", "IMAGES_RETRIGGER", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+    publishState();
+  }
   openImagesMaglock();
-  publishState();
 }
 
 void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
@@ -258,7 +268,7 @@ void ImagesRiddle::openImagesMaglock() {
 
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
-  String data = String("{\"mode\":\"listening\",\"solved\":") + (solved_ ? "true" : "false") + "}";
+  String data = String("{\"mode\":\"") + (gameActive_ ? "ingame" : "standby") + "\",\"solved\":" + (solved_ ? "true" : "false") + "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
     publish(topics.state.c_str(), "state", 1, withSrc(data, nodeId_), nullptr, true);

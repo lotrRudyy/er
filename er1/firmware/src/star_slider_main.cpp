@@ -22,6 +22,10 @@ static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
+// ======================= TOPICS ==============================
+static const char* TOPIC_GAME = "game/state";
+static const char* TOPIC_EVT = "candles/evt";
+
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
@@ -45,6 +49,27 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* userData
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* userData) {
   auto* module = static_cast<StarSliderRiddle*>(userData);
   return module ? module->onCmd(cmd, payload) : false;
+}
+
+static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
+  (void)ctx;
+  auto* module = static_cast<StarSliderRiddle*>(userData);
+  if (!module) return;
+  String msg = payload;
+  msg.trim();
+  msg.toUpperCase();
+  module->setGameMode(false);
+}
+
+static void eventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
+  (void)ctx;
+  auto* module = static_cast<StarSliderRiddle*>(userData);
+  if (!module) return;
+  const bool isCandlesSolved =
+      (payload.indexOf("\"rid\":\"candles\"") >= 0 && payload.indexOf("\"event\":\"SOLVED\"") >= 0) ||
+      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0);
+  if (!isCandlesSolved) return;
+  module->setGameMode(true);
 }
 
 // ======================= ARDUINO LIFECYCLE ===================
@@ -97,6 +122,8 @@ void setup() {
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &starSlider);
+  nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &starSlider);
+  nodeCore.registerSubscription(TOPIC_EVT, eventSubscription, &starSlider);
 
   NodeContext& ctx = nodeCore.context();
   starSlider.begin(ctx);

@@ -85,21 +85,28 @@ void MaglockController::onGameModeMessage(const String& msg) {
     gameMode_ = GameMode::Off;
   }
 
+  auto modeName = [](GameMode m) -> const char* {
+    switch (m) {
+      case GameMode::InGame: return "INGAME";
+      case GameMode::Maint: return "MAINT";
+      case GameMode::Off:
+      default: return "OFF";
+    }
+  };
+
   if (old != gameMode_) {
-    auto modeName = [](GameMode m) -> const char* {
-      switch (m) {
-        case GameMode::InGame: return "INGAME";
-        case GameMode::Maint: return "MAINT";
-        case GameMode::Off:
-        default: return "OFF";
-      }
-    };
     String data = String("{\"from\":\"") + modeName(old) +
                   "\",\"to\":\"" + modeName(gameMode_) + "\"}";
     log("INF", "gameMode changed", data);
     applyHeartbeatInterval();
-    publishStateSnapshot();
   }
+
+  if (gameMode_ == GameMode::InGame) {
+    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, "game_start");
+    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, "game_start");
+  }
+
+  publishStateSnapshot();
 }
 
 
