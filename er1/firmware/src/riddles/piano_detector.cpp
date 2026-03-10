@@ -38,8 +38,8 @@ static constexpr float RMS_EMA_ALPHA_IDLE = 0.02f;
 static constexpr float RMS_MULT = 4.0f;
 static constexpr float RMS_ADD  = 0.002f;
 
-static constexpr int   CAND_DEBOUNCE_MS = 50;      // debounce candidate triggers
-static constexpr uint32_t NOTE_DEBOUNCE_MS = 100;   // debounce only after ACCEPTED notes
+static constexpr int   CAND_DEBOUNCE_MS = 15;      // debounce candidate triggers
+static constexpr uint32_t NOTE_DEBOUNCE_MS = 30;   // debounce only after ACCEPTED notes
 
 // QC onset (match qc_captures.py defaults)
 static constexpr float QC_ONSET_F_LO = 80.0f;
@@ -62,7 +62,7 @@ static constexpr int   HPS_EVAL_DELAY_MS = 10;
 static constexpr int   HPS_EVAL_MS = 80;
 
 // Feature ("post", locked)
-static constexpr int   FEAT_SEG_MS = 200;
+static constexpr int   FEAT_SEG_MS = 100;
 static constexpr int   FEAT_SEG_SAMPLES = (FS_HZ * FEAT_SEG_MS) / 1000; // 9600
 static constexpr int   FEAT_FFT_N = 4096;
 static constexpr int   FEAT_HOP = 512;

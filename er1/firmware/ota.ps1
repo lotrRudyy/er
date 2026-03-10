@@ -1,6 +1,5 @@
 param(
-    [ValidateSet("all","maglock","lighting","images_piano","chess","knocking","candles","star_sky","star_slider")]
-    [string[]]$Target,
+    [string]$Target,
     [string]$Env,
     [string]$Dev,
     [switch]$NoBuild
@@ -9,7 +8,7 @@ param(
 # ota.ps1
 # Supports:
 #   pwsh -File ota.ps1 -Target maglock
-#   pwsh -File ota.ps1 -Target maglock lighting candles
+#   pwsh -File ota.ps1 -Target "maglock,lighting,candles"
 #   pwsh -File ota.ps1 -Target all
 #
 # In multi-target mode:
@@ -17,7 +16,7 @@ param(
 #
 # Safety:
 # - Each target is resolved from the deployment map independently.
-# - Guard rails prevent Env/Dev mismatches (for example building lighting and flashing maglock).
+# - Guard rails prevent Env/Dev mismatches.
 
 $scriptDir = Split-Path -Parent $PSCommandPath
 
@@ -43,6 +42,30 @@ $allTargets = @(
     "star_slider"
 )
 
+function Normalize-RequestedTargets {
+    param([string]$RawTarget)
+
+    if ([string]::IsNullOrWhiteSpace($RawTarget)) {
+        throw "Usage: ota.ps1 -Target <device|device,device|all>"
+    }
+
+    $parts = $RawTarget.Split(",", [System.StringSplitOptions]::RemoveEmptyEntries)
+    $result = @()
+
+    foreach ($p in $parts) {
+        $t = $p.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($t)) {
+            $result += $t
+        }
+    }
+
+    if ($result.Count -eq 0) {
+        throw "Usage: ota.ps1 -Target <device|device,device|all>"
+    }
+
+    return @($result)
+}
+
 function Resolve-OtaTargets {
     param(
         [Parameter(Mandatory=$true)]
@@ -51,7 +74,7 @@ function Resolve-OtaTargets {
 
     $requested = @($RequestedTargets)
     if (-not $requested -or $requested.Length -eq 0) {
-        throw "Usage: ota.ps1 -Target <device...|all>"
+        throw "Usage: ota.ps1 -Target <device|device,device|all>"
     }
 
     if ($requested -contains "all") {
@@ -179,8 +202,6 @@ function Invoke-OtaSingleTarget {
 
         $cfg = $deployments[$SingleTarget]
 
-        # Resolve strictly from the deployment map unless the caller explicitly
-        # provides matching values. This prevents cross-target mixups.
         if ([string]::IsNullOrWhiteSpace($Env)) {
             $Env = $cfg.Env
         }
@@ -334,7 +355,6 @@ function Invoke-OtaChildWithSoftStopSupport {
             }
         }
         catch {
-            # Ignore if console input is unavailable
         }
 
         Start-Sleep -Milliseconds 200
@@ -345,7 +365,8 @@ function Invoke-OtaChildWithSoftStopSupport {
     }
 }
 
-$resolvedTargets = @(Resolve-OtaTargets -RequestedTargets $Target)
+$requestedTargets = Normalize-RequestedTargets -RawTarget $Target
+$resolvedTargets = @(Resolve-OtaTargets -RequestedTargets $requestedTargets)
 
 if ($resolvedTargets.Count -eq 1) {
     Invoke-OtaSingleTarget -SingleTarget ([string]$resolvedTargets[0]) -Env $Env -Dev $Dev -NoBuild:$NoBuild
@@ -362,8 +383,6 @@ foreach ($singleTarget in $resolvedTargets) {
     Write-Host ("================ OTA {0} ================" -f $singleTarget) -ForegroundColor Cyan
 
     try {
-        # IMPORTANT: in multi-target mode, do not forward outer Env/Dev.
-        # Each child run must resolve its own correct deployment mapping.
         Invoke-OtaChildWithSoftStopSupport -SingleTarget ([string]$singleTarget) -NoBuild:$NoBuild
     }
     catch {
