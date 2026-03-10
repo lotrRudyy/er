@@ -54,6 +54,8 @@ private:
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
   bool allDownHoldActive_ = false;
+  bool solveArmedAfterRelease_ = false;
+  bool startupBlockLogged_ = false;
   uint32_t allDownHoldStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
 };

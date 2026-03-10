@@ -33,6 +33,8 @@ void ChessRiddle::begin(Core::NodeContext& ctx) {
   lastPollMs_ = millis();
   gameActive_ = false;
   moduleEnabled_ = true;
+  solveArmedAfterUnsatisfied_ = false;
+  startupSolvedBlockLogged_ = false;
   publishState();
 }
 
@@ -256,6 +258,26 @@ void ChessRiddle::evaluatePattern() {
   const bool correct = patternCorrect();
   const bool anyPresent = anyTagPresent();
 
+  if (!solveArmedAfterUnsatisfied_) {
+    if (!correct) {
+      solveArmedAfterUnsatisfied_ = true;
+      startupSolvedBlockLogged_ = false;
+      log("INF", "CHESS_SOLVE_ARMED", "{\"reason\":\"pattern_became_incorrect\"}");
+    } else {
+      if (!startupSolvedBlockLogged_) {
+        startupSolvedBlockLogged_ = true;
+        log("INF", "CHESS_SOLVE_BLOCKED", "{\"reason\":\"await_first_incorrect_state\"}");
+      }
+
+      const RiddleState prevState = riddleState_;
+      riddleState_ = anyPresent ? RiddleState::Partial : RiddleState::Idle;
+      if (prevState != riddleState_) {
+        publishState();
+      }
+      return;
+    }
+  }
+
   const RiddleState prevState = riddleState_;
   switch (riddleState_) {
     case RiddleState::Idle:
@@ -319,6 +341,8 @@ void ChessRiddle::resetState(const char* reason) {
   riddleState_ = RiddleState::Idle;
   lastSolvedMs_ = 0;
   solvedCount_ = 0;
+  solveArmedAfterUnsatisfied_ = false;
+  startupSolvedBlockLogged_ = false;
   const char* src = (reason && reason[0]) ? reason : "reset";
   String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
   log("INF", "CHESS_STATE_RESET", data);
@@ -340,6 +364,7 @@ void ChessRiddle::publishState() {
       ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
       ",\"enabled\":" + ((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? String("true") : String("false")) +
       ",\"solved\":" + ((riddleState_ == RiddleState::Solved) ? String("true") : String("false")) +
+      ",\"armed_after_unsatisfied\":" + (solveArmedAfterUnsatisfied_ ? String("true") : String("false")) +
       ",\"raw_state\":\"" + stateName + "\"" +
       ",\"state\":\"" + stateName + "\"" +
       ",\"solved_count\":" + solvedCount_ +

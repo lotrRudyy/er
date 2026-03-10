@@ -56,6 +56,8 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   gameActive_ = false;
   moduleEnabled_ = true;
   allDownHoldActive_ = false;
+  solveArmedAfterRelease_ = false;
+  startupBlockLogged_ = false;
   allDownHoldStartMs_ = 0;
   lastMetricMs_ = millis();
 
@@ -172,6 +174,8 @@ void ImagesRiddle::resetState(const char* reason) {
   bool wasSolved = solved_;
   solved_ = false;
   retriggerArmed_ = true;
+  solveArmedAfterRelease_ = false;
+  startupBlockLogged_ = false;
   if (reason) {
     String data = String("{\"src\":\"") + reason +
                   "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
@@ -190,8 +194,24 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
 
   if (!allPressed) {
     cancelAllDownHold("release");
+
+    if (!solveArmedAfterRelease_) {
+      solveArmedAfterRelease_ = true;
+      startupBlockLogged_ = false;
+      log("INF", "IMAGES_SOLVE_ARMED", "{\"reason\":\"buttons_released_once\"}");
+    }
+
     if (solved_) {
       retriggerArmed_ = true;
+    }
+    return;
+  }
+
+  if (!solveArmedAfterRelease_) {
+    cancelAllDownHold("await_release");
+    if (!startupBlockLogged_) {
+      startupBlockLogged_ = true;
+      log("INF", "IMAGES_SOLVE_BLOCKED", "{\"reason\":\"await_first_release\"}");
     }
     return;
   }
@@ -335,11 +355,12 @@ void ImagesRiddle::publishState() {
   const char* rawState = solved_ ? "solved" : "idle";
 
   String data;
-  data.reserve(220);
+  data.reserve(260);
   data = String("{\"id\":\"images\"") +
          ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
          ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
          ",\"solved\":" + String(solved_ ? "true" : "false") +
+         ",\"armed_after_release\":" + String(solveArmedAfterRelease_ ? "true" : "false") +
          ",\"raw_state\":\"" + rawState + "\"" +
          ",\"buttons\":{" +
          "\"jesus\":" + String(buttons_[3].cur == LOW ? "true" : "false") + "," +

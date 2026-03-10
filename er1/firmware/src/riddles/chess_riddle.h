@@ -97,4 +97,6 @@ private:
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
+  bool solveArmedAfterUnsatisfied_ = false;
+  bool startupSolvedBlockLogged_ = false;
 };
