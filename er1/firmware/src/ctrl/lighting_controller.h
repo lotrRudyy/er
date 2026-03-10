@@ -56,6 +56,7 @@ private:
 
   void applyOutput(ChannelState& ch);
   void applySceneInitial(const char* reason);
+  void applySceneAllOn(const char* reason);
   void handleProgressEvent(const char* rid);
   void runPianoTorch(const char* reason);
   void runChessRoom(const char* reason);

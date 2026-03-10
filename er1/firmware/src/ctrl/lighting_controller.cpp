@@ -189,6 +189,10 @@ bool LightingController::onCmd(const char* cmd, const char* payload) {
 void LightingController::onGameModeMessage(const String& msg) {
   String trimmed = upperTrim(msg);
   const bool nextInGame = (trimmed == "INGAME");
+  const bool nextPrepare = (trimmed == "PREPARE");
+  const bool nextStandby = (trimmed == "STANDBY" || trimmed == "OFF");
+  const bool nextMaint = (trimmed == "MAINT" || trimmed == "MAINTENANCE");
+
   if (nextInGame) {
     inGame_ = true;
     pianoSolvedSeen_ = false;
@@ -225,9 +229,12 @@ void LightingController::onGameModeMessage(const String& msg) {
   resetFade(chessFade_);
   resetFade(candlesFade_);
 
-  bool changed[kChannelCount] = {};
-  for (size_t i = 0; i < kChannelCount; i++) changed[i] = setChannel(channels_[i].id, false, 0);
-  publishChangedStates(changed, "standby");
+  if (nextPrepare || nextStandby || nextMaint) {
+    applySceneAllOn(trimmed.c_str());
+    return;
+  }
+
+  applySceneAllOn("unknown_mode");
 }
 
 void LightingController::onEventTopic(const char* topic, const String& payload) {
@@ -399,6 +406,14 @@ void LightingController::applySceneInitial(const char* reason) {
   publishChangedStates(changed, reason);
 }
 
+void LightingController::applySceneAllOn(const char* reason) {
+  bool changed[kChannelCount] = {};
+  for (size_t i = 0; i < kChannelCount; i++) {
+    changed[i] = setChannel(channels_[i].id, true, driver_.maxDuty());
+  }
+  publishChangedStates(changed, reason);
+}
+
 void LightingController::runPianoTorch(const char* reason) {
   bool changed[kChannelCount] = {};
   changed[8] = setChannel("9", true, driver_.maxDuty());
@@ -453,7 +468,7 @@ void LightingController::handleProgressEvent(const char* rid) {
     );
 
     pianoTorchPending_ = true;
-    pianoTorchDueMs_ = millis();   // store start time
+    pianoTorchDueMs_ = millis();
 
     log("INF", "LIGHT_PIANO_SOLVED");
     return;

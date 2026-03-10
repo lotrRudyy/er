@@ -67,6 +67,7 @@ private:
   static const char* expectedLabelForReader(uint8_t i);
   static const char* presentLabelFromUid(const String& uid);
   void logFullTable() const;
+  String readerLabelsJson() const;
 
   Core::NodeContext* ctx_ = nullptr;
 
@@ -95,4 +96,5 @@ private:
   RiddleState riddleState_ = RiddleState::Idle;
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
+  bool moduleEnabled_ = true;
 };
