@@ -29,6 +29,16 @@ private:
     {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (pov von spieler: links)
   };
 
+/*
+  1: skorpion	    "r0":"3a-55-55-d2","r1":"1a-b8-4d-d2","r2":"7a-dc-4f-d2"
+  2: gemini	      "r0":"5a-df-53-d2","r1":"6a-88-4f-d2","r2":"fa-51-53-d2"
+  3: libera	      "r0":"10-57-51-2f","r1":"4a-e7-4b-d2","r2":"3a-09-51-d2"
+  4: sagittarius	"r0":"4a-72-4e-d2","r1":"5a-11-4f-d2","r2":"4a-8f-4e-d2"
+  5: aquarius	    "r0":"10-1e-51-2f","r1":"9a-71-4c-d2","r2":"7a-4b-4e-d2"
+  6: pisces	      "r0":"da-47-50-d2","r1":"fa-44-4f-d2","r2":"3a-f3-4e-d2"
+  7: leo	        "r0":"ea-99-4f-d2","r1":"5a-7a-4c-d2","r2":"9a-1e-4b-d2"
+*/
+
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
