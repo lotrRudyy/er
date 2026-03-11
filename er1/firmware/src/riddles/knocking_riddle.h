@@ -56,9 +56,6 @@ private:
   static constexpr const char* kTrackPaths[5] = {
       nullptr, "/1.wav", "/2.wav", "/3.wav", "/4.wav"};
 
-  // Background silence to keep I2S clock + amp "awake"
-  static constexpr const char* kSilencePath = "/silence.wav";
-
   static constexpr size_t kAttemptHistoryMax = 64;
   static constexpr size_t kAttemptStringMax = 48;
 
@@ -109,7 +106,7 @@ private:
   void publishState();
   void resetState(const char* reason);
 
-  void publishLittleFsListingOnce(); // MQTT debug listing
+  void publishLittleFsListingOnce();
   void publishAudioDebug(const char* reason) const;
 
   Core::NodeContext* ctx_ = nullptr;
@@ -121,7 +118,7 @@ private:
   // FS listing over MQTT (once after MQTT connected)
   bool fsListed_ = false;
 
-  // Background silence state
+  // Silence disabled for debugging
   bool silenceAvailable_ = false;
   bool silenceActive_ = false;
 

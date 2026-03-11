@@ -51,10 +51,10 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
       ",\"din\":" + kI2S_DIN +
       ",\"volume\":" + kAudioVolume +
       ",\"fs_ok\":" + (audioOk_ ? "true" : "false") +
-      ",\"silence_exists\":" + (LittleFS.exists(kSilencePath) ? "true" : "false") +
+      ",\"silence_enabled\":false" +
       "}");
 
-  silenceAvailable_ = audioOk_ && LittleFS.exists(kSilencePath);
+  silenceAvailable_ = false;
   silenceActive_ = false;
 
   for (int i = 0; i < kSensorCount; i++) {
@@ -96,9 +96,6 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
 void KnockingRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
   resetState(inGame ? "game_enable" : "game_standby");
-  if (gameActive_) {
-    startSilenceIfIdle();
-  }
   publishState();
 }
 
@@ -127,9 +124,6 @@ void KnockingRiddle::tick(uint32_t nowMs) {
   }
 
   serviceSound(nowMs);
-
-  // If no queued/active sound, keep the amp warm
-  startSilenceIfIdle();
 }
 
 bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
@@ -266,8 +260,8 @@ void KnockingRiddle::publishAudioDebug(const char* reason) const {
       ",\"module_enabled\":" + (moduleEnabled_ ? "true" : "false") +
       ",\"core_enabled\":" + (ctx_->enabled() ? "true" : "false") +
       ",\"audio_ok\":" + (audioOk_ ? "true" : "false") +
-      ",\"silence_available\":" + (silenceAvailable_ ? "true" : "false") +
-      ",\"silence_active\":" + (silenceActive_ ? "true" : "false") +
+      ",\"silence_available\":false" +
+      ",\"silence_active\":false" +
       ",\"sound_playing\":" + (soundPlaying_ ? "true" : "false") +
       ",\"current_track\":" + currentTrack_ +
       ",\"queue_head\":" + soundHead_ +
@@ -280,21 +274,10 @@ void KnockingRiddle::publishAudioDebug(const char* reason) const {
 }
 
 void KnockingRiddle::startSilenceIfIdle() {
-  if (!audioOk_ || !silenceAvailable_) return;
-  if (soundPlaying_) return;
-  if (!soundQueueEmpty()) return;
-  if (silenceActive_) return;
-
-  // Keep the I2S clock running; we keep volume at 0 so it's truly silent.
-  audio_.stopSong();
-  audio_.setVolume(0);
-  audio_.connecttoFS(LittleFS, kSilencePath);
-  silenceActive_ = true;
+  silenceActive_ = false;
 }
 
 void KnockingRiddle::stopSilenceIfActive() {
-  if (!silenceActive_) return;
-  audio_.stopSong();
   silenceActive_ = false;
 }
 
@@ -359,10 +342,8 @@ void KnockingRiddle::handleKnockWindow(uint32_t nowMs) {
       ",\"m1\":" + windowMax_[1] +
       ",\"m2\":" + windowMax_[2] + "}");
 
-  // Queue sound immediately after window closes (BEFORE global debounce)
   playKnockSound(bestIdx);
 
-  // Global debounce applies only to sequence acceptance
   if (nowMs - lastKnockMsGlobal_ < kKnockDebounceMs) {
     return;
   }
@@ -432,7 +413,6 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
     if (nowMs - lastSoundStartMs_ >= needed) {
       soundPlaying_ = false;
       currentTrack_ = 0;
-      // Silence will be resumed by startSilenceIfIdle()
     }
     return;
   }
@@ -449,10 +429,6 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
   const char* path = kTrackPaths[track];
   if (!path) return;
 
-  // Stop background silence so we can start the real sound immediately
-  stopSilenceIfActive();
-
-  // Restore audible volume for real playback
   audio_.setVolume(kAudioVolume);
 
   log("DBG", "SOUND_START",
@@ -472,6 +448,12 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
       ",\"track\":" + track +
       ",\"path\":\"" + String(path) + "\"" +
       "}");
+
+  if (!ok) {
+    soundPlaying_ = false;
+    currentTrack_ = 0;
+    return;
+  }
 
   lastSoundStartMs_ = nowMs;
   currentTrack_ = track;
