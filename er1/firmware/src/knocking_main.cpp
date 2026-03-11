@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "9";
+static const char* FW_VERSION = "10";
 static const char* FW_DESC = "trying to make sounds come faster";
 
 // ======================= NETWORK CONFIG ======================
@@ -59,10 +59,19 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   (void)ctx;
   auto* module = static_cast<KnockingRiddle*>(user);
   if (!module) return;
+
   String msg = payload;
   msg.trim();
-  msg.toUpperCase();
-  module->setGameMode(false);
+
+  String upper = msg;
+  upper.toUpperCase();
+
+  const bool inGame =
+      upper.indexOf("\"MODE\":\"INGAME\"") >= 0 ||
+      upper.indexOf("\"STATE\":\"INGAME\"") >= 0 ||
+      upper == "INGAME";
+
+  module->setGameMode(inGame);
 }
 
 static void eventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
@@ -76,6 +85,10 @@ static void eventSubscription(NodeContext& ctx, const char* /*topic*/, const Str
 
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("[knocking][INF] SERIAL_READY");
+
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
   cfg.fwVersion = FW_VERSION;

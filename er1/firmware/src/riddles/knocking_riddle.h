@@ -24,6 +24,7 @@ public:
 
 private:
   static constexpr bool kDevLog = true;
+  static constexpr bool kSerialDebugDefault = true;
 
   static constexpr int kSensorCount = 3;
   static constexpr int kPiezoPins[kSensorCount] = {32, 33, 34};
@@ -73,6 +74,7 @@ private:
     uint16_t bucketMax[kBuckets];
   };
 
+  void serialLogLine(const char* level, const String& msg, const String* dataJson = nullptr) const;
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
@@ -108,6 +110,7 @@ private:
   void resetState(const char* reason);
 
   void publishLittleFsListingOnce(); // MQTT debug listing
+  void publishAudioDebug(const char* reason) const;
 
   Core::NodeContext* ctx_ = nullptr;
 
@@ -150,4 +153,5 @@ private:
   bool solved_ = false;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
+  bool serialDebug_ = kSerialDebugDefault;
 };

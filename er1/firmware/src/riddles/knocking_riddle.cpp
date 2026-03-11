@@ -17,6 +17,17 @@ static String jsonEscape(const String& s) {
   return out;
 }
 
+void KnockingRiddle::serialLogLine(const char* level, const String& msg, const String* dataJson) const {
+  if (!serialDebug_) return;
+
+  String line = String("[knocking][") + (level ? level : "?") + "] " + msg;
+  if (dataJson && dataJson->length() > 0) {
+    line += " ";
+    line += *dataJson;
+  }
+  Serial.println(line);
+}
+
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
 
@@ -31,6 +42,17 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
   audio_.setVolume(kAudioVolume);
   audio_.setTone(0, 0, 15);
+
+  serialDebug_ = kSerialDebugDefault;
+
+  log("INF", "AUDIO_INIT",
+      String("{\"bclk\":") + kI2S_BCLK +
+      ",\"lrc\":" + kI2S_LRC +
+      ",\"din\":" + kI2S_DIN +
+      ",\"volume\":" + kAudioVolume +
+      ",\"fs_ok\":" + (audioOk_ ? "true" : "false") +
+      ",\"silence_exists\":" + (LittleFS.exists(kSilencePath) ? "true" : "false") +
+      "}");
 
   silenceAvailable_ = audioOk_ && LittleFS.exists(kSilencePath);
   silenceActive_ = false;
@@ -82,7 +104,15 @@ void KnockingRiddle::setGameMode(bool inGame) {
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
-  if (!gameActive_) return;
+
+  if (!gameActive_) {
+    static uint32_t lastStandbyLogMs = 0;
+    if (serialDebug_ && nowMs - lastStandbyLogMs >= 2000) {
+      lastStandbyLogMs = nowMs;
+      serialLogLine("DBG", "TICK_SKIPPED_GAME_INACTIVE", nullptr);
+    }
+    return;
+  }
 
   if (audioOk_) {
     audio_.loop();
@@ -102,7 +132,7 @@ void KnockingRiddle::tick(uint32_t nowMs) {
   startSilenceIfIdle();
 }
 
-bool KnockingRiddle::onCmd(const char* cmd, const char* /*payload*/) {
+bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
 
   if (strcasecmp(cmd, "RESET_KNOCKING") == 0 || strcasecmp(cmd, "RESET") == 0) {
@@ -128,8 +158,35 @@ bool KnockingRiddle::onCmd(const char* cmd, const char* /*payload*/) {
     return true;
   }
 
-  if (strcasecmp(cmd, "STATUS") == 0) {
+  if (strcasecmp(cmd, "STATUS") == 0 || strcasecmp(cmd, "AUDIO_STATUS") == 0) {
     publishState();
+    publishAudioDebug("cmd_status");
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DEBUG_ON") == 0 || strcasecmp(cmd, "SERIAL_ON") == 0) {
+    serialDebug_ = true;
+    log("INF", "SERIAL_DEBUG_ON");
+    publishAudioDebug("serial_debug_on");
+    return true;
+  }
+
+  if (strcasecmp(cmd, "DEBUG_OFF") == 0 || strcasecmp(cmd, "SERIAL_OFF") == 0) {
+    log("INF", "SERIAL_DEBUG_OFF");
+    serialDebug_ = false;
+    publishAudioDebug("serial_debug_off");
+    return true;
+  }
+
+  if (strcasecmp(cmd, "TEST_SOUND") == 0) {
+    int track = atoi(payload ? payload : "0");
+    if (track >= 1 && track <= 4) {
+      enqueueSound((uint8_t)track, -1);
+      publishAudioDebug("test_sound");
+      return true;
+    }
+    log("WRN", "TEST_SOUND_BAD_ARG",
+        String("{\"payload\":\"") + String(payload ? payload : "") + "\"}");
     return true;
   }
 
@@ -142,12 +199,14 @@ bool KnockingRiddle::shouldAllowLog(const char* level) {
 }
 
 void KnockingRiddle::log(const char* level, const String& msg) const {
+  serialLogLine(level, msg, nullptr);
   if (!ctx_) return;
   if (strcmp(level, "ERR") == 0) errorCount_++;
   ctx_->log(level, msg);
 }
 
 void KnockingRiddle::log(const char* level, const String& msg, const String& dataJson) const {
+  serialLogLine(level, msg, &dataJson);
   if (!ctx_) return;
   if (strcmp(level, "ERR") == 0) errorCount_++;
   ctx_->log(level, msg, dataJson);
@@ -195,6 +254,31 @@ void KnockingRiddle::publishLittleFsListingOnce() {
   }
 }
 
+void KnockingRiddle::publishAudioDebug(const char* reason) const {
+  if (!ctx_) return;
+
+  const auto& topics = ctx_->config().topics;
+  if (topics.dbg.length() == 0) return;
+
+  String data =
+      String("{\"reason\":\"") + String(reason ? reason : "?") + "\"" +
+      ",\"game_active\":" + (gameActive_ ? "true" : "false") +
+      ",\"module_enabled\":" + (moduleEnabled_ ? "true" : "false") +
+      ",\"core_enabled\":" + (ctx_->enabled() ? "true" : "false") +
+      ",\"audio_ok\":" + (audioOk_ ? "true" : "false") +
+      ",\"silence_available\":" + (silenceAvailable_ ? "true" : "false") +
+      ",\"silence_active\":" + (silenceActive_ ? "true" : "false") +
+      ",\"sound_playing\":" + (soundPlaying_ ? "true" : "false") +
+      ",\"current_track\":" + currentTrack_ +
+      ",\"queue_head\":" + soundHead_ +
+      ",\"queue_tail\":" + soundTail_ +
+      ",\"seq_len\":" + seqLen_ +
+      ",\"last_raw\":[" + String(piezo_[0].lastRaw) + "," + String(piezo_[1].lastRaw) + "," + String(piezo_[2].lastRaw) + "]" +
+      "}";
+
+  publish(topics.dbg.c_str(), "audio_debug", 1, data, nullptr, false);
+}
+
 void KnockingRiddle::startSilenceIfIdle() {
   if (!audioOk_ || !silenceAvailable_) return;
   if (soundPlaying_) return;
@@ -233,6 +317,12 @@ void KnockingRiddle::updatePiezoSamples(uint32_t nowMs) {
         knockWindowStart_ = nowMs;
         for (int j = 0; j < kSensorCount; j++) windowMax_[j] = 0;
         windowMax_[i] = raw;
+
+        log("DBG", "PIEZO_HIT",
+            String("{\"t\":") + nowMs +
+            ",\"idx\":" + i +
+            ",\"raw\":" + raw +
+            ",\"thr\":" + kKnockThresholds[i] + "}");
 
         log("DBG", "WIN_START",
             String("{\"t\":") + nowMs +
@@ -369,9 +459,20 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
       String("{\"t\":") + nowMs +
       ",\"track\":" + track +
       ",\"idx\":" + (int)srcIdx +
-      ",\"path\":\"" + String(path) + "\"" + "}");
+      ",\"path\":\"" + String(path) + "\"" +
+      ",\"queue_head\":" + soundHead_ +
+      ",\"queue_tail\":" + soundTail_ +
+      "}");
 
-  audio_.connecttoFS(LittleFS, path);
+  bool ok = audio_.connecttoFS(LittleFS, path);
+
+  log(ok ? "DBG" : "ERR",
+      ok ? "SOUND_CONNECT_OK" : "SOUND_CONNECT_FAIL",
+      String("{\"t\":") + nowMs +
+      ",\"track\":" + track +
+      ",\"path\":\"" + String(path) + "\"" +
+      "}");
+
   lastSoundStartMs_ = nowMs;
   currentTrack_ = track;
   soundPlaying_ = true;
