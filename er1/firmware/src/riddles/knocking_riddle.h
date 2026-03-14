@@ -25,7 +25,7 @@ private:
 
   static constexpr int kSensorCount = 3;
   static constexpr int kPiezoPins[kSensorCount] = {32, 33, 34};
-  static constexpr uint16_t kKnockThresholds[kSensorCount] = {700, 300, 1000};
+  static constexpr uint16_t kKnockThresholds[kSensorCount] = {700, 200, 1000};
 
   static constexpr uint32_t kKnockDebounceMs = 200;
   static constexpr uint32_t kKnockWindowMs = 40;
