@@ -34,7 +34,7 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   if (!LittleFS.begin(false)) {
     audioOk_ = false;
     errorCount_++;
-    log("DBG", "FS_MOUNT_FAIL", String("{\"t\":") + millis() + "}");
+    log("ERR", "FS_MOUNT_FAIL", String("{\"t\":") + millis() + "}");
   } else {
     audioOk_ = true;
   }
@@ -43,19 +43,16 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   audio_.setVolume(kAudioVolume);
   audio_.setTone(0, 0, 15);
 
-  serialDebug_ = kSerialDebugDefault;
-
   log("INF", "AUDIO_INIT",
       String("{\"bclk\":") + kI2S_BCLK +
       ",\"lrc\":" + kI2S_LRC +
       ",\"din\":" + kI2S_DIN +
       ",\"volume\":" + kAudioVolume +
       ",\"fs_ok\":" + (audioOk_ ? "true" : "false") +
-      ",\"silence_enabled\":false" +
+      ",\"knock_window_ms\":" + kKnockWindowMs +
+      ",\"embedded_sample_rate\":" + KNOCK_SAMPLE_RATE +
+      ",\"embedded_knock_len\":" + KNOCK_SAMPLE_LEN +
       "}");
-
-  silenceAvailable_ = false;
-  silenceActive_ = false;
 
   for (int i = 0; i < kSensorCount; i++) {
     piezo_[i].pin = kPiezoPins[i];
@@ -80,6 +77,13 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   lastSoundStartMs_ = 0;
   currentTrack_ = 0;
 
+  rawI2sReady_ = false;
+  embeddedPlaying_ = false;
+  embeddedTrack_ = 0;
+  embeddedBuf_ = nullptr;
+  embeddedLen_ = 0;
+  embeddedPos_ = 0;
+
   solved_ = false;
   fsListed_ = false;
   moduleEnabled_ = true;
@@ -102,20 +106,15 @@ void KnockingRiddle::setGameMode(bool inGame) {
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
 
-  if (!gameActive_) {
-    static uint32_t lastStandbyLogMs = 0;
-    if (serialDebug_ && nowMs - lastStandbyLogMs >= 2000) {
-      lastStandbyLogMs = nowMs;
-      serialLogLine("DBG", "TICK_SKIPPED_GAME_INACTIVE", nullptr);
-    }
-    return;
-  }
+  publishLittleFsListingOnce();
 
-  if (audioOk_) {
+  if (embeddedPlaying_) {
+    serviceEmbeddedSound(nowMs);
+  } else if (audioOk_) {
     audio_.loop();
   }
 
-  publishLittleFsListingOnce();
+  if (!gameActive_) return;
 
   if (moduleEnabled_ && ctx_->enabled()) {
     updatePiezoSamples(nowMs);
@@ -123,7 +122,11 @@ void KnockingRiddle::tick(uint32_t nowMs) {
     evaluateSequenceIfDue(nowMs);
   }
 
-  serviceSound(nowMs);
+  if (embeddedPlaying_) {
+    serviceEmbeddedSound(nowMs);
+  } else {
+    serviceSound(nowMs);
+  }
 }
 
 bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
@@ -174,11 +177,20 @@ bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
 
   if (strcasecmp(cmd, "TEST_SOUND") == 0) {
     int track = atoi(payload ? payload : "0");
-    if (track >= 1 && track <= 4) {
-      enqueueSound((uint8_t)track, -1);
-      publishAudioDebug("test_sound");
+    uint32_t nowMs = millis();
+    if (track >= 1 && track <= 3) {
+      startEmbeddedTrack((uint8_t)track, -1, nowMs);
+      publishAudioDebug("test_sound_embedded");
       return true;
     }
+    if (track == 4) {
+      if (!startFsTrackNow(4, -1, nowMs)) {
+        enqueueSound(4, -1);
+      }
+      publishAudioDebug("test_sound_fs");
+      return true;
+    }
+
     log("WRN", "TEST_SOUND_BAD_ARG",
         String("{\"payload\":\"") + String(payload ? payload : "") + "\"}");
     return true;
@@ -260,9 +272,11 @@ void KnockingRiddle::publishAudioDebug(const char* reason) const {
       ",\"module_enabled\":" + (moduleEnabled_ ? "true" : "false") +
       ",\"core_enabled\":" + (ctx_->enabled() ? "true" : "false") +
       ",\"audio_ok\":" + (audioOk_ ? "true" : "false") +
-      ",\"silence_available\":false" +
-      ",\"silence_active\":false" +
-      ",\"sound_playing\":" + (soundPlaying_ ? "true" : "false") +
+      ",\"embedded_playing\":" + (embeddedPlaying_ ? "true" : "false") +
+      ",\"embedded_track\":" + embeddedTrack_ +
+      ",\"embedded_pos\":" + embeddedPos_ +
+      ",\"embedded_len\":" + embeddedLen_ +
+      ",\"fs_playing\":" + (soundPlaying_ ? "true" : "false") +
       ",\"current_track\":" + currentTrack_ +
       ",\"queue_head\":" + soundHead_ +
       ",\"queue_tail\":" + soundTail_ +
@@ -271,14 +285,6 @@ void KnockingRiddle::publishAudioDebug(const char* reason) const {
       "}";
 
   publish(topics.dbg.c_str(), "audio_debug", 1, data, nullptr, false);
-}
-
-void KnockingRiddle::startSilenceIfIdle() {
-  silenceActive_ = false;
-}
-
-void KnockingRiddle::stopSilenceIfActive() {
-  silenceActive_ = false;
 }
 
 void KnockingRiddle::updatePiezoSamples(uint32_t nowMs) {
@@ -367,7 +373,8 @@ void KnockingRiddle::playKnockSound(int idx) {
   else if (idx == 1) track = 2;
   else if (idx == 2) track = 3;
   else return;
-  enqueueSound((uint8_t)track, (int8_t)idx);
+
+  startEmbeddedTrack((uint8_t)track, (int8_t)idx, millis());
 }
 
 void KnockingRiddle::enqueueSound(uint8_t track, int8_t srcIdx) {
@@ -397,16 +404,186 @@ bool KnockingRiddle::soundQueueFull() const {
 
 unsigned long KnockingRiddle::trackFallbackMs(uint8_t track) const {
   switch (track) {
-    case 1: return 120;
-    case 2: return 120;
-    case 3: return 120;
     case 4: return 1040;
     default: return 120;
   }
 }
 
+void KnockingRiddle::ensureRawI2sConfigured() {
+  if (rawI2sReady_) return;
+
+  i2s_driver_uninstall(kI2SPort);
+
+  i2s_config_t cfg{};
+  cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate = KNOCK_SAMPLE_RATE;
+  cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+#ifdef I2S_COMM_FORMAT_STAND_I2S
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+#else
+  cfg.communication_format = I2S_COMM_FORMAT_I2S;
+#endif
+  cfg.intr_alloc_flags = 0;
+  cfg.dma_buf_count = 8;
+  cfg.dma_buf_len = 128;
+  cfg.use_apll = false;
+  cfg.tx_desc_auto_clear = true;
+  cfg.fixed_mclk = 0;
+
+  i2s_pin_config_t pins{};
+  pins.bck_io_num = kI2S_BCLK;
+  pins.ws_io_num = kI2S_LRC;
+  pins.data_out_num = kI2S_DIN;
+  pins.data_in_num = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(kI2SPort, &cfg, 0, nullptr);
+  i2s_set_pin(kI2SPort, &pins);
+  i2s_zero_dma_buffer(kI2SPort);
+  rawI2sReady_ = true;
+}
+
+bool KnockingRiddle::startEmbeddedTrack(uint8_t track, int8_t srcIdx, uint32_t nowMs) {
+  if (track < 1 || track > 3) return false;
+
+  if (audioOk_) {
+    audio_.stopSong();
+  }
+  soundPlaying_ = false;
+  currentTrack_ = 0;
+
+  ensureRawI2sConfigured();
+
+  switch (track) {
+    case 1:
+      embeddedBuf_ = knock1_pcm;
+      embeddedLen_ = KNOCK_SAMPLE_LEN;
+      break;
+    case 2:
+      embeddedBuf_ = knock2_pcm;
+      embeddedLen_ = KNOCK_SAMPLE_LEN;
+      break;
+    case 3:
+      embeddedBuf_ = knock3_pcm;
+      embeddedLen_ = KNOCK_SAMPLE_LEN;
+      break;
+    default:
+      return false;
+  }
+
+  embeddedTrack_ = track;
+  embeddedPos_ = 0;
+  embeddedPlaying_ = true;
+
+  log("DBG", "SOUND_START",
+      String("{\"t\":") + nowMs +
+      ",\"track\":" + track +
+      ",\"idx\":" + (int)srcIdx +
+      ",\"embedded\":true" +
+      ",\"samples\":" + embeddedLen_ +
+      ",\"sample_rate\":" + KNOCK_SAMPLE_RATE +
+      "}");
+
+  return true;
+}
+
+void KnockingRiddle::serviceEmbeddedSound(uint32_t nowMs) {
+  (void)nowMs;
+  if (!embeddedPlaying_ || !embeddedBuf_ || embeddedPos_ >= embeddedLen_) {
+    return;
+  }
+
+  int16_t stereo[kEmbeddedChunkFrames * 2];
+  size_t frames = 0;
+  while (frames < kEmbeddedChunkFrames && embeddedPos_ < embeddedLen_) {
+    int16_t s = embeddedBuf_[embeddedPos_++];
+    stereo[frames * 2] = s;
+    stereo[frames * 2 + 1] = s;
+    ++frames;
+  }
+
+  size_t written = 0;
+  if (frames > 0) {
+    i2s_write(kI2SPort, stereo, frames * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+  }
+
+  if (embeddedPos_ >= embeddedLen_) {
+    log("DBG", "SOUND_DONE",
+        String("{\"t\":") + millis() +
+        ",\"track\":" + embeddedTrack_ +
+        ",\"embedded\":true" +
+        ",\"samples\":" + embeddedLen_ +
+        "}");
+    stopEmbeddedSound();
+  }
+}
+
+void KnockingRiddle::stopEmbeddedSound() {
+  embeddedPlaying_ = false;
+  embeddedTrack_ = 0;
+  embeddedBuf_ = nullptr;
+  embeddedLen_ = 0;
+  embeddedPos_ = 0;
+
+  if (rawI2sReady_) {
+    i2s_zero_dma_buffer(kI2SPort);
+  }
+}
+
+bool KnockingRiddle::startFsTrackNow(uint8_t track, int8_t srcIdx, uint32_t nowMs) {
+  if (!audioOk_) return false;
+  if (track != 4) return false;
+  if (embeddedPlaying_) return false;
+  if (soundPlaying_) return false;
+
+  const char* path = kTrackPaths[track];
+  if (!path) return false;
+
+  if (rawI2sReady_) {
+    i2s_zero_dma_buffer(kI2SPort);
+    i2s_driver_uninstall(kI2SPort);
+    rawI2sReady_ = false;
+  }
+
+  audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
+  audio_.setVolume(kAudioVolume);
+
+  log("DBG", "SOUND_START",
+      String("{\"t\":") + nowMs +
+      ",\"track\":" + track +
+      ",\"idx\":" + (int)srcIdx +
+      ",\"path\":\"" + String(path) + "\"" +
+      ",\"embedded\":false" +
+      ",\"queue_head\":" + soundHead_ +
+      ",\"queue_tail\":" + soundTail_ +
+      "}");
+
+  bool ok = audio_.connecttoFS(LittleFS, path);
+
+  log(ok ? "DBG" : "ERR",
+      ok ? "SOUND_CONNECT_OK" : "SOUND_CONNECT_FAIL",
+      String("{\"t\":") + nowMs +
+      ",\"track\":" + track +
+      ",\"path\":\"" + String(path) + "\"" +
+      ",\"embedded\":false" +
+      "}");
+
+  if (!ok) {
+    soundPlaying_ = false;
+    currentTrack_ = 0;
+    return false;
+  }
+
+  lastSoundStartMs_ = nowMs;
+  currentTrack_ = track;
+  soundPlaying_ = true;
+  return true;
+}
+
 void KnockingRiddle::serviceSound(uint32_t nowMs) {
   if (!audioOk_) return;
+
+  if (embeddedPlaying_) return;
 
   if (soundPlaying_) {
     unsigned long needed = trackFallbackMs(currentTrack_);
@@ -426,38 +603,12 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
   uint8_t srcNibble = (uint8_t)((packed >> 4) & 0x0F);
   int8_t srcIdx = (srcNibble == 0x0F) ? (int8_t)-1 : (int8_t)srcNibble;
 
-  const char* path = kTrackPaths[track];
-  if (!path) return;
-
-  audio_.setVolume(kAudioVolume);
-
-  log("DBG", "SOUND_START",
-      String("{\"t\":") + nowMs +
-      ",\"track\":" + track +
-      ",\"idx\":" + (int)srcIdx +
-      ",\"path\":\"" + String(path) + "\"" +
-      ",\"queue_head\":" + soundHead_ +
-      ",\"queue_tail\":" + soundTail_ +
-      "}");
-
-  bool ok = audio_.connecttoFS(LittleFS, path);
-
-  log(ok ? "DBG" : "ERR",
-      ok ? "SOUND_CONNECT_OK" : "SOUND_CONNECT_FAIL",
-      String("{\"t\":") + nowMs +
-      ",\"track\":" + track +
-      ",\"path\":\"" + String(path) + "\"" +
-      "}");
-
-  if (!ok) {
-    soundPlaying_ = false;
-    currentTrack_ = 0;
+  if (track >= 1 && track <= 3) {
+    startEmbeddedTrack(track, srcIdx, nowMs);
     return;
   }
 
-  lastSoundStartMs_ = nowMs;
-  currentTrack_ = track;
-  soundPlaying_ = true;
+  startFsTrackNow(track, srcIdx, nowMs);
 }
 
 void KnockingRiddle::evaluateSequence(bool timeoutAttempt) {
@@ -562,13 +713,14 @@ void KnockingRiddle::resetState(const char* reason) {
   lastSoundStartMs_ = 0;
   currentTrack_ = 0;
 
-  solved_ = false;
-  resetSequence();
-
   if (audioOk_) {
     audio_.stopSong();
   }
-  silenceActive_ = false;
+
+  stopEmbeddedSound();
+
+  solved_ = false;
+  resetSequence();
 
   const char* src = (reason && reason[0]) ? reason : "reset";
   String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";

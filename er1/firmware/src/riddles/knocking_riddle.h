@@ -2,12 +2,12 @@
 #pragma once
 
 #include <Arduino.h>
+#include <driver/i2s.h>
 
-// MAX98357A via I2S + files from LittleFS
 #include "Audio.h"
 #include "LittleFS.h"
-
 #include "core_node.h"
+#include "riddles/knock_samples.h"
 
 class KnockingRiddle {
 public:
@@ -16,7 +16,6 @@ public:
   bool onCmd(const char* cmd, const char* payload);
   void setGameMode(bool inGame);
 
-  // Kept name for compatibility with older code paths (was DFPlayer)
   bool dfReady() const { return audioOk_; }
 
   uint32_t errorCount() const { return errorCount_; }
@@ -28,13 +27,9 @@ private:
 
   static constexpr int kSensorCount = 3;
   static constexpr int kPiezoPins[kSensorCount] = {32, 33, 34};
-
   static constexpr uint16_t kKnockThresholds[kSensorCount] = {700, 300, 1000};
 
-  // Global debounce / lockout (sequence acceptance). NOTE: sound is played BEFORE this check.
   static constexpr uint32_t kKnockDebounceMs = 200;
-
-  // Window used to determine which sensor was hit (winner selection)
   static constexpr uint32_t kKnockWindowMs = 40;
 
   static constexpr int kSeqExpectLen = 9;
@@ -44,20 +39,18 @@ private:
 
   static constexpr uint8_t kSoundQueueMax = 16;
 
-  // I2S pins (do not collide with ETH pins 15/27/18/19/23 or piezos 32/33/34)
   static constexpr int kI2S_BCLK = 16;
   static constexpr int kI2S_LRC  = 17;
   static constexpr int kI2S_DIN  = 22;
+  static constexpr i2s_port_t kI2SPort = I2S_NUM_0;
 
-  // ESP32-audioI2S volume range: 0..21
   static constexpr uint8_t kAudioVolume = 21;
-
-  // Tracks in LittleFS root: /1.wav .. /4.wav
   static constexpr const char* kTrackPaths[5] = {
       nullptr, "/1.wav", "/2.wav", "/3.wav", "/4.wav"};
 
   static constexpr size_t kAttemptHistoryMax = 64;
   static constexpr size_t kAttemptStringMax = 48;
+  static constexpr size_t kEmbeddedChunkFrames = 128;
 
   struct PiezoState {
     int pin;
@@ -80,7 +73,6 @@ private:
 
   void updatePiezoSamples(uint32_t nowMs);
   void handleKnockWindow(uint32_t nowMs);
-
   void registerKnock(int idx, uint16_t raw, uint32_t nowMs);
 
   void playKnockSound(int idx);
@@ -88,10 +80,13 @@ private:
   bool soundQueueEmpty() const;
   bool soundQueueFull() const;
   unsigned long trackFallbackMs(uint8_t track) const;
+  bool startFsTrackNow(uint8_t track, int8_t srcIdx, uint32_t nowMs);
   void serviceSound(uint32_t nowMs);
 
-  void startSilenceIfIdle();
-  void stopSilenceIfActive();
+  void ensureRawI2sConfigured();
+  bool startEmbeddedTrack(uint8_t track, int8_t srcIdx, uint32_t nowMs);
+  void serviceEmbeddedSound(uint32_t nowMs);
+  void stopEmbeddedSound();
 
   void evaluateSequence(bool timeoutAttempt = false);
   void evaluateSequenceIfDue(uint32_t nowMs);
@@ -105,24 +100,16 @@ private:
   void publishSolvedEvent();
   void publishState();
   void resetState(const char* reason);
-
   void publishLittleFsListingOnce();
   void publishAudioDebug(const char* reason) const;
 
   Core::NodeContext* ctx_ = nullptr;
 
-  // Audio
   Audio audio_;
   bool audioOk_ = false;
-
-  // FS listing over MQTT (once after MQTT connected)
   bool fsListed_ = false;
+  bool serialDebug_ = kSerialDebugDefault;
 
-  // Silence disabled for debugging
-  bool silenceAvailable_ = false;
-  bool silenceActive_ = false;
-
-  // Sound queue state
   uint8_t soundQueue_[kSoundQueueMax];
   uint8_t soundHead_ = 0;
   uint8_t soundTail_ = 0;
@@ -130,14 +117,19 @@ private:
   uint32_t lastSoundStartMs_ = 0;
   uint8_t currentTrack_ = 0;
 
-  // Knock window state
+  bool rawI2sReady_ = false;
+  bool embeddedPlaying_ = false;
+  uint8_t embeddedTrack_ = 0;
+  const int16_t* embeddedBuf_ = nullptr;
+  size_t embeddedLen_ = 0;
+  size_t embeddedPos_ = 0;
+
   PiezoState piezo_[kSensorCount];
   bool knockWindowActive_ = false;
   uint32_t knockWindowStart_ = 0;
   uint16_t windowMax_[kSensorCount] = {0, 0, 0};
   uint32_t lastKnockMsGlobal_ = 0;
 
-  // Sequence buffer
   int seqBuf_[kSeqMaxLen];
   int seqLen_ = 0;
   uint32_t lastSeqActivityMs_ = 0;
@@ -150,5 +142,4 @@ private:
   bool solved_ = false;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
-  bool serialDebug_ = kSerialDebugDefault;
 };
