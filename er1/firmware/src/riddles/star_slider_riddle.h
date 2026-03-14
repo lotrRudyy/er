@@ -21,7 +21,7 @@ private:
   static constexpr uint8_t kRc522SsPins[kReaderCount] = {5, 17, 16};
   static constexpr uint8_t kButtonPin = 25;
   static constexpr uint32_t kBtnDebounceMs = 50;
-  static constexpr uint32_t kPollIntervalMs = 150;      // kept (unused now; button-only evaluation)
+  static constexpr uint32_t kPollIntervalMs = 500;
   static constexpr uint32_t kMetricIntervalMs = 10000;
   static constexpr uint8_t kUidExpected[kReaderCount][4] = {
     {0x3A, 0x55, 0x55, 0xD2}, // r0 scorpio (pov von spieler: rechts)
@@ -48,7 +48,7 @@ private:
                const char* id = nullptr, bool retained = false) const;
   bool publish(const char* topic, const String& payload, bool retained = false) const;
 
-  void pollReaders(uint32_t nowMs);     // kept for compatibility; NOT used now
+  void pollReaders(uint32_t nowMs);
   void pollReader(uint8_t idx);         // used ONLY from evaluateSolveAttempt()
   bool uidEquals(const byte* a, const byte* b, uint8_t len) const;
   bool isCurrentPatternCorrect() const;
@@ -84,7 +84,7 @@ private:
   bool btnPrevState_ = true;
   bool btnWasPressed_ = false;
   uint32_t btnLastChangeMs_ = 0;
-  uint32_t lastPollMs_ = 0;         // kept (unused now; button-only evaluation)
+  uint32_t lastPollMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   mutable uint32_t errorCount_ = 0;
   bool gameActive_ = false;
@@ -92,4 +92,5 @@ private:
 
   char attemptedStarSigns_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
   size_t attemptedStarSignsCount_ = 0;
+  String lastPublishedReaderOrder_;
 };

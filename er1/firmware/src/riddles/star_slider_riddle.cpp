@@ -67,6 +67,7 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
     attemptedStarSigns_[i][0] = '\0';
   }
   if (prefs_) prefs_->putBool("solved", false);
+  lastPublishedReaderOrder_ = currentOrderString();
   publishState();
 }
 
@@ -78,8 +79,7 @@ void StarSliderRiddle::setGameMode(bool inGame) {
 
 void StarSliderRiddle::tick(uint32_t nowMs) {
   if (!gameActive_) return;
-  // IMPORTANT:
-  // No RFID polling here. Riddle evaluation happens ONLY on button press.
+  pollReaders(nowMs);
   handleButton(nowMs);
   publishMetricsIfDue(nowMs);
 }
@@ -147,6 +147,7 @@ void StarSliderRiddle::resetState(const char* reason) {
   }
 
   // Reset button edge state.
+  lastPublishedReaderOrder_ = currentOrderString();
   btnPrevState_ = digitalRead(kButtonPin);
   btnWasPressed_ = false;
   btnLastChangeMs_ = millis();
@@ -187,12 +188,19 @@ bool StarSliderRiddle::publish(const char* topic, const String& payload, bool re
   return ctx_->publish(topic, payload, retained);
 }
 
-// Kept for compatibility; not used now.
 void StarSliderRiddle::pollReaders(uint32_t nowMs) {
   if (nowMs - lastPollMs_ < kPollIntervalMs) return;
   lastPollMs_ = nowMs;
+
+  const String before = currentOrderString();
   for (uint8_t i = 0; i < kReaderCount; i++) {
     pollReader(i);
+  }
+  const String after = currentOrderString();
+
+  if (after != before && after != lastPublishedReaderOrder_) {
+    lastPublishedReaderOrder_ = after;
+    publishState();
   }
 }
 
