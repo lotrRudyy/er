@@ -52,6 +52,7 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
       ",\"knock_window_ms\":" + kKnockWindowMs +
       ",\"embedded_sample_rate\":" + KNOCK_SAMPLE_RATE +
       ",\"embedded_knock_len\":" + KNOCK_SAMPLE_LEN +
+      ",\"embedded_knock4_len\":" + KNOCK4_SAMPLE_LEN +
       "}");
 
   for (int i = 0; i < kSensorCount; i++) {
@@ -178,16 +179,9 @@ bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
   if (strcasecmp(cmd, "TEST_SOUND") == 0) {
     int track = atoi(payload ? payload : "0");
     uint32_t nowMs = millis();
-    if (track >= 1 && track <= 3) {
+    if (track >= 1 && track <= 4) {
       startEmbeddedTrack((uint8_t)track, -1, nowMs);
       publishAudioDebug("test_sound_embedded");
-      return true;
-    }
-    if (track == 4) {
-      if (!startFsTrackNow(4, -1, nowMs)) {
-        enqueueSound(4, -1);
-      }
-      publishAudioDebug("test_sound_fs");
       return true;
     }
 
@@ -444,7 +438,7 @@ void KnockingRiddle::ensureRawI2sConfigured() {
 }
 
 bool KnockingRiddle::startEmbeddedTrack(uint8_t track, int8_t srcIdx, uint32_t nowMs) {
-  if (track < 1 || track > 3) return false;
+  if (track < 1 || track > 4) return false;
 
   if (audioOk_) {
     audio_.stopSong();
@@ -466,6 +460,10 @@ bool KnockingRiddle::startEmbeddedTrack(uint8_t track, int8_t srcIdx, uint32_t n
     case 3:
       embeddedBuf_ = knock3_pcm;
       embeddedLen_ = KNOCK_SAMPLE_LEN;
+      break;
+    case 4:
+      embeddedBuf_ = knock4_pcm;
+      embeddedLen_ = KNOCK4_SAMPLE_LEN;
       break;
     default:
       return false;
@@ -603,7 +601,7 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
   uint8_t srcNibble = (uint8_t)((packed >> 4) & 0x0F);
   int8_t srcIdx = (srcNibble == 0x0F) ? (int8_t)-1 : (int8_t)srcNibble;
 
-  if (track >= 1 && track <= 3) {
+  if (track >= 1 && track <= 4) {
     startEmbeddedTrack(track, srcIdx, nowMs);
     return;
   }
