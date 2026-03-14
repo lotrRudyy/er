@@ -9,8 +9,8 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "19";
-static const char* FW_DESC = "lighting controller (9x mosfet pwm)";
+static const char* FW_VERSION = "20";
+static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};  // must stay unique

@@ -64,7 +64,7 @@ bool payloadContainsSolvedId(const String& payload, const char* rid) {
 } // namespace
 
 LightingController::LightingController() {
-  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9"};
+  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9","10"};
   for (size_t i = 0; i < kChannelCount; i++) channels_[i].id = ids[i];
 }
 
@@ -96,6 +96,7 @@ void LightingController::begin(Core::NodeContext& ctx) {
     25,   // torch stiege
     32,   // torch r2-r3
     33,   // torch r2
+    4,    // uv light bulb
   };
 
   constexpr uint32_t kFreqHz = 2000;
@@ -403,6 +404,7 @@ void LightingController::applySceneInitial(const char* reason) {
   changed[6] = setChannel("7", true, driver_.maxDuty());
   changed[7] = setChannel("8", false, 0);
   changed[8] = setChannel("9", false, 0);
+  changed[9] = setChannel("10", false, 0);
   publishChangedStates(changed, reason);
 }
 
@@ -500,6 +502,7 @@ void LightingController::handleProgressEvent(const char* rid) {
 
     changed[4] = setChannel("5", true, fromDuty5, true);
     changed[5] = setChannel("6", true, fromDuty6, true);
+    changed[9] = setChannel("10", true, driver_.maxDuty());
     publishChangedStates(changed, "candles_solved");
 
     startFadePair(
