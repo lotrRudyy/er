@@ -4,8 +4,6 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 
-#include "Audio.h"
-#include "LittleFS.h"
 #include "core_node.h"
 #include "riddles/knock_samples.h"
 
@@ -45,8 +43,6 @@ private:
   static constexpr i2s_port_t kI2SPort = I2S_NUM_0;
 
   static constexpr uint8_t kAudioVolume = 21;
-  static constexpr const char* kTrackPaths[5] = {
-      nullptr, "/1.wav", "/2.wav", "/3.wav", "/4.wav"};
 
   static constexpr size_t kAttemptHistoryMax = 64;
   static constexpr size_t kAttemptStringMax = 48;
@@ -79,8 +75,6 @@ private:
   void enqueueSound(uint8_t track, int8_t srcIdx = -1);
   bool soundQueueEmpty() const;
   bool soundQueueFull() const;
-  unsigned long trackFallbackMs(uint8_t track) const;
-  bool startFsTrackNow(uint8_t track, int8_t srcIdx, uint32_t nowMs);
   void serviceSound(uint32_t nowMs);
 
   void ensureRawI2sConfigured();
@@ -100,14 +94,11 @@ private:
   void publishSolvedEvent();
   void publishState();
   void resetState(const char* reason);
-  void publishLittleFsListingOnce();
   void publishAudioDebug(const char* reason) const;
 
   Core::NodeContext* ctx_ = nullptr;
 
-  Audio audio_;
   bool audioOk_ = false;
-  bool fsListed_ = false;
   bool serialDebug_ = kSerialDebugDefault;
 
   uint8_t soundQueue_[kSoundQueueMax];

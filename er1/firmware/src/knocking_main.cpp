@@ -9,8 +9,8 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "11";
-static const char* FW_DESC = "embedded knock samples";
+static const char* FW_VERSION = "12";
+static const char* FW_DESC = "embedded knock samples only";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x51};  // knocking node MAC - must stay unique

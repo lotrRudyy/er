@@ -3,20 +3,6 @@
 #include <cstring>
 #include <strings.h>
 
-static String jsonEscape(const String& s) {
-  String out;
-  out.reserve(s.length() + 8);
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
-    if (c == '\\' || c == '"') { out += '\\'; out += c; }
-    else if (c == '\n') out += "\\n";
-    else if (c == '\r') out += "\\r";
-    else if (c == '\t') out += "\\t";
-    else out += c;
-  }
-  return out;
-}
-
 void KnockingRiddle::serialLogLine(const char* level, const String& msg, const String* dataJson) const {
   if (!serialDebug_) return;
 
@@ -30,26 +16,13 @@ void KnockingRiddle::serialLogLine(const char* level, const String& msg, const S
 
 void KnockingRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-
-  if (!LittleFS.begin(false)) {
-    audioOk_ = false;
-    errorCount_++;
-    log("ERR", "FS_MOUNT_FAIL", String("{\"t\":") + millis() + "}");
-  } else {
-    audioOk_ = true;
-  }
-
-  audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
-  audio_.setVolume(kAudioVolume);
-  audio_.setTone(0, 0, 15);
+  audioOk_ = true;
 
   log("INF", "AUDIO_INIT",
       String("{\"bclk\":") + kI2S_BCLK +
       ",\"lrc\":" + kI2S_LRC +
       ",\"din\":" + kI2S_DIN +
       ",\"volume\":" + kAudioVolume +
-      ",\"fs_ok\":" + (audioOk_ ? "true" : "false") +
-      ",\"knock_window_ms\":" + kKnockWindowMs +
       ",\"embedded_sample_rate\":" + KNOCK_SAMPLE_RATE +
       ",\"embedded_knock_len\":" + KNOCK_SAMPLE_LEN +
       ",\"embedded_knock4_len\":" + KNOCK4_SAMPLE_LEN +
@@ -86,7 +59,6 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   embeddedPos_ = 0;
 
   solved_ = false;
-  fsListed_ = false;
   moduleEnabled_ = true;
   tries_ = 0;
   attemptedSequencesCount_ = 0;
@@ -106,15 +78,6 @@ void KnockingRiddle::setGameMode(bool inGame) {
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
-
-  publishLittleFsListingOnce();
-
-  if (embeddedPlaying_) {
-    serviceEmbeddedSound(nowMs);
-  } else if (audioOk_) {
-    audio_.loop();
-  }
-
   if (!gameActive_) return;
 
   if (moduleEnabled_ && ctx_->enabled()) {
@@ -223,37 +186,6 @@ bool KnockingRiddle::publish(const char* topic, const String& payload, bool reta
   return ctx_->publish(topic, payload, retained);
 }
 
-void KnockingRiddle::publishLittleFsListingOnce() {
-  if (!audioOk_ || fsListed_ || !ctx_) return;
-
-  auto* c = ctx_->mqttClient();
-  if (!c || !c->connected()) return;
-
-  fsListed_ = true;
-
-  String files = "[";
-  File root = LittleFS.open("/");
-  File file = root.openNextFile();
-  bool first = true;
-  while (file) {
-    if (!first) files += ",";
-    first = false;
-    files += "\"";
-    files += jsonEscape(String(file.name()));
-    files += "\"";
-    file = root.openNextFile();
-  }
-  files += "]";
-
-  log("DBG", "FS_LIST", String("{\"t\":") + millis() + ",\"files\":" + files + "}");
-
-  const auto& topics = ctx_->config().topics;
-  if (topics.state.length() > 0) {
-    String data = String("{\"littlefs_files\":") + files + "}";
-    publish(topics.state.c_str(), "littlefs_debug", 1, data, nullptr, false);
-  }
-}
-
 void KnockingRiddle::publishAudioDebug(const char* reason) const {
   if (!ctx_) return;
 
@@ -270,8 +202,6 @@ void KnockingRiddle::publishAudioDebug(const char* reason) const {
       ",\"embedded_track\":" + embeddedTrack_ +
       ",\"embedded_pos\":" + embeddedPos_ +
       ",\"embedded_len\":" + embeddedLen_ +
-      ",\"fs_playing\":" + (soundPlaying_ ? "true" : "false") +
-      ",\"current_track\":" + currentTrack_ +
       ",\"queue_head\":" + soundHead_ +
       ",\"queue_tail\":" + soundTail_ +
       ",\"seq_len\":" + seqLen_ +
@@ -372,7 +302,6 @@ void KnockingRiddle::playKnockSound(int idx) {
 }
 
 void KnockingRiddle::enqueueSound(uint8_t track, int8_t srcIdx) {
-  if (!audioOk_) return;
   if (track < 1 || track > 4) return;
 
   uint8_t srcNibble = (srcIdx >= 0 && srcIdx < kSensorCount) ? (uint8_t)srcIdx : 0x0F;
@@ -394,13 +323,6 @@ bool KnockingRiddle::soundQueueEmpty() const {
 
 bool KnockingRiddle::soundQueueFull() const {
   return static_cast<uint8_t>((soundTail_ + 1) % kSoundQueueMax) == soundHead_;
-}
-
-unsigned long KnockingRiddle::trackFallbackMs(uint8_t track) const {
-  switch (track) {
-    case 4: return 1040;
-    default: return 120;
-  }
 }
 
 void KnockingRiddle::ensureRawI2sConfigured() {
@@ -439,12 +361,6 @@ void KnockingRiddle::ensureRawI2sConfigured() {
 
 bool KnockingRiddle::startEmbeddedTrack(uint8_t track, int8_t srcIdx, uint32_t nowMs) {
   if (track < 1 || track > 4) return false;
-
-  if (audioOk_) {
-    audio_.stopSong();
-  }
-  soundPlaying_ = false;
-  currentTrack_ = 0;
 
   ensureRawI2sConfigured();
 
@@ -528,70 +444,8 @@ void KnockingRiddle::stopEmbeddedSound() {
   }
 }
 
-bool KnockingRiddle::startFsTrackNow(uint8_t track, int8_t srcIdx, uint32_t nowMs) {
-  if (!audioOk_) return false;
-  if (track != 4) return false;
-  if (embeddedPlaying_) return false;
-  if (soundPlaying_) return false;
-
-  const char* path = kTrackPaths[track];
-  if (!path) return false;
-
-  if (rawI2sReady_) {
-    i2s_zero_dma_buffer(kI2SPort);
-    i2s_driver_uninstall(kI2SPort);
-    rawI2sReady_ = false;
-  }
-
-  audio_.setPinout(kI2S_BCLK, kI2S_LRC, kI2S_DIN);
-  audio_.setVolume(kAudioVolume);
-
-  log("DBG", "SOUND_START",
-      String("{\"t\":") + nowMs +
-      ",\"track\":" + track +
-      ",\"idx\":" + (int)srcIdx +
-      ",\"path\":\"" + String(path) + "\"" +
-      ",\"embedded\":false" +
-      ",\"queue_head\":" + soundHead_ +
-      ",\"queue_tail\":" + soundTail_ +
-      "}");
-
-  bool ok = audio_.connecttoFS(LittleFS, path);
-
-  log(ok ? "DBG" : "ERR",
-      ok ? "SOUND_CONNECT_OK" : "SOUND_CONNECT_FAIL",
-      String("{\"t\":") + nowMs +
-      ",\"track\":" + track +
-      ",\"path\":\"" + String(path) + "\"" +
-      ",\"embedded\":false" +
-      "}");
-
-  if (!ok) {
-    soundPlaying_ = false;
-    currentTrack_ = 0;
-    return false;
-  }
-
-  lastSoundStartMs_ = nowMs;
-  currentTrack_ = track;
-  soundPlaying_ = true;
-  return true;
-}
-
 void KnockingRiddle::serviceSound(uint32_t nowMs) {
-  if (!audioOk_) return;
-
   if (embeddedPlaying_) return;
-
-  if (soundPlaying_) {
-    unsigned long needed = trackFallbackMs(currentTrack_);
-    if (nowMs - lastSoundStartMs_ >= needed) {
-      soundPlaying_ = false;
-      currentTrack_ = 0;
-    }
-    return;
-  }
-
   if (soundQueueEmpty()) return;
 
   uint8_t packed = soundQueue_[soundHead_];
@@ -603,10 +457,7 @@ void KnockingRiddle::serviceSound(uint32_t nowMs) {
 
   if (track >= 1 && track <= 4) {
     startEmbeddedTrack(track, srcIdx, nowMs);
-    return;
   }
-
-  startFsTrackNow(track, srcIdx, nowMs);
 }
 
 void KnockingRiddle::evaluateSequence(bool timeoutAttempt) {
@@ -710,10 +561,6 @@ void KnockingRiddle::resetState(const char* reason) {
   soundPlaying_ = false;
   lastSoundStartMs_ = 0;
   currentTrack_ = 0;
-
-  if (audioOk_) {
-    audio_.stopSong();
-  }
 
   stopEmbeddedSound();
 
