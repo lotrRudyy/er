@@ -31,7 +31,7 @@ private:
   static constexpr uint32_t kKnockWindowMs = 40;
 
   static constexpr int kSeqExpectLen = 12;
-  static constexpr int kSeqExpect[kSeqExpectLen] = {0, 0, 0, 0, 0, 0 1, 1, 2, 2, 2, 2};
+  static constexpr int kSeqExpect[kSeqExpectLen] = {0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2};
   static constexpr int kSeqMaxLen = 16;
   static constexpr uint32_t kSeqTimeoutMs = 3000;
 
