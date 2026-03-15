@@ -6,10 +6,10 @@
 
 class LightingController {
 public:
-  static constexpr size_t kChannelCount = 9;
+  static constexpr size_t kChannelCount = 10;
 
   struct ChannelState {
-    const char* id = nullptr;     // "1".."9"
+    const char* id = nullptr;     // "1".."10"
     uint8_t pin = 0;
     uint8_t ledcCh = 0;
     bool on = false;
