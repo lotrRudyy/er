@@ -335,11 +335,7 @@ void KnockingRiddle::ensureRawI2sConfigured() {
   cfg.sample_rate = KNOCK_SAMPLE_RATE;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
-#ifdef I2S_COMM_FORMAT_STAND_I2S
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-#else
-  cfg.communication_format = I2S_COMM_FORMAT_I2S;
-#endif
   cfg.intr_alloc_flags = 0;
   cfg.dma_buf_count = 8;
   cfg.dma_buf_len = 128;
