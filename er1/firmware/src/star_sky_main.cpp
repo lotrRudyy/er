@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "star_sky";
-static const char* FW_VERSION = "9";
+static const char* FW_VERSION = "11";
 static const char* FW_DESC = "star_sky with new ota";
 
 // ======================= NETWORK CONFIG ======================

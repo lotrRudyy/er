@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "9";
+static const char* FW_VERSION = "11";
 static const char* FW_DESC = "candles with new ota";
 
 // ======================= NETWORK CONFIG ======================
