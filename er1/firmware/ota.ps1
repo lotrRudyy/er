@@ -74,7 +74,7 @@ function Resolve-OtaTargets {
 
     $requested = @($RequestedTargets)
     if (-not $requested -or $requested.Length -eq 0) {
-        throw "Usage: ota.ps1 -Target <device|device,device|all>"
+        throw "Usage: ota.ps1 -Target <device|device|all>"
     }
 
     if ($requested -contains "all") {
@@ -240,10 +240,14 @@ function Invoke-OtaSingleTarget {
         }
         Write-Host ("== Preflight: verifying firmware exists at {0} ==" -f $firmwarePath)
 
-        $piHost = "192.168.0.10"
+        # Laptop/PC -> Pi transport host (works over Tailscale / hotspot)
+        $piConnectHost = "100.108.1.80"
+
+        # ESP -> Pi firmware download host (must be reachable by the device on ER LAN)
+        $deviceHttpHost = "192.168.0.10"
+
         $piUser = "rudyy"
         $piFirmwareDir = "/home/$piUser/er1/node_firmware"
-        $httpHost = "192.168.0.10"
 
         $sshExe = "C:\WINDOWS\System32\OpenSSH\ssh.exe"
         $scpExe = "C:\WINDOWS\System32\OpenSSH\scp.exe"
@@ -268,14 +272,13 @@ function Invoke-OtaSingleTarget {
         $fwSize = (Get-Item $firmwarePath).Length
         Write-Host ("== Uploading firmware to Pi as {0}  ({1} bytes) ==" -f $firmwareName, $fwSize)
 
-        & $sshExe @sshExecArgs "$piUser@$piHost" "mkdir -p '$piFirmwareDir'"
+        & $sshExe @sshExecArgs "$piUser@$piConnectHost" "mkdir -p '$piFirmwareDir'"
         $sshExit = $LASTEXITCODE
         if ($sshExit -ne 0) {
             throw "Failed to create firmware directory on Pi at $piFirmwareDir (exit $sshExit)"
         }
 
-        $remotePath = "$piUser@${piHost}:$piFirmwareDir/$firmwareName"
-
+        $remotePath = "$piUser@${piConnectHost}:$piFirmwareDir/$firmwareName"
         $scpArgs = @("-B", "-q", "-O", "-C") + $sshCommonArgs + @($firmwarePath, $remotePath)
 
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -289,16 +292,25 @@ function Invoke-OtaSingleTarget {
 
         Write-Host ("== Upload finished in {0:n2}s ==" -f $sw.Elapsed.TotalSeconds)
 
-        $url = "http://$httpHost/node_firmware/$firmwareName"
+        $url = "http://$deviceHttpHost/node_firmware/$firmwareName"
         Write-Host ("== Verifying OTA URL from Pi: {0} ==" -f $url)
-        Write-Host "== Verifying HTTP-served firmware matches uploaded file (sha256) =="
+        Write-Host "== Verifying HTTP-served firmware matches uploaded file (sha256) from the Pi =="
 
-        $tmpDl = Join-Path $env:TEMP ("er1_ota_" + $SingleTarget + ".bin")
-        Invoke-WebRequest -Uri $url -OutFile $tmpDl -UseBasicParsing | Out-Null
         $localSha = Get-FileSha256Hex $firmwarePath
-        $httpSha  = Get-FileSha256Hex $tmpDl
-        if ($httpSha -ne $localSha) {
-            throw "HTTP firmware mismatch: local=$localSha http=$httpSha"
+        $remoteVerifyCmd = "curl -fsSL '$url' | sha256sum | cut -d ' ' -f1"
+
+        $remoteHttpSha = & $sshExe @sshExecArgs "$piUser@$piConnectHost" $remoteVerifyCmd
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -ne 0) {
+            throw "Remote HTTP verification failed (exit $sshExit)"
+        }
+
+        $remoteHttpSha = ($remoteHttpSha | Out-String).Trim().ToLower()
+        if ([string]::IsNullOrWhiteSpace($remoteHttpSha)) {
+            throw "Remote HTTP verification returned empty SHA256"
+        }
+        if ($remoteHttpSha -ne $localSha) {
+            throw "HTTP firmware mismatch: local=$localSha http=$remoteHttpSha"
         }
         Write-Host "== HTTP firmware matches uploaded file =="
 
@@ -309,7 +321,7 @@ function Invoke-OtaSingleTarget {
             "python3", $remotePublisher,
             "--dev", $Dev,
             "--cmd-node", $cmdNode,
-            "--http-host", $httpHost,
+            "--http-host", $deviceHttpHost,
             "--version", $ver,
             "--target", $Dev,
             "--firmware-name", $firmwareName,
@@ -318,7 +330,7 @@ function Invoke-OtaSingleTarget {
             "--up-max", "10"
         ) -join " "
 
-        & $sshExe @sshExecArgs "$piUser@$piHost" $remoteCmd
+        & $sshExe @sshExecArgs "$piUser@$piConnectHost" $remoteCmd
         $sshExit = $LASTEXITCODE
         if ($sshExit -eq 2) {
             Write-Host ("== SKIPPED: {0} did not come online for OTA verify; likely offline/disconnected ==" -f $SingleTarget) -ForegroundColor Yellow
