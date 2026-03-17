@@ -61,6 +61,7 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
 
   solved_ = false;
   solvedPublished_ = false;
+  lastDetection_ = DetectionSnapshot{};
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
   resetProgress("boot");
   gameActive_ = false;
@@ -72,6 +73,7 @@ void PianoRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
   solved_ = false;
   solvedPublished_ = false;
+  lastDetection_ = DetectionSnapshot{};
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
   resetProgress(inGame ? "game_start" : "game_off");
   publishState();
@@ -100,6 +102,7 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (equalsCmd(cmd, "PIANO_RESET") || equalsCmd(cmd, "RESET_PIANO") || equalsCmd(cmd, "RESET")) {
     solved_ = false;
     solvedPublished_ = false;
+    lastDetection_ = DetectionSnapshot{};
     if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
     resetProgress("cmd");
     publishState();
@@ -108,6 +111,7 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (equalsCmd(cmd, "SOLVE") || equalsCmd(cmd, "SOLVE_PIANO")) {
     if (!solved_) {
       solved_ = true;
+      lastDetection_.solved = true;
       if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       openLock();
     }
@@ -136,7 +140,27 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   const char* t1Safe = t1 ? t1 : "";
   const char* t2Safe = t2 ? t2 : "";
   const char* t3Safe = t3 ? t3 : "";
-  bool isAccepted = accepted != 0;
+  const bool isAccepted = accepted != 0;
+  const bool imagesReady = imagesSolvedFromPrefs(prefs_);
+
+  lastDetection_ = DetectionSnapshot{};
+  lastDetection_.valid = true;
+  lastDetection_.accepted = isAccepted;
+  lastDetection_.pred = predSafe;
+  lastDetection_.s1 = s1;
+  lastDetection_.s2 = s2;
+  lastDetection_.margin = margin;
+  lastDetection_.hps = hps_ratio;
+  lastDetection_.harm = harmonic_ok;
+  lastDetection_.top[0] = {String(t1Safe), t1s};
+  lastDetection_.top[1] = {String(t2Safe), t2s};
+  lastDetection_.top[2] = {String(t3Safe), t3s};
+  lastDetection_.pos_before = seqPos_;
+  lastDetection_.images_ready = imagesReady;
+  lastDetection_.solved = solved_;
+  if (seqPos_ < kSequenceLen) {
+    lastDetection_.expected = kSequence[seqPos_];
+  }
 
   String compat = String(isAccepted ? "NOTE_COMPAT " : "REJ_COMPAT ");
   compat += "pred="; compat += predSafe;
@@ -153,37 +177,50 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   compat += t3Safe; compat += " "; compat += String(t3s, 4);
   compat += "]";
 
-  String data = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
-  data += "\"pred\":\""; data += predSafe; data += "\",";
-  data += "\"s1\":"; data += String(s1, 6); data += ",";
-  data += "\"s2\":"; data += String(s2, 6); data += ",";
-  data += "\"margin\":"; data += String(margin, 6); data += ",";
-  data += "\"hps\":"; data += String(hps_ratio, 6); data += ",";
-  data += "\"harm\":"; data += harmonic_ok ? "1" : "0";
-  data += ",\"top\":[{\"p\":\""; data += t1Safe; data += "\",\"s\":"; data += String(t1s, 6); data += "},";
-  data += "{\"p\":\""; data += t2Safe; data += "\",\"s\":"; data += String(t2s, 6); data += "},";
-  data += "{\"p\":\""; data += t3Safe; data += "\",\"s\":"; data += String(t3s, 6); data += "}],";
-  data += "\"pos\":"; data += String(seqPos_) + ",";
-  data += "\"solved\":"; data += solved_ ? "true" : "false";
-  data += ",\"images_ready\":"; data += imagesSolvedFromPrefs(prefs_) ? "true" : "false";
-  data += "}";
+  String logData = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
+  logData += "\"pred\":\""; logData += predSafe; logData += "\",";
+  logData += "\"s1\":"; logData += String(s1, 6); logData += ",";
+  logData += "\"s2\":"; logData += String(s2, 6); logData += ",";
+  logData += "\"margin\":"; logData += String(margin, 6); logData += ",";
+  logData += "\"hps\":"; logData += String(hps_ratio, 6); logData += ",";
+  logData += "\"harm\":"; logData += harmonic_ok ? "1" : "0";
+  logData += ",\"top\":[{\"p\":\""; logData += t1Safe; logData += "\",\"s\":"; logData += String(t1s, 6); logData += "},";
+  logData += "{\"p\":\""; logData += t2Safe; logData += "\",\"s\":"; logData += String(t2s, 6); logData += "},";
+  logData += "{\"p\":\""; logData += t3Safe; logData += "\",\"s\":"; logData += String(t3s, 6); logData += "}],";
+  logData += "\"pos\":"; logData += String(seqPos_); logData += ",";
+  logData += "\"solved\":"; logData += solved_ ? "true" : "false";
+  logData += ",\"images_ready\":"; logData += imagesReady ? "true" : "false";
+  logData += "}";
+  log("INF", compat, logData);
 
-  log("INF", compat, data);
-
-  if (!ctx_ || !gameActive_ || !imagesSolvedFromPrefs(prefs_) || !moduleEnabled_ || !ctx_->enabled()) return;
-  if (predSafe[0] == '\0') return;
-
-  if (isAccepted) {
-    appendPlayed(predSafe);
-    appendPlayedEncoded(encodeWhiteKey(predSafe));
-    appendTopPrediction(predSafe);
-    appendCombinedPrediction(predSafe);
-  } else {
-    appendTopPrediction(predSafe);
-    appendCombinedPrediction(predSafe);
+  if (!ctx_ || !gameActive_ || !imagesReady || !moduleEnabled_ || !ctx_->enabled()) {
+    lastDetection_.outcome = "ignored";
+    lastDetection_.pos_after = seqPos_;
+    lastDetection_.solved = solved_;
     publishState();
     return;
   }
+  if (predSafe[0] == '\0') {
+    lastDetection_.outcome = "empty_prediction";
+    lastDetection_.pos_after = seqPos_;
+    lastDetection_.solved = solved_;
+    publishState();
+    return;
+  }
+
+  appendTopPrediction(predSafe);
+  appendCombinedPrediction(predSafe);
+
+  if (!isAccepted) {
+    lastDetection_.outcome = "rejected";
+    lastDetection_.pos_after = seqPos_;
+    lastDetection_.solved = solved_;
+    publishState();
+    return;
+  }
+
+  appendPlayed(predSafe);
+  appendPlayedEncoded(encodeWhiteKey(predSafe));
 
   const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 
@@ -196,7 +233,9 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     seqPos_++;
 
     logCurrentSequence();
-    publishState();
+
+    lastDetection_.outcome = (seqPos_ >= kSequenceLen) ? "solved" : "match";
+    lastDetection_.pos_after = seqPos_;
 
     if (seqPos_ >= kSequenceLen) {
       if (!solved_) {
@@ -204,26 +243,63 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
         solved_ = true;
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
+      lastDetection_.solved = true;
+      publishState();
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
       }
-      resetProgress("solved");
-      publishState();
+      return;
     }
+
+    lastDetection_.solved = solved_;
+    publishState();
     return;
   }
 
   resetProgress("mismatch");
+  lastDetection_.outcome = "mismatch";
+
   if (strcasecmp(predSafe, kSequence[0]) == 0) {
     seqPos_ = 1;
     strncpy(played_[0], predSafe, kNoteMaxLen - 1);
     played_[0][kNoteMaxLen - 1] = '\0';
     playedLen_ = 1;
+    lastDetection_.outcome = "restart_from_first";
   }
 
+  lastDetection_.pos_after = seqPos_;
+  lastDetection_.solved = solved_;
   logCurrentSequence();
   publishState();
+}
+
+String PianoRiddle::buildDetectionJson() const {
+  if (!lastDetection_.valid) {
+    return "null";
+  }
+
+  String out = "{";
+  out += String("\"kind\":\"") + (lastDetection_.accepted ? "NOTE" : "REJ") + "\",";
+  out += "\"pred\":\"" + lastDetection_.pred + "\",";
+  out += "\"s1\":" + String(lastDetection_.s1, 6) + ",";
+  out += "\"s2\":" + String(lastDetection_.s2, 6) + ",";
+  out += "\"margin\":" + String(lastDetection_.margin, 6) + ",";
+  out += "\"hps\":" + String(lastDetection_.hps, 6) + ",";
+  out += "\"harm\":" + String(lastDetection_.harm) + ",";
+  out += "\"pos_before\":" + String(lastDetection_.pos_before) + ",";
+  out += "\"pos_after\":" + String(lastDetection_.pos_after) + ",";
+  out += "\"expected\":\"" + lastDetection_.expected + "\",";
+  out += "\"outcome\":\"" + lastDetection_.outcome + "\",";
+  out += "\"images_ready\":" + String(lastDetection_.images_ready ? "true" : "false") + ",";
+  out += "\"solved\":" + String(lastDetection_.solved ? "true" : "false") + ",";
+  out += "\"top\":[";
+  for (size_t i = 0; i < 3; ++i) {
+    if (i > 0) out += ",";
+    out += "{\"p\":\"" + lastDetection_.top[i].p + "\",\"s\":" + String(lastDetection_.top[i].s, 6) + "}";
+  }
+  out += "]}";
+  return out;
 }
 
 void PianoRiddle::publishState() {
@@ -250,6 +326,25 @@ void PianoRiddle::publishState() {
   }
   seqEncodedJson += "]";
 
+  String expectedJson = (seqPos_ < kSequenceLen) ? (String("\"") + kSequence[seqPos_] + "\"") : String("null");
+
+  String targetSequence = "[";
+  String targetEncoded = "[";
+  for (size_t i = 0; i < kSequenceLen; ++i) {
+    if (i > 0) {
+      targetSequence += ",";
+      targetEncoded += ",";
+    }
+    targetSequence += "\"";
+    targetSequence += kSequence[i];
+    targetSequence += "\"";
+    targetEncoded += "\"";
+    targetEncoded += encodeWhiteKey(kSequence[i]);
+    targetEncoded += "\"";
+  }
+  targetSequence += "]";
+  targetEncoded += "]";
+
   String full = String("{\"id\":\"") + srcId_ +
                 "\",\"mode\":\"" + (effectiveActive ? "ingame" : "standby") +
                 "\",\"enabled\":" + (effectiveActive && moduleEnabled_ && ctx_->enabled() ? "true" : "false") +
@@ -257,12 +352,16 @@ void PianoRiddle::publishState() {
                 ",\"raw_state\":\"" + (solved_ ? "solved" : (seqPos_ > 0 ? "progress" : "idle")) +
                 "\",\"images_ready\":" + (imagesReady ? "true" : "false") +
                 ",\"progress\":" + String(seqPos_) +
+                ",\"expected_note\":" + expectedJson +
                 ",\"played_notes\":" + joinJsonArray(playedNotes_, playedNotesLen_) +
                 ",\"played_encoded_notes\":" + joinJsonArray(playedEncodedNotes_, playedEncodedNotesLen_) +
                 ",\"top_predictions\":" + joinJsonArray(topPredictions_, topPredictionsLen_) +
                 ",\"played_encoded_plus_predictions\":" + joinJsonArray(combinedPredictions_, combinedPredictionsLen_) +
                 ",\"sequence\":" + seqJson +
                 ",\"sequence_encoded\":" + seqEncodedJson +
+                ",\"target_sequence\":" + targetSequence +
+                ",\"target_sequence_encoded\":" + targetEncoded +
+                ",\"last_detection\":" + buildDetectionJson() +
                 "}";
 
   const auto& topics = ctx_->config().topics;
@@ -273,12 +372,17 @@ void PianoRiddle::publishState() {
 
 void PianoRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-  String payload = "{\"id\":\"piano\",\"seq\":\"";
+  String payload = "{\"id\":\"piano\",\"seq\":";
+  String seq = "[";
   for (size_t i = 0; i < kSequenceLen; ++i) {
-    if (i > 0) payload += ",";
-    payload += kSequence[i];
+    if (i > 0) seq += ",";
+    seq += "\"";
+    seq += kSequence[i];
+    seq += "\"";
   }
-  payload += "\"}";
+  seq += "]";
+  payload += seq;
+  payload += "}";
   const auto& topics = ctx_->config().topics;
   if (topics.evt.length() > 0) {
     publish(topics.evt.c_str(), "riddle_solved", 1, withSrc(payload, srcId_));

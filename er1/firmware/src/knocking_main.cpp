@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "15";
+static const char* FW_VERSION = "20";
 static const char* FW_DESC = "embedded knock samples only";
 
 // ======================= NETWORK CONFIG ======================

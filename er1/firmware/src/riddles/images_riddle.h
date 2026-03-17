@@ -26,11 +26,10 @@ private:
   void handleAllDownHold(uint32_t nowMs);
   void startAllDownHold(uint32_t nowMs);
   void cancelAllDownHold(const char* reason);
-  void publishButtonMetricsOnChange(int idx);
-  void publishMetricsIfDue();
   void publishSolvedEvent(const char* rid);
   void publishState();
   void openImagesMaglock();
+  bool allButtonsPressed() const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
                const char* id = nullptr, bool retained = false) const;
   bool publish(const char* topic, const String& payload, bool retained = false) const;
@@ -45,17 +44,14 @@ private:
   static constexpr int kButtonPins[kButtonCount] = {27, 13, 14, 32}; // 27:natur, 13:puppe, 14:blumen, 32:jesus
   static constexpr uint32_t kDebounceMs = 30;
   static constexpr uint32_t kEdgeMinLogMs = 100;
-  static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kAllDownHoldMs = 200;
 
   ButtonState buttons_[kButtonCount];
   bool solved_ = false;
-  bool retriggerArmed_ = true;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
   bool allDownHoldActive_ = false;
   bool solveArmedAfterRelease_ = false;
   bool startupBlockLogged_ = false;
   uint32_t allDownHoldStartMs_ = 0;
-  uint32_t lastMetricMs_ = 0;
 };

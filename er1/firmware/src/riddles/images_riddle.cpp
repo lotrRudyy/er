@@ -51,26 +51,22 @@ void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
     buttons_[i].cur = lvl;
     buttons_[i].prev = lvl;
   }
+
   solved_ = false;
-  retriggerArmed_ = true;
   gameActive_ = false;
   moduleEnabled_ = true;
   allDownHoldActive_ = false;
   solveArmedAfterRelease_ = false;
   startupBlockLogged_ = false;
   allDownHoldStartMs_ = 0;
-  lastMetricMs_ = millis();
 
   ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
-
   publishState();
 }
 
 void ImagesRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
-
   ctx_->prefs().putBool(kImagesSolvedPrefKey, false);
-
   resetState(inGame ? "game_start" : "game_off");
   publishState();
 }
@@ -95,7 +91,6 @@ void ImagesRiddle::tick(uint32_t nowMs) {
   }
 
   handleAllDownHold(nowMs);
-  publishMetricsIfDue();
 }
 
 bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
@@ -111,8 +106,10 @@ bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
   if (strcasecmp(cmd, "SOLVE_IMAGES") == 0 || strcasecmp(cmd, "SOLVE") == 0) {
     if (!solved_) {
       solved_ = true;
-      retriggerArmed_ = false;
+      allDownHoldActive_ = false;
+      allDownHoldStartMs_ = 0;
       ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
+      log("INF", "IMAGES_SOLVED", "{\"mode\":\"cmd\",\"cmd\":\"OPEN\"}");
       publishSolvedEvent("images");
       openImagesMaglock();
     } else {
@@ -165,7 +162,6 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
                " dt=" + dtChange + "ms" +
                " presses=" + b.presses;
   log("INF", msg);
-  publishButtonMetricsOnChange(idx);
   publishState();
 }
 
@@ -173,24 +169,26 @@ void ImagesRiddle::resetState(const char* reason) {
   cancelAllDownHold(reason ? reason : "reset");
   bool wasSolved = solved_;
   solved_ = false;
-  retriggerArmed_ = true;
   solveArmedAfterRelease_ = false;
   startupBlockLogged_ = false;
   if (reason) {
-    String data = String("{\"src\":\"") + reason +
+    String data = String("{\"reason\":\"") + reason +
                   "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
     log("INF", "IMAGES_STATE_RESET", data);
   }
 }
 
-void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
-  bool allPressed = true;
-  for (int i = 0; i < kButtonCount; i++) {
+bool ImagesRiddle::allButtonsPressed() const {
+  for (int i = 0; i < kButtonCount; ++i) {
     if (buttons_[i].cur != LOW) {
-      allPressed = false;
-      break;
+      return false;
     }
   }
+  return true;
+}
+
+void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
+  const bool allPressed = allButtonsPressed();
 
   if (!allPressed) {
     cancelAllDownHold("release");
@@ -199,11 +197,13 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
       solveArmedAfterRelease_ = true;
       startupBlockLogged_ = false;
       log("INF", "IMAGES_SOLVE_ARMED", "{\"reason\":\"buttons_released_once\"}");
+      publishState();
     }
+    return;
+  }
 
-    if (solved_) {
-      retriggerArmed_ = true;
-    }
+  if (solved_) {
+    cancelAllDownHold("already_solved");
     return;
   }
 
@@ -228,30 +228,15 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   allDownHoldActive_ = false;
   allDownHoldStartMs_ = 0;
 
-  if (!solved_) {
-    solved_ = true;
-    retriggerArmed_ = false;
-
-    ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
-
-    log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
-    publishSolvedEvent("images");
-    openImagesMaglock();
-    return;
-  }
-
-  if (!retriggerArmed_) {
-    log("DBG", "IMAGES_RETRIGGER_BLOCKED", "{\"reason\":\"still_all_pressed\"}");
-    return;
-  }
-
-  retriggerArmed_ = false;
-  log("INF", "IMAGES_RETRIGGER", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
-  publishState();
+  solved_ = true;
+  ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
+  log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
+  publishSolvedEvent("images");
   openImagesMaglock();
 }
 
 void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
+  if (solved_ || allDownHoldActive_) return;
   allDownHoldActive_ = true;
   allDownHoldStartMs_ = nowMs;
   String data = String("{\"hold_ms\":") + kAllDownHoldMs + "}";
@@ -267,71 +252,8 @@ void ImagesRiddle::cancelAllDownHold(const char* reason) {
   log("INF", "ALL_DOWN_TIMER_CANCEL", data);
 }
 
-void ImagesRiddle::publishButtonMetricsOnChange(int idx) {
-  ButtonState& b = buttons_[idx];
-  uint32_t uptime = millis() / 1000;
-  String payloadBtn = String("{\"t\":\"BTN\",\"fw\":\"") + ctx_->fwVersion() +
-                      "\",\"up\":" + uptime +
-                      ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
-                      ",\"i\":" + idx +
-                      ",\"pin\":" + b.pin +
-                      ",\"state\":" + (b.cur ? 1 : 0) +
-                      ",\"presses\":" + b.presses +
-                      "}";
-  log("DBG", "images_btn", withSrc(payloadBtn, nodeId_));
-
-  bool allPressedNow = true;
-  for (int i = 0; i < kButtonCount; i++) {
-    if (digitalRead(buttons_[i].pin) != LOW) {
-      allPressedNow = false;
-      break;
-    }
-  }
-
-  String payloadAll = String("{\"t\":\"ALL\",\"fw\":\"") + ctx_->fwVersion() +
-                      "\",\"up\":" + uptime +
-                      ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
-                      "}";
-  log("DBG", "images_all", withSrc(payloadAll, nodeId_));
-}
-
-void ImagesRiddle::publishMetricsIfDue() {
-  uint32_t now = millis();
-  if (now - lastMetricMs_ < kMetricIntervalMs) return;
-  lastMetricMs_ = now;
-
-  uint32_t uptime = millis() / 1000;
-  for (int i = 0; i < kButtonCount; i++) {
-    ButtonState& b = buttons_[i];
-    String payload = String("{\"t\":\"BTN\",\"fw\":\"") + ctx_->fwVersion() +
-                     "\",\"up\":" + uptime +
-                     ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
-                     ",\"i\":" + i +
-                     ",\"pin\":" + b.pin +
-                     ",\"state\":" + (b.cur ? 1 : 0) +
-                     ",\"presses\":" + b.presses +
-                     "}";
-    log("DBG", "images_metrics", withSrc(payload, nodeId_));
-  }
-
-  bool allPressedNow = true;
-  for (int i = 0; i < kButtonCount; i++) {
-    if (buttons_[i].cur != LOW) {
-      allPressedNow = false;
-      break;
-    }
-  }
-
-  String payloadAll = String("{\"t\":\"ALL\",\"fw\":\"") + ctx_->fwVersion() +
-                      "\",\"up\":" + uptime +
-                      ",\"all_pressed\":" + (allPressedNow ? 1 : 0) +
-                      "}";
-  log("DBG", "images_all", withSrc(payloadAll, nodeId_));
-}
-
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
-
   ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
 
   String data = String("{\"id\":\"") + rid + "\"}";
@@ -352,15 +274,17 @@ void ImagesRiddle::publishState() {
   if (!ctx_) return;
 
   const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
-  const char* rawState = solved_ ? "solved" : "idle";
+  const bool allPressed = allButtonsPressed();
+  const char* rawState = solved_ ? "solved" : (allDownHoldActive_ ? "holding" : "idle");
 
   String data;
-  data.reserve(260);
+  data.reserve(320);
   data = String("{\"id\":\"images\"") +
          ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
          ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
          ",\"solved\":" + String(solved_ ? "true" : "false") +
          ",\"armed_after_release\":" + String(solveArmedAfterRelease_ ? "true" : "false") +
+         ",\"all_pressed\":" + String(allPressed ? "true" : "false") +
          ",\"raw_state\":\"" + rawState + "\"" +
          ",\"buttons\":{" +
          "\"jesus\":" + String(buttons_[3].cur == LOW ? "true" : "false") + "," +
