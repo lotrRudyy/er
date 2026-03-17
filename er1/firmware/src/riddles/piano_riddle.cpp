@@ -223,7 +223,8 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   }
 
   appendPlayed(predSafe);
-  appendPlayedEncoded(encodeWhiteKey(predSafe));
+  const String predEncoded = encodeWhiteKey(predSafe);
+  appendPlayedEncoded(predEncoded.c_str());
 
   const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 

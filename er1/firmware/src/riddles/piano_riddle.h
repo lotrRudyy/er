@@ -64,12 +64,12 @@ private:
   void setModuleEnabled(bool en);
 
   String encodeWhiteKey(const char* note) const;
-  String joinJsonArray(const String* values, size_t count) const;
+  String joinJsonArray(const char values[][8], size_t count) const;
   String buildDetectionJson() const;
   void clearHistory();
-  void appendRolling(String* values, size_t& len, const String& value);
+  void appendRolling(char values[][8], size_t& len, const char* value);
   void appendPlayed(const char* note);
-  void appendPlayedEncoded(const String& encoded);
+  void appendPlayedEncoded(const char* encoded);
   void appendTopPrediction(const char* note);
   void appendCombinedPrediction(const char* note);
 
@@ -112,16 +112,16 @@ private:
   char played_[kSequenceLen][kNoteMaxLen] = {{0}};
   size_t playedLen_ = 0;
 
-  String playedNotes_[kHistoryMax];
+  char playedNotes_[kHistoryMax][kNoteMaxLen] = {{0}};
   size_t playedNotesLen_ = 0;
 
-  String playedEncodedNotes_[kHistoryMax];
+  char playedEncodedNotes_[kHistoryMax][kNoteMaxLen] = {{0}};
   size_t playedEncodedNotesLen_ = 0;
 
-  String topPredictions_[kHistoryMax];
+  char topPredictions_[kHistoryMax][kNoteMaxLen] = {{0}};
   size_t topPredictionsLen_ = 0;
 
-  String combinedPredictions_[kHistoryMax];
+  char combinedPredictions_[kHistoryMax][kNoteMaxLen] = {{0}};
   size_t combinedPredictionsLen_ = 0;
 
   DetectionSnapshot lastDetection_;
