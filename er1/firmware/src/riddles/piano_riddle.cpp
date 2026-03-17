@@ -30,6 +30,33 @@ String withSrc(const String& dataJson, const String& src) {
   }
   return String("{\"src\":\"") + srcVal + "\",\"msg\":\"" + dataJson + "\"}";
 }
+
+String escapeJsonString(const String& in) {
+  String out;
+  out.reserve(in.length() + 8);
+  for (size_t i = 0; i < in.length(); ++i) {
+    const char c = in.charAt(i);
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[7];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+          out += buf;
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
 }  // namespace
 
 constexpr const char* const PianoRiddle::kSequence[PianoRiddle::kSequenceLen];
@@ -63,6 +90,7 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   solvedPublished_ = false;
   lastDetection_ = DetectionSnapshot{};
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
+  clearHistory();
   resetProgress("boot");
   gameActive_ = false;
   moduleEnabled_ = true;
@@ -75,6 +103,7 @@ void PianoRiddle::setGameMode(bool inGame) {
   solvedPublished_ = false;
   lastDetection_ = DetectionSnapshot{};
   if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
+  clearHistory();
   resetProgress(inGame ? "game_start" : "game_off");
   publishState();
 }
@@ -104,6 +133,7 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
     solvedPublished_ = false;
     lastDetection_ = DetectionSnapshot{};
     if (prefs_) prefs_->putBool(kPrefsSolvedKey, false);
+    clearHistory();
     resetProgress("cmd");
     publishState();
     return true;
@@ -162,42 +192,13 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.expected = kSequence[seqPos_];
   }
 
-  String compat = String(isAccepted ? "NOTE_COMPAT " : "REJ_COMPAT ");
-  compat += "pred="; compat += predSafe;
-  compat += " s1="; compat += String(s1, 4);
-  compat += " s2="; compat += String(s2, 4);
-  compat += " m=";  compat += String(margin, 4);
-  compat += " hps="; compat += String(hps_ratio, 2);
-  compat += " harm="; compat += (harmonic_ok ? "1" : "0");
-  compat += " top3=[";
-  compat += t1Safe; compat += " "; compat += String(t1s, 4);
-  compat += ", ";
-  compat += t2Safe; compat += " "; compat += String(t2s, 4);
-  compat += ", ";
-  compat += t3Safe; compat += " "; compat += String(t3s, 4);
-  compat += "]";
-
-  String logData = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
-  logData += "\"pred\":\""; logData += predSafe; logData += "\",";
-  logData += "\"s1\":"; logData += String(s1, 6); logData += ",";
-  logData += "\"s2\":"; logData += String(s2, 6); logData += ",";
-  logData += "\"margin\":"; logData += String(margin, 6); logData += ",";
-  logData += "\"hps\":"; logData += String(hps_ratio, 6); logData += ",";
-  logData += "\"harm\":"; logData += harmonic_ok ? "1" : "0";
-  logData += ",\"top\":[{\"p\":\""; logData += t1Safe; logData += "\",\"s\":"; logData += String(t1s, 6); logData += "},";
-  logData += "{\"p\":\""; logData += t2Safe; logData += "\",\"s\":"; logData += String(t2s, 6); logData += "},";
-  logData += "{\"p\":\""; logData += t3Safe; logData += "\",\"s\":"; logData += String(t3s, 6); logData += "}],";
-  logData += "\"pos\":"; logData += String(seqPos_); logData += ",";
-  logData += "\"solved\":"; logData += solved_ ? "true" : "false";
-  logData += ",\"images_ready\":"; logData += imagesReady ? "true" : "false";
-  logData += "}";
-  log("INF", compat, logData);
 
   if (!ctx_ || !gameActive_ || !imagesReady || !moduleEnabled_ || !ctx_->enabled()) {
     lastDetection_.outcome = "ignored";
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishState();
+    publishDetectionLog();
     return;
   }
   if (predSafe[0] == '\0') {
@@ -205,6 +206,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishState();
+    publishDetectionLog();
     return;
   }
 
@@ -216,6 +218,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishState();
+    publishDetectionLog();
     return;
   }
 
@@ -245,6 +248,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
       }
       lastDetection_.solved = true;
       publishState();
+      publishDetectionLog();
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
@@ -254,6 +258,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
     lastDetection_.solved = solved_;
     publishState();
+    publishDetectionLog();
     return;
   }
 
@@ -272,6 +277,71 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   lastDetection_.solved = solved_;
   logCurrentSequence();
   publishState();
+  publishDetectionLog();
+}
+
+String PianoRiddle::buildTop3Json() const {
+  if (!lastDetection_.valid) return "[]";
+  String out = "[";
+  for (size_t i = 0; i < 3; ++i) {
+    if (i > 0) out += ",";
+    out += "{\"";
+    out += escapeJsonString(lastDetection_.top[i].p);
+    out += "\":";
+    out += String(lastDetection_.top[i].s, 6);
+    out += "}";
+  }
+  out += "]";
+  return out;
+}
+
+String PianoRiddle::buildTop3EncodedJson() const {
+  if (!lastDetection_.valid) return "[]";
+  String out = "[";
+  for (size_t i = 0; i < 3; ++i) {
+    if (i > 0) out += ",";
+    out += "\"";
+    out += escapeJsonString(encodeWhiteKey(lastDetection_.top[i].p.c_str()));
+    out += "\"";
+  }
+  out += "]";
+  return out;
+}
+
+void PianoRiddle::publishDetectionLog() const {
+  if (!ctx_ || !lastDetection_.valid) return;
+  const auto& topics = ctx_->config().topics;
+  if (topics.log.length() == 0) return;
+
+  Core::TimestampFields ts{};
+  if (auto* tsSrc = ctx_->timestampSource()) {
+    ts = tsSrc->currentTimestamp();
+  }
+
+  String payload = "{";
+  payload += "\"src\":\"piano\",";
+  payload += "\"note\":\"" + escapeJsonString(lastDetection_.pred) + "\",";
+  payload += "\"note_accepted\":";
+  payload += (lastDetection_.accepted ? "true" : "false");
+  payload += ",\"margin\":" + String(lastDetection_.margin, 6);
+  payload += ",\"hps\":" + String(lastDetection_.hps, 6);
+  payload += ",\"harm\":" + String(lastDetection_.harm);
+  payload += ",\"top_3\":" + buildTop3Json();
+  payload += ",\"all_notes\":" + joinJsonArray(topPredictions_, topPredictionsLen_);
+  payload += ",\"all_accepted_notes\":" + joinJsonArray(playedNotes_, playedNotesLen_);
+  payload += ",\"top_3_encoded\":" + buildTop3EncodedJson();
+  payload += ",\"all_notes_encoded\":" + joinJsonArray(combinedPredictions_, combinedPredictionsLen_);
+  payload += ",\"all_accepted_notes_encoded\":" + joinJsonArray(playedEncodedNotes_, playedEncodedNotesLen_);
+  payload += ",\"progress\":" + String(seqPos_);
+  payload += ",\"solved\":";
+  payload += (solved_ ? "true" : "false");
+  payload += ",\"t\":" + String((long long)ts.epoch);
+  payload += ",\"ts\":\"" + escapeJsonString(String(ts.ts)) + "\"";
+  payload += ",\"time_valid\":";
+  payload += (ts.timeValid ? "true" : "false");
+  payload += ",\"lv\":\"INF\"}";
+
+  publish(topics.log.c_str(), payload, false);
 }
 
 String PianoRiddle::buildDetectionJson() const {
@@ -398,10 +468,6 @@ void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;
   playedLen_ = 0;
   memset(played_, 0, sizeof(played_));
-  playedNotesLen_ = 0;
-  playedEncodedNotesLen_ = 0;
-  topPredictionsLen_ = 0;
-  combinedPredictionsLen_ = 0;
   if (reason) {
     String data = String("{\"reason\":\"") + reason + "\"}";
     log("DBG", "PIANO_PROGRESS_RESET", data);
@@ -409,17 +475,9 @@ void PianoRiddle::resetProgress(const char* reason) {
 }
 
 void PianoRiddle::logCurrentSequence() const {
-  if (!ctx_) return;
-
-  String seq;
-  for (size_t i = 0; i < playedLen_; ++i) {
-    if (i > 0) seq += ",";
-    seq += played_[i];
-  }
-
-  String data = String("{\"seq\":\"") + seq + "\",\"progress\":" + String(seqPos_) + "}";
-  log("INF", "PIANO_SEQ", data);
-  log("DBG", "PIANO_SEQ", data);
+  // Sequence/progress is already included in publishState().
+  // Intentionally do not emit a separate MQTT log here to avoid
+  // duplicate messages per piano detection.
 }
 
 String PianoRiddle::encodeWhiteKey(const char* note) const {
@@ -440,6 +498,32 @@ String PianoRiddle::encodeWhiteKey(const char* note) const {
   return String(note);
 }
 
+
+void PianoRiddle::clearHistory() {
+  playedNotesLen_ = 0;
+  playedEncodedNotesLen_ = 0;
+  topPredictionsLen_ = 0;
+  combinedPredictionsLen_ = 0;
+  for (size_t i = 0; i < kHistoryMax; ++i) {
+    playedNotes_[i] = "";
+    playedEncodedNotes_[i] = "";
+    topPredictions_[i] = "";
+    combinedPredictions_[i] = "";
+  }
+}
+
+void PianoRiddle::appendRolling(String* values, size_t& len, const String& value) {
+  if (kHistoryMax == 0) return;
+  if (len < kHistoryMax) {
+    values[len++] = value;
+    return;
+  }
+  for (size_t i = 1; i < kHistoryMax; ++i) {
+    values[i - 1] = values[i];
+  }
+  values[kHistoryMax - 1] = value;
+}
+
 String PianoRiddle::joinJsonArray(const String* values, size_t count) const {
   String out = "[";
   for (size_t i = 0; i < count; ++i) {
@@ -453,19 +537,19 @@ String PianoRiddle::joinJsonArray(const String* values, size_t count) const {
 }
 
 void PianoRiddle::appendPlayed(const char* note) {
-  if (playedNotesLen_ < kHistoryMax) playedNotes_[playedNotesLen_++] = String(note);
+  appendRolling(playedNotes_, playedNotesLen_, String(note));
 }
 
 void PianoRiddle::appendPlayedEncoded(const String& encoded) {
-  if (playedEncodedNotesLen_ < kHistoryMax) playedEncodedNotes_[playedEncodedNotesLen_++] = encoded;
+  appendRolling(playedEncodedNotes_, playedEncodedNotesLen_, encoded);
 }
 
 void PianoRiddle::appendTopPrediction(const char* note) {
-  if (topPredictionsLen_ < kHistoryMax) topPredictions_[topPredictionsLen_++] = String(note);
+  appendRolling(topPredictions_, topPredictionsLen_, String(note));
 }
 
 void PianoRiddle::appendCombinedPrediction(const char* note) {
-  if (combinedPredictionsLen_ < kHistoryMax) combinedPredictions_[combinedPredictionsLen_++] = encodeWhiteKey(note);
+  appendRolling(combinedPredictions_, combinedPredictionsLen_, encodeWhiteKey(note));
 }
 
 bool PianoRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,

@@ -203,7 +203,9 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   }
 
   if (solved_) {
-    cancelAllDownHold("already_solved");
+    // Keep allowing manual/open-after-solve behavior; just stop hold-timer retriggers.
+    allDownHoldActive_ = false;
+    allDownHoldStartMs_ = 0;
     return;
   }
 

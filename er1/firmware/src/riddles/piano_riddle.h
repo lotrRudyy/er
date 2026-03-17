@@ -53,6 +53,9 @@ private:
 
   void resetProgress(const char* reason);
   void logCurrentSequence() const;
+  void publishDetectionLog() const;
+  String buildTop3Json() const;
+  String buildTop3EncodedJson() const;
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
@@ -63,6 +66,8 @@ private:
   String encodeWhiteKey(const char* note) const;
   String joinJsonArray(const String* values, size_t count) const;
   String buildDetectionJson() const;
+  void clearHistory();
+  void appendRolling(String* values, size_t& len, const String& value);
   void appendPlayed(const char* note);
   void appendPlayedEncoded(const String& encoded);
   void appendTopPrediction(const char* note);
@@ -102,7 +107,7 @@ private:
   };
 
   static constexpr size_t kNoteMaxLen = 8;
-  static constexpr size_t kHistoryMax = 128;
+  static constexpr size_t kHistoryMax = 15;
 
   char played_[kSequenceLen][kNoteMaxLen] = {{0}};
   size_t playedLen_ = 0;
