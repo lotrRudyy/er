@@ -162,36 +162,52 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.expected = kSequence[seqPos_];
   }
 
-  String compat = String(isAccepted ? "NOTE_COMPAT " : "REJ_COMPAT ");
-  compat += "pred="; compat += predSafe;
-  compat += " s1="; compat += String(s1, 4);
-  compat += " s2="; compat += String(s2, 4);
-  compat += " m=";  compat += String(margin, 4);
-  compat += " hps="; compat += String(hps_ratio, 2);
-  compat += " harm="; compat += (harmonic_ok ? "1" : "0");
-  compat += " top3=[";
+  auto appendPrettyList = [](String& out, const String* values, size_t count, const String* extra = nullptr) {
+    out += "[";
+    bool first = true;
+    for (size_t i = 0; i < count; ++i) {
+      if (!first) out += ", ";
+      out += values[i];
+      first = false;
+    }
+    if (extra && extra->length() > 0) {
+      if (!first) out += ", ";
+      out += *extra;
+    }
+    out += "]";
+  };
+
+  String currentPred = predSafe;
+  String currentPredEnc = encodeWhiteKey(predSafe);
+  String top1Enc = encodeWhiteKey(t1Safe);
+  String top2Enc = encodeWhiteKey(t2Safe);
+  String top3Enc = encodeWhiteKey(t3Safe);
+
+  String compat = "NOTE_DET ";
+  compat += "top_3=[";
   compat += t1Safe; compat += " "; compat += String(t1s, 4);
   compat += ", ";
   compat += t2Safe; compat += " "; compat += String(t2s, 4);
   compat += ", ";
   compat += t3Safe; compat += " "; compat += String(t3s, 4);
   compat += "]";
-
-  String logData = String("{\"t\":\"") + (isAccepted ? "NOTE" : "REJ") + "\",";
-  logData += "\"pred\":\""; logData += predSafe; logData += "\",";
-  logData += "\"s1\":"; logData += String(s1, 6); logData += ",";
-  logData += "\"s2\":"; logData += String(s2, 6); logData += ",";
-  logData += "\"margin\":"; logData += String(margin, 6); logData += ",";
-  logData += "\"hps\":"; logData += String(hps_ratio, 6); logData += ",";
-  logData += "\"harm\":"; logData += harmonic_ok ? "1" : "0";
-  logData += ",\"top\":[{\"p\":\""; logData += t1Safe; logData += "\",\"s\":"; logData += String(t1s, 6); logData += "},";
-  logData += "{\"p\":\""; logData += t2Safe; logData += "\",\"s\":"; logData += String(t2s, 6); logData += "},";
-  logData += "{\"p\":\""; logData += t3Safe; logData += "\",\"s\":"; logData += String(t3s, 6); logData += "}],";
-  logData += "\"pos\":"; logData += String(seqPos_); logData += ",";
-  logData += "\"solved\":"; logData += solved_ ? "true" : "false";
-  logData += ",\"images_ready\":"; logData += imagesReady ? "true" : "false";
-  logData += "}";
-  log("INF", compat, logData);
+  compat += " margin="; compat += String(margin, 6);
+  compat += " note_accepted="; compat += (isAccepted ? "yes" : "no");
+  compat += " all_accepted_notes=";
+  appendPrettyList(compat, playedNotes_, playedNotesLen_, isAccepted && currentPred.length() > 0 ? &currentPred : nullptr);
+  compat += " all_notes=";
+  appendPrettyList(compat, topPredictions_, topPredictionsLen_, currentPred.length() > 0 ? &currentPred : nullptr);
+  compat += " top_3_encoded=[";
+  compat += top1Enc; compat += ", "; compat += top2Enc; compat += ", "; compat += top3Enc; compat += "]";
+  compat += " all_accepted_notes_encoded=";
+  appendPrettyList(compat, playedEncodedNotes_, playedEncodedNotesLen_, isAccepted && currentPredEnc.length() > 0 ? &currentPredEnc : nullptr);
+  compat += " all_notes_encoded=";
+  appendPrettyList(compat, combinedPredictions_, combinedPredictionsLen_, currentPredEnc.length() > 0 ? &currentPredEnc : nullptr);
+  compat += " hps="; compat += String(hps_ratio, 2);
+  compat += " harm="; compat += (harmonic_ok ? "1" : "0");
+  compat += " solved="; compat += (solved_ ? "yes" : "no");
+  compat += " images_ready="; compat += (imagesReady ? "yes" : "no");
+  log("INF", compat);
 
   if (!ctx_ || !gameActive_ || !imagesReady || !moduleEnabled_ || !ctx_->enabled()) {
     lastDetection_.outcome = "ignored";
