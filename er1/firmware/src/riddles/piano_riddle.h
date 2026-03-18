@@ -25,14 +25,14 @@ private:
   static constexpr size_t kHistoryMax = 15;
 
   struct DetectionTopEntry {
-    String p;
+    char p[kNoteMaxLen] = {0};
     float s = 0.0f;
   };
 
   struct DetectionSnapshot {
     bool valid = false;
     bool accepted = false;
-    String pred;
+    char pred[kNoteMaxLen] = {0};
     float s1 = 0.0f;
     float s2 = 0.0f;
     float margin = 0.0f;
@@ -41,8 +41,8 @@ private:
     DetectionTopEntry top[3];
     size_t pos_before = 0;
     size_t pos_after = 0;
-    String expected;
-    String outcome;
+    char expected[kNoteMaxLen] = {0};
+    char outcome[24] = {0};
     bool images_ready = false;
     bool solved = false;
   };

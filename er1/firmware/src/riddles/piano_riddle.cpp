@@ -176,32 +176,40 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   lastDetection_ = DetectionSnapshot{};
   lastDetection_.valid = true;
   lastDetection_.accepted = isAccepted;
-  lastDetection_.pred = predSafe;
+  strncpy(lastDetection_.pred, predSafe, kNoteMaxLen - 1);
+  lastDetection_.pred[kNoteMaxLen - 1] = '\0';
   lastDetection_.s1 = s1;
   lastDetection_.s2 = s2;
   lastDetection_.margin = margin;
   lastDetection_.hps = hps_ratio;
   lastDetection_.harm = harmonic_ok;
-  lastDetection_.top[0] = {String(t1Safe), t1s};
-  lastDetection_.top[1] = {String(t2Safe), t2s};
-  lastDetection_.top[2] = {String(t3Safe), t3s};
+  strncpy(lastDetection_.top[0].p, t1Safe, kNoteMaxLen - 1);
+  lastDetection_.top[0].p[kNoteMaxLen - 1] = '\0';
+  lastDetection_.top[0].s = t1s;
+  strncpy(lastDetection_.top[1].p, t2Safe, kNoteMaxLen - 1);
+  lastDetection_.top[1].p[kNoteMaxLen - 1] = '\0';
+  lastDetection_.top[1].s = t2s;
+  strncpy(lastDetection_.top[2].p, t3Safe, kNoteMaxLen - 1);
+  lastDetection_.top[2].p[kNoteMaxLen - 1] = '\0';
+  lastDetection_.top[2].s = t3s;
   lastDetection_.pos_before = seqPos_;
   lastDetection_.images_ready = imagesReady;
   lastDetection_.solved = solved_;
   if (seqPos_ < kSequenceLen) {
-    lastDetection_.expected = kSequence[seqPos_];
+    strncpy(lastDetection_.expected, kSequence[seqPos_], kNoteMaxLen - 1);
+    lastDetection_.expected[kNoteMaxLen - 1] = '\0';
   }
 
 
   if (!ctx_ || !gameActive_ || !imagesReady || !moduleEnabled_ || !ctx_->enabled()) {
-    lastDetection_.outcome = "ignored";
+    strncpy(lastDetection_.outcome, "ignored", sizeof(lastDetection_.outcome) - 1);
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishDetectionLog();
     return;
   }
   if (predSafe[0] == '\0') {
-    lastDetection_.outcome = "empty_prediction";
+    strncpy(lastDetection_.outcome, "empty_prediction", sizeof(lastDetection_.outcome) - 1);
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishDetectionLog();
@@ -212,7 +220,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   appendCombinedPrediction(predSafe);
 
   if (!isAccepted) {
-    lastDetection_.outcome = "rejected";
+    strncpy(lastDetection_.outcome, "rejected", sizeof(lastDetection_.outcome) - 1);
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
     publishDetectionLog();
@@ -235,7 +243,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
     logCurrentSequence();
 
-    lastDetection_.outcome = (seqPos_ >= kSequenceLen) ? "solved" : "match";
+    strncpy(lastDetection_.outcome, (seqPos_ >= kSequenceLen) ? "solved" : "match", sizeof(lastDetection_.outcome) - 1);
     lastDetection_.pos_after = seqPos_;
 
     if (seqPos_ >= kSequenceLen) {
@@ -260,14 +268,14 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   }
 
   resetProgress("mismatch");
-  lastDetection_.outcome = "mismatch";
+  strncpy(lastDetection_.outcome, "mismatch", sizeof(lastDetection_.outcome) - 1);
 
   if (strcasecmp(predSafe, kSequence[0]) == 0) {
     seqPos_ = 1;
     strncpy(played_[0], predSafe, kNoteMaxLen - 1);
     played_[0][kNoteMaxLen - 1] = '\0';
     playedLen_ = 1;
-    lastDetection_.outcome = "restart_from_first";
+    strncpy(lastDetection_.outcome, "restart_from_first", sizeof(lastDetection_.outcome) - 1);
   }
 
   lastDetection_.pos_after = seqPos_;
@@ -279,10 +287,11 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 String PianoRiddle::buildTop3Json() const {
   if (!lastDetection_.valid) return "[]";
   String out = "[";
+  out.reserve(96);
   for (size_t i = 0; i < 3; ++i) {
     if (i > 0) out += ",";
     out += "{\"";
-    out += escapeJsonString(lastDetection_.top[i].p);
+    out += escapeJsonString(String(lastDetection_.top[i].p));
     out += "\":";
     out += String(lastDetection_.top[i].s, 6);
     out += "}";
@@ -294,10 +303,11 @@ String PianoRiddle::buildTop3Json() const {
 String PianoRiddle::buildTop3EncodedJson() const {
   if (!lastDetection_.valid) return "[]";
   String out = "[";
+  out.reserve(48);
   for (size_t i = 0; i < 3; ++i) {
     if (i > 0) out += ",";
     out += "\"";
-    out += escapeJsonString(encodeWhiteKey(lastDetection_.top[i].p.c_str()));
+    out += escapeJsonString(encodeWhiteKey(lastDetection_.top[i].p));
     out += "\"";
   }
   out += "]";
@@ -316,7 +326,7 @@ void PianoRiddle::publishDetectionLog() const {
 
   String payload = "{";
   payload += "\"src\":\"piano\",";
-  payload += "\"note\":\"" + escapeJsonString(lastDetection_.pred) + "\",";
+  payload += "\"note\":\"" + escapeJsonString(String(lastDetection_.pred)) + "\",";
   payload += "\"note_accepted\":";
   payload += (lastDetection_.accepted ? "true" : "false");
   payload += ",\"margin\":" + String(lastDetection_.margin, 6);
@@ -347,7 +357,7 @@ String PianoRiddle::buildDetectionJson() const {
 
   String out = "{";
   out += String("\"kind\":\"") + (lastDetection_.accepted ? "NOTE" : "REJ") + "\",";
-  out += "\"pred\":\"" + lastDetection_.pred + "\",";
+  out += "\"pred\":\"" + escapeJsonString(String(lastDetection_.pred)) + "\",";
   out += "\"s1\":" + String(lastDetection_.s1, 6) + ",";
   out += "\"s2\":" + String(lastDetection_.s2, 6) + ",";
   out += "\"margin\":" + String(lastDetection_.margin, 6) + ",";
@@ -355,14 +365,14 @@ String PianoRiddle::buildDetectionJson() const {
   out += "\"harm\":" + String(lastDetection_.harm) + ",";
   out += "\"pos_before\":" + String(lastDetection_.pos_before) + ",";
   out += "\"pos_after\":" + String(lastDetection_.pos_after) + ",";
-  out += "\"expected\":\"" + lastDetection_.expected + "\",";
-  out += "\"outcome\":\"" + lastDetection_.outcome + "\",";
+  out += "\"expected\":\"" + escapeJsonString(String(lastDetection_.expected)) + "\",";
+  out += "\"outcome\":\"" + escapeJsonString(String(lastDetection_.outcome)) + "\",";
   out += "\"images_ready\":" + String(lastDetection_.images_ready ? "true" : "false") + ",";
   out += "\"solved\":" + String(lastDetection_.solved ? "true" : "false") + ",";
   out += "\"top\":[";
   for (size_t i = 0; i < 3; ++i) {
     if (i > 0) out += ",";
-    out += "{\"p\":\"" + lastDetection_.top[i].p + "\",\"s\":" + String(lastDetection_.top[i].s, 6) + "}";
+    out += "{\"p\":\"" + escapeJsonString(String(lastDetection_.top[i].p)) + "\",\"s\":" + String(lastDetection_.top[i].s, 6) + "}";
   }
   out += "]}";
   return out;
