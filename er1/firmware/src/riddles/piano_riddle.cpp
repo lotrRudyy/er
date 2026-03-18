@@ -197,7 +197,6 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.outcome = "ignored";
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
-    publishState();
     publishDetectionLog();
     return;
   }
@@ -205,7 +204,6 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.outcome = "empty_prediction";
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
-    publishState();
     publishDetectionLog();
     return;
   }
@@ -217,7 +215,6 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     lastDetection_.outcome = "rejected";
     lastDetection_.pos_after = seqPos_;
     lastDetection_.solved = solved_;
-    publishState();
     publishDetectionLog();
     return;
   }
@@ -248,8 +245,8 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
       lastDetection_.solved = true;
-      publishState();
       publishDetectionLog();
+      publishState();
       if (!solvedPublished_) {
         publishSolvedEvent();
         solvedPublished_ = true;
@@ -258,7 +255,6 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
     }
 
     lastDetection_.solved = solved_;
-    publishState();
     publishDetectionLog();
     return;
   }
@@ -277,7 +273,6 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   lastDetection_.pos_after = seqPos_;
   lastDetection_.solved = solved_;
   logCurrentSequence();
-  publishState();
   publishDetectionLog();
 }
 
@@ -432,7 +427,6 @@ void PianoRiddle::publishState() {
                 ",\"sequence_encoded\":" + seqEncodedJson +
                 ",\"target_sequence\":" + targetSequence +
                 ",\"target_sequence_encoded\":" + targetEncoded +
-                ",\"last_detection\":" + buildDetectionJson() +
                 "}";
 
   const auto& topics = ctx_->config().topics;
