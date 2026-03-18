@@ -223,7 +223,8 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   }
 
   appendPlayed(predSafe);
-  appendPlayedEncoded(encodeWhiteKey(predSafe));
+  String encodedPred = encodeWhiteKey(predSafe);
+  appendPlayedEncoded(encodedPred.c_str());
 
   const char* expected = (seqPos_ < kSequenceLen) ? kSequence[seqPos_] : nullptr;
 
@@ -504,32 +505,37 @@ void PianoRiddle::clearHistory() {
   playedEncodedNotesLen_ = 0;
   topPredictionsLen_ = 0;
   combinedPredictionsLen_ = 0;
-  for (size_t i = 0; i < kHistoryMax; ++i) {
-    playedNotes_[i] = "";
-    playedEncodedNotes_[i] = "";
-    topPredictions_[i] = "";
-    combinedPredictions_[i] = "";
-  }
+  memset(playedNotes_, 0, sizeof(playedNotes_));
+  memset(playedEncodedNotes_, 0, sizeof(playedEncodedNotes_));
+  memset(topPredictions_, 0, sizeof(topPredictions_));
+  memset(combinedPredictions_, 0, sizeof(combinedPredictions_));
 }
 
-void PianoRiddle::appendRolling(String* values, size_t& len, const String& value) {
+void PianoRiddle::appendRolling(char values[][kNoteMaxLen], size_t& len, const char* value) {
   if (kHistoryMax == 0) return;
+  const char* safe = value ? value : "";
+
   if (len < kHistoryMax) {
-    values[len++] = value;
+    strncpy(values[len], safe, kNoteMaxLen - 1);
+    values[len][kNoteMaxLen - 1] = '\0';
+    ++len;
     return;
   }
+
   for (size_t i = 1; i < kHistoryMax; ++i) {
-    values[i - 1] = values[i];
+    strncpy(values[i - 1], values[i], kNoteMaxLen);
+    values[i - 1][kNoteMaxLen - 1] = '\0';
   }
-  values[kHistoryMax - 1] = value;
+  strncpy(values[kHistoryMax - 1], safe, kNoteMaxLen - 1);
+  values[kHistoryMax - 1][kNoteMaxLen - 1] = '\0';
 }
 
-String PianoRiddle::joinJsonArray(const String* values, size_t count) const {
+String PianoRiddle::joinJsonArray(const char values[][kNoteMaxLen], size_t count) const {
   String out = "[";
   for (size_t i = 0; i < count; ++i) {
     if (i > 0) out += ",";
     out += "\"";
-    out += values[i];
+    out += escapeJsonString(String(values[i]));
     out += "\"";
   }
   out += "]";
@@ -537,19 +543,20 @@ String PianoRiddle::joinJsonArray(const String* values, size_t count) const {
 }
 
 void PianoRiddle::appendPlayed(const char* note) {
-  appendRolling(playedNotes_, playedNotesLen_, String(note));
+  appendRolling(playedNotes_, playedNotesLen_, note);
 }
 
-void PianoRiddle::appendPlayedEncoded(const String& encoded) {
+void PianoRiddle::appendPlayedEncoded(const char* encoded) {
   appendRolling(playedEncodedNotes_, playedEncodedNotesLen_, encoded);
 }
 
 void PianoRiddle::appendTopPrediction(const char* note) {
-  appendRolling(topPredictions_, topPredictionsLen_, String(note));
+  appendRolling(topPredictions_, topPredictionsLen_, note);
 }
 
 void PianoRiddle::appendCombinedPrediction(const char* note) {
-  appendRolling(combinedPredictions_, combinedPredictionsLen_, encodeWhiteKey(note));
+  String encoded = encodeWhiteKey(note);
+  appendRolling(combinedPredictions_, combinedPredictionsLen_, encoded.c_str());
 }
 
 bool PianoRiddle::publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
