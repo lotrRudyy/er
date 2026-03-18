@@ -15,7 +15,6 @@ public:
   bool onCmd(const char* cmd, const char* payload);
   void setGameMode(bool inGame);
 
-  // Called from the C callback in piano_riddle.cpp
   void handleDetectorResult(int accepted, const char* pred, float s1, float s2, float margin,
                             float hps_ratio, int harmonic_ok, const char* t1, float t1s,
                             const char* t2, float t2s, const char* t3, float t3s);
