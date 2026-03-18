@@ -9,7 +9,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "30";
+static const char* FW_VERSION = "29";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 // ======================= NETWORK CONFIG ======================
