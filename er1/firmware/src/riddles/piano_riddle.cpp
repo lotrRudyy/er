@@ -523,7 +523,7 @@ void PianoRiddle::appendRolling(char values[][kNoteMaxLen], size_t& len, const c
   }
 
   for (size_t i = 1; i < kHistoryMax; ++i) {
-    strncpy(values[i - 1], values[i], kNoteMaxLen);
+    strncpy(values[i - 1], values[i], kNoteMaxLen - 1);
     values[i - 1][kNoteMaxLen - 1] = '\0';
   }
   strncpy(values[kHistoryMax - 1], safe, kNoteMaxLen - 1);
