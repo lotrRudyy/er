@@ -1,0 +1,42 @@
+rudyy@er1-pi:~/er1/scripts $ cd game_master/
+rudyy@er1-pi:~/er1/scripts/game_master $ scp -r .\scripts\game_master rudyy@er1rudyy@er1-pi:~/er1/scripts/game_master $ ls             
+README.md  db.py           main.py    requirements.txt
+config.py  game_master.py  models.py
+rudyy@er1-pi:~/er1/scripts/game_master $ python3 -m venv .venv
+rudyy@er1-pi:~/er1/scripts/game_master $ source .venv/bin/activate
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ pip install -r requirements.txt
+Collecting paho-mqtt>=2.1.0 (from -r requirements.txt (line 1))
+  Downloading paho_mqtt-2.1.0-py3-none-any.whl.metadata (23 kB)
+Downloading paho_mqtt-2.1.0-py3-none-any.whl (67 kB)
+Installing collected packages: paho-mqtt
+Successfully installed paho-mqtt-2.1.0
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ source .venv/bin/activate     
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ python main.py
+2026-03-19 02:06:09,623 INFO game_master MQTT connected rc=Success
+2026-03-19 02:06:11,624 INFO game_master PUB game/state {"mode":"MODE_STANDBY","active":[],"solved":[],"seq":1}
+^C2026-03-19 02:06:50,849 WARNING game_master MQTT disconnected rc=Normal disconnection
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ sudo nano /etc/systemd/system/game_master.service
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+
+sudo systemctl enable game_master
+sudo systemctl start game_master
+Created symlink '/etc/systemd/system/multi-user.target.wants/game_master.service' → '/etc/systemd/system/game_master.service'.
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ sudo systemctl status game_master
+● game_master.service - Escape Room Game Master
+     Loaded: loaded (/etc/systemd/system/game_master.service; enabled; preset:>
+     Active: active (running) since Thu 2026-03-19 02:07:34 CET; 22s ago       
+ Invocation: 489b5dac7a6e40bf89be5a2393128664
+   Main PID: 1343047 (python)
+      Tasks: 3 (limit: 9571)
+        CPU: 106ms
+     CGroup: /system.slice/game_master.service
+             └─1343047 /home/rudyy/er1/scripts/game_master/.venv/bin/python ma>
+
+Mar 19 02:07:34 er1-pi systemd[1]: Started game_master.service - Escape Room G>
+Mar 19 02:07:34 er1-pi python[1343047]: 2026-03-19 02:07:34,711 INFO game_mast>
+
+(.venv) rudyy@er1-pi:~/er1/scripts/game_master $ journalctl -u game_master -f
+Mar 19 02:07:34 er1-pi systemd[1]: Started game_master.service - Escape Room Game Master.
+Mar 19 02:07:34 er1-pi python[1343047]: 2026-03-19 02:07:34,711 INFO game_master MQTT connected rc=Success
+Mar 19 02:07:36 er1-pi python[1343047]: 2026-03-19 02:07:36,712 INFO game_master PUB game/state {"mode":"MODE_STANDBY","active":[],"solved":[],"seq":1}       
