@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "43";
+static const char* FW_VERSION = "45";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
@@ -21,23 +21,12 @@ static constexpr uint16_t MQTT_PORT = 1883;
 
 static const char* TOPIC_MOSFET_CMD = "lighting/mosfet/+/cmd";
 static const char* TOPIC_GAME_STATE = "game/state";
-static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
 
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
 static const char* OTA_PATH = "/node_firmware/lighting.bin";
 static const char* OTA_PATH_PREFIX = "/node_firmware/";
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
-
-#ifndef LIGHTING_SERIAL_DEBUG
-#define LIGHTING_SERIAL_DEBUG 1
-#endif
-
-#if LIGHTING_SERIAL_DEBUG
-  #define SDBG(fmt, ...) do { Serial.printf("[lighting] " fmt "\n", ##__VA_ARGS__); } while(0)
-#else
-  #define SDBG(fmt, ...) do {} while(0)
-#endif
 
 static NodeCore nodeCore;
 static LightingController lighting;
@@ -60,13 +49,6 @@ static void gameStateSubscription(NodeContext& ctx, const char* topic, const Str
   if (module) module->onGameStateMessage(payload);
 }
 
-static void lightingCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
-  (void)ctx;
-  (void)topic;
-  auto* module = static_cast<LightingController*>(user);
-  if (module) module->onLightingCommandTopic(payload);
-}
-
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   (void)user;
   ErrorInfo err{};
@@ -74,13 +56,8 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
 }
 
 void setup() {
-#if LIGHTING_SERIAL_DEBUG
   Serial.begin(115200);
   delay(200);
-  Serial.println();
-  SDBG("BOOT setup()");
-  SDBG("FW v%s - %s", FW_VERSION, FW_DESC);
-#endif
 
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
@@ -124,7 +101,6 @@ void setup() {
   nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
   nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_GAME_STATE, gameStateSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 
   NodeContext& ctx = nodeCore.context();
   lighting.begin(ctx);

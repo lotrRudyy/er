@@ -27,6 +27,8 @@ public:
     const char* reason = nullptr;
   };
 
+  enum class BulkCommand : uint8_t { None = 0, AllOn, AllOff, SceneInitial, NonIngameAllOn };
+
   LightingController();
 
   void begin(Core::NodeContext& ctx);
@@ -53,8 +55,6 @@ private:
   uint32_t mapUserValueToDuty(int32_t v) const;
 
   bool setChannel(size_t index, bool on, uint32_t duty, bool preserveZeroDutyWhenOn = false);
-  bool setChannelByToken(const String& token, bool on, uint32_t duty, bool preserveZeroDutyWhenOn = false);
-  bool setChannelPercentByToken(const String& token, bool on, uint32_t pct);
   void applyOutput(ChannelState& ch);
 
   void stopAllFades();
@@ -62,19 +62,15 @@ private:
   void startFade(size_t index, uint32_t toDuty, uint32_t durationMs, const char* reason);
   void updateFade(FadeState& fade, uint32_t nowMs);
 
-  void applySceneInitial(const char* reason);
-  void applySceneAllOn(const char* reason);
-  void applySceneAllOff(const char* reason);
-
   void publishChannelState(const ChannelState& ch, const char* reason);
   void publishAllStates(const char* reason);
-  void publishChangedStates(const bool changed[], const char* reason);
   void markDirty(size_t index, const char* reason);
-  void flushDirtyStates(uint32_t maxCount = 1);
+  void flushDirtyStates(uint32_t maxCount = 2);
 
-  enum class BulkCommand : uint8_t { None = 0, AllOn, AllOff, SceneInitial };
   void queueBulkCommand(BulkCommand cmd);
-  void runQueuedBulkCommand();
+  void startBulkCommand(BulkCommand cmd);
+  void runBulkCommandStep(uint32_t nowMs);
+  size_t bulkApplyCountForTick() const;
 
 private:
   Core::NodeContext* ctx_ = nullptr;
@@ -84,8 +80,12 @@ private:
   const char* dirtyReasons_[kChannelCount]{};
   bool dirty_[kChannelCount]{};
   bool bootStatePublished_ = false;
-  bool lastMqttConnected_ = false;
+
   BulkCommand queuedBulkCommand_ = BulkCommand::None;
-  uint32_t queuedBulkAtMs_ = 0;
-  uint32_t lastBulkApplyMs_ = 0;
+  BulkCommand activeBulkCommand_ = BulkCommand::None;
+  uint8_t bulkIndex_ = 0;
+  const char* bulkReason_ = nullptr;
+  bool bulkTargetOn_ = false;
+  uint32_t bulkTargetDuty_ = 0;
+  uint32_t lastBulkStepMs_ = 0;
 };
