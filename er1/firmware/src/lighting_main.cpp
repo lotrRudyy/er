@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "53";
+static const char* FW_VERSION = "54";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
@@ -19,7 +19,6 @@ static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
-static const char* TOPIC_MOSFET_CMD = "lighting/mosfet/+/cmd";
 static const char* TOPIC_GAME_STATE = "game/state";
 static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
 
@@ -107,7 +106,6 @@ void setup() {
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
-  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_GAME_STATE, gameStateSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 

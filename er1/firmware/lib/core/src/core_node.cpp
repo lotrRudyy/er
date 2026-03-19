@@ -780,7 +780,7 @@ TopicConfig makeTopicConfig(const char* nodeId, const TopicConfig& overrideCfg) 
   };
 
   ensure(out.hb, "hb");
-  ensure(out.cmd, "cmd");
+  ensure(out.cmd, "sys/cmd");
   ensure(out.evt, "evt");
   ensure(out.state, "state");
   ensure(out.dbg, "dbg");

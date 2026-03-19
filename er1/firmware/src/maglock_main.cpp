@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "maglock";
-static const char* FW_VERSION = "29";
+static const char* FW_VERSION = "30";
 static const char* FW_DESC = "maglock with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x50};
@@ -20,7 +20,6 @@ static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
 static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_LOCK_CMD = "maglock/lock/+/cmd";
 static const char* TOPIC_MAGLOCK_CMD = "maglock/cmd";
 
 static const char* OTA_HOST = "192.168.0.10";
@@ -118,7 +117,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &maglock);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &maglock);
-  nodeCore.registerSubscription(TOPIC_LOCK_CMD, lockCommandSubscription, &maglock);
   nodeCore.registerSubscription(TOPIC_MAGLOCK_CMD, maglockCommandSubscription, &maglock);
 
   NodeContext& ctx = nodeCore.context();
