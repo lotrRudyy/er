@@ -321,36 +321,40 @@ void LightingController::tick(uint32_t nowMs) {
 bool LightingController::onCmd(const char* cmd, const char* payload) {
   String cmdStr = String(cmd ? cmd : "");
   String payloadStr = String(payload ? payload : "");
+  cmdStr.trim();
+  payloadStr.trim();
 
-  String raw = cmdStr;
-  raw.trim();
-
-  if (!payloadStr.length() && raw.startsWith("{")) {
-    onLightingCommandTopic(raw);
+  // NodeCore delivers node-specific topic <node>/cmd here.
+  // For JSON payloads published to lighting/cmd, some core paths pass the whole
+  // JSON blob in cmd and leave payload empty. Forward raw JSON unchanged.
+  if (cmdStr.startsWith("{")) {
+    onLightingCommandTopic(cmdStr);
+    return true;
+  }
+  if (payloadStr.startsWith("{")) {
+    onLightingCommandTopic(payloadStr);
     return true;
   }
 
-  String upper = raw;
-  upper.trim();
+  String upper = cmdStr;
   upper.toUpperCase();
-
   if (upper == "ALL_ON") {
     onLightingCommandTopic(String("{\"cmd\":\"all_on\"}"));
     return true;
   }
-
   if (upper == "ALL_OFF") {
     onLightingCommandTopic(String("{\"cmd\":\"all_off\"}"));
     return true;
   }
 
-  if (payloadStr.length()) {
+  // Support split command style, e.g. cmd='turn_on' payload='"light":"r3_uv"'
+  if (cmdStr.length() && payloadStr.length() && !payloadStr.startsWith("{")) {
     String json = String("{\"cmd\":\"") + cmdStr + "\"," + payloadStr + "}";
     onLightingCommandTopic(json);
     return true;
   }
 
-  log("DBG", String("Lighting node cmd ignored: ") + raw);
+  log("DBG", String("Lighting node cmd ignored: ") + cmdStr + (payloadStr.length() ? String(" ") + payloadStr : String("")));
   return true;
 }
 
