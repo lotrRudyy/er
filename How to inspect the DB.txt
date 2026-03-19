@@ -1,0 +1,17 @@
+How to inspect the DB
+
+On the Pi:
+
+cd ~/er/scripts/game_master
+sqlite3 data/game_master.sqlite3
+
+Then for example:
+
+.tables
+SELECT * FROM games;
+SELECT * FROM game_riddles;
+SELECT * FROM game_hints;
+
+Exit with:
+
+.quit
