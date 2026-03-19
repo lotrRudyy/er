@@ -13,9 +13,6 @@ public:
   void setGameMode(bool inGame);
 
   uint32_t errorCount() const { return errorCount_; }
-  bool candlesSolved() const { return candlesSolved_; }
-
-  void handleCandlesEvent(const String& payload);
 
 private:
   static constexpr uint32_t kMetricIntervalMs = 10000;
@@ -41,13 +38,9 @@ private:
   void setAllStripsOff();
   void publishMetricsIfDue(uint32_t nowMs);
   void publishState();
-  void persistState();
-  void loadState();
 
   Core::NodeContext* ctx_ = nullptr;
   Preferences prefs_;
-
-  bool candlesSolved_ = false;
   uint32_t cycleStartMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;

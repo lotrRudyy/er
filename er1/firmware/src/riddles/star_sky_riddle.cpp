@@ -5,7 +5,6 @@
 namespace {
 constexpr uint32_t kLedcFreq = 1000;
 constexpr uint8_t kLedcRes = 8;
-constexpr const char* kPrefsKey = "candles";
 }
 
 void StarSkyRiddle::begin(Core::NodeContext& ctx) {
@@ -13,14 +12,11 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
   const char* node = ctx.nodeId() ? ctx.nodeId() : "star_sky";
   (void)node;
   // Metrics go via core_log (DBG) so <node>/log/level controls verbosity.
-  loadState();
   for (int i = 0; i < 4; i++) {
     ledcSetup(i, kLedcFreq, kLedcRes);
     ledcAttachPin(kLedPins[i], i);
     setStripRaw(i, 0);
   }
-  candlesSolved_ = false;
-  persistState();
   cycleStartMs_ = millis();
   lastMetricMs_ = millis();
   gameActive_ = false;
@@ -31,8 +27,6 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
 
 void StarSkyRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
-  candlesSolved_ = false;
-  persistState();
   cycleStartMs_ = millis();
   setAllStripsOff();
   publishState();
@@ -52,24 +46,17 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
   if (!cmd) return false;
 
   if (strcasecmp(cmd, "RESET_STAR_SKY") == 0 || strcasecmp(cmd, "RESET") == 0) {
-    bool wasSolved = candlesSolved_;
-    candlesSolved_ = false;
-    persistState();
     cycleStartMs_ = millis();
-    String data = String("{\"src\":\"reset_star_sky\",\"was_on\":") + (wasSolved ? "1" : "0") + "}";
-    log("INF", "STAR_SKY_STATE_RESET", data);
+    setAllStripsOff();
+    log("INF", "STAR_SKY_RESET");
     publishState();
     return true;
   }
 
   if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_STAR_SKY") == 0) {
     if (!gameActive_) setGameMode(true);
-    if (!candlesSolved_) {
-      candlesSolved_ = true;
-      persistState();
-      cycleStartMs_ = millis();
-      log("INF", "STAR_SKY_FORCE_SOLVE");
-    }
+    cycleStartMs_ = millis();
+    log("INF", "STAR_SKY_FORCE_ENABLE");
     publishState();
     return true;
   }
@@ -94,15 +81,9 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
 
   if (String(cmd).equalsIgnoreCase("CANDLES_SOLVED")) {
     if (!gameActive_) setGameMode(true);
-    if (!candlesSolved_) {
-      candlesSolved_ = true;
-      persistState();
-      cycleStartMs_ = millis();
-      log("INF", "CANDLES_SOLVED CMD received, enabling pattern");
-      publishState();
-    } else {
-      log("DBG", "CANDLES_SOLVED CMD (already enabled)");
-    }
+    cycleStartMs_ = millis();
+    log("INF", "CANDLES_SOLVED CMD received");
+    publishState();
     return true;
   }
 
@@ -113,26 +94,6 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
   }
   log("WRN", String("Unknown CMD: ") + message);
   return true;
-}
-
-void StarSkyRiddle::handleCandlesEvent(const String& payload) {
-  const bool isCandlesSolved =
-      (payload.indexOf("\"rid\":\"candles\"") >= 0 && payload.indexOf("\"event\":\"SOLVED\"") >= 0) ||
-      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0) ||
-      (payload.indexOf("\"event\":\"solved\"") >= 0 && payload.indexOf("\"node\":\"candles\"") >= 0);
-  if (!isCandlesSolved) {
-    return;
-  }
-  if (!gameActive_) return;
-  if (!candlesSolved_) {
-    candlesSolved_ = true;
-    persistState();
-    cycleStartMs_ = millis();
-    log("INF", "Candles SOLVED event received, enabling pattern");
-    publishState();
-  } else {
-    log("DBG", "Candles SOLVED event (already enabled)");
-  }
 }
 
 void StarSkyRiddle::log(const char* level, const String& msg) const {
@@ -157,7 +118,7 @@ bool StarSkyRiddle::publish(const char* topic, const String& payload, bool retai
 }
 
 void StarSkyRiddle::applyPattern(uint32_t nowMs) {
-  if (!gameActive_ || !candlesSolved_) {
+  if (!gameActive_) {
     setAllStripsOff();
     return;
   }
@@ -192,7 +153,7 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
   lastMetricMs_ = nowMs;
 
   uint32_t delta = (nowMs - cycleStartMs_) % kCycleMs;
-  const char* phase = (!candlesSolved_) ? "OFF" :
+  const char* phase = (!gameActive_) ? "OFF" :
                       (delta < kStepMs) ? "SET2" :
                       (delta < kStepMs * 2) ? "SET3" :
                       (delta < kStepMs * 3) ? "SET4" : "PAUSE";
@@ -200,43 +161,25 @@ void StarSkyRiddle::publishMetricsIfDue(uint32_t nowMs) {
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(nowMs / 1000) +
                    ",\"k\":\"star_sky\"" +
-                   ",\"candles\":" + (candlesSolved_ ? "1" : "0") +
+                   ",\"candles\":0" +
                    ",\"phase\":\"" + phase + "\"" +
                    "}";
   log("DBG", "star_sky_metrics", payload);
-}
-
-void StarSkyRiddle::persistState() {
-  prefs_.putBool(kPrefsKey, candlesSolved_);
-  log("INF", String("STATE save candles=") + (candlesSolved_ ? "1" : "0"));
-}
-
-void StarSkyRiddle::loadState() {
-  prefs_.begin("star_sky", false);
-  bool hasKey = prefs_.isKey(kPrefsKey);
-  candlesSolved_ = prefs_.getBool(kPrefsKey, false);
-  if (hasKey) {
-    log("INF", String("STATE restore candles=") + (candlesSolved_ ? "1" : "0"));
-  } else {
-    log("INF", "STATE default candles=0");
-    prefs_.putBool(kPrefsKey, candlesSolved_);
-  }
-  cycleStartMs_ = millis();
 }
 
 void StarSkyRiddle::publishState() {
   if (!ctx_) return;
 
   const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
-  const char* rawState = candlesSolved_ ? "solved" : "idle";
+  const char* rawState = gameActive_ ? "active" : "idle";
 
   String data =
       String("{\"id\":\"star_sky\"") +
       ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
       ",\"enabled\":" + (effectiveEnabled ? "true" : "false") +
-      ",\"solved\":" + (candlesSolved_ ? "true" : "false") +
+      ",\"solved\":false" +
       ",\"raw_state\":\"" + rawState + "\"" +
-      ",\"candles\":" + (candlesSolved_ ? "true" : "false") +
+      ",\"candles\":false" +
       "}";
 
   const auto& topics = ctx_->config().topics;

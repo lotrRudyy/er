@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <IPAddress.h>
 #include <cstring>
 
@@ -8,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "star_sky";
-static const char* FW_VERSION = "13";
+static const char* FW_VERSION = "14";
 static const char* FW_DESC = "star_sky with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};
@@ -31,21 +32,22 @@ static NodeCore nodeCore;
 static StarSkyRiddle starSky;
 static bool s_gameEnabled = false;
 
-static bool jsonArrayContains(const String& payload, const char* key, const char* value) {
-  String marker = String("\"") + key + "\":[";
-  int start = payload.indexOf(marker);
-  if (start < 0) return false;
-  start += marker.length();
-  int end = payload.indexOf(']', start);
-  if (end < 0) return false;
-  String match = String("\"") + value + "\"";
-  return payload.substring(start, end).indexOf(match) >= 0;
+static bool jsonArrayContains(JsonVariantConst arr, const char* value) {
+  if (arr.isNull()) return false;
+  for (JsonVariantConst v : arr.as<JsonArrayConst>()) {
+    const char* s = v.as<const char*>();
+    if (s && strcmp(s, value) == 0) return true;
+  }
+  return false;
 }
 
 static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
-  if (payload.indexOf("\"mode\":\"MODE_MAINTENANCE\"") >= 0) return true;
-  if (payload.indexOf("\"mode\":\"MODE_INGAME\"") < 0) return false;
-  return jsonArrayContains(payload, "active", nodeName) || jsonArrayContains(payload, "solved", nodeName);
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) return false;
+  const char* mode = doc["mode"] | "";
+  if (strcmp(mode, "MODE_MAINTENANCE") == 0) return true;
+  if (strcmp(mode, "MODE_INGAME") != 0) return false;
+  return jsonArrayContains(doc["active"], nodeName) || jsonArrayContains(doc["solved"], nodeName);
 }
 
 static void applyEnabled(StarSkyRiddle* module, bool enabled) {
