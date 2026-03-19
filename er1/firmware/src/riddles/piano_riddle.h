@@ -81,7 +81,6 @@ private:
   bool detectorStarted_ = false;
 
   static constexpr const char* kPrefsSolvedKey = "piano_solved";
-  static constexpr const char* kPrefsImagesSolvedKey = "images_solved";
 
   // Sequence (case-insensitive compare)
   /*

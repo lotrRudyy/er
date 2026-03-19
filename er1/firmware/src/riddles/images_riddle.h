@@ -37,7 +37,6 @@ private:
   void log(const char* level, const String& msg, const String& dataJson) const;
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicLockImagesCmd_;
   String nodeId_;
 
   static constexpr int kButtonCount = 4;

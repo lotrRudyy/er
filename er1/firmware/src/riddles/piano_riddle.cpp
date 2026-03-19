@@ -7,12 +7,6 @@
 namespace {
 PianoRiddle* gPianoRiddle = nullptr;
 
-constexpr const char* kPrefsImagesSolvedKey = "images_solved";
-
-bool imagesSolvedFromPrefs(Preferences* prefs) {
-  return prefs ? prefs->getBool(kPrefsImagesSolvedKey, false) : false;
-}
-
 String withSrc(const String& dataJson, const String& src) {
   const char* srcVal = (src.length() > 0) ? src.c_str() : "";
   if (dataJson.length() == 0) {
@@ -79,7 +73,7 @@ void PianoRiddle::setGameMode(bool inGame) {
 }
 
 void PianoRiddle::tick(uint32_t nowMs) {
-  if (detectorStarted_ && gameActive_ && imagesSolvedFromPrefs(prefs_) && moduleEnabled_ && ctx_ && ctx_->enabled()) {
+  if (detectorStarted_ && gameActive_ && moduleEnabled_ && ctx_ && ctx_->enabled()) {
     piano_detector_loop_once();
   }
   (void)nowMs;
@@ -139,7 +133,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
   const char* t2Safe = t2 ? t2 : "";
   const char* t3Safe = t3 ? t3 : "";
   const bool isAccepted = accepted != 0;
-  const bool imagesReady = imagesSolvedFromPrefs(prefs_);
+  const bool imagesReady = gameActive_;
 
   lastDetection_ = DetectionSnapshot{};
   lastDetection_.valid = true;
@@ -315,7 +309,7 @@ String PianoRiddle::buildDetectionJson() const {
 void PianoRiddle::publishState() {
   if (!ctx_) return;
 
-  const bool imagesReady = imagesSolvedFromPrefs(prefs_);
+  const bool imagesReady = gameActive_;
   const bool effectiveActive = gameActive_ && imagesReady;
 
   String seqJson = "[";
@@ -384,7 +378,6 @@ void PianoRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   publish("game/event", "{\"node\":\"piano\",\"event\":\"solved\"}", false);
 }
-
 
 void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;
