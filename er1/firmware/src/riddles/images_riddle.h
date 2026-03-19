@@ -29,7 +29,6 @@ private:
   void publishSolvedEvent(const char* rid);
   void publishButtonStateEvent();
   void publishState();
-  void openImagesMaglock();
   bool allButtonsPressed() const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
                const char* id = nullptr, bool retained = false) const;

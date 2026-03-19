@@ -49,7 +49,6 @@ private:
 
   void publishState();
   void publishSolvedEvent();
-  void openLock() const;
 
   void resetProgress(const char* reason);
 
@@ -71,7 +70,6 @@ private:
   Preferences* prefs_ = nullptr;
 
   String srcId_;
-  String topicLockCmd_;
 
   bool moduleEnabled_ = true;
   bool gameActive_ = false;

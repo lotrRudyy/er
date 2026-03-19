@@ -48,7 +48,6 @@ void PianoRiddle::begin(Core::NodeContext& ctx, const char* srcId) {
   prefs_ = &ctx.prefs();
 
   srcId_ = (srcId && srcId[0]) ? srcId : "piano";
-  topicLockCmd_ = Core::topic("maglock", "lock/r2/cmd");
 
   solved_ = prefs_ ? prefs_->getBool(kPrefsSolvedKey, false) : false;
   solvedPublished_ = solved_;
@@ -386,8 +385,6 @@ void PianoRiddle::publishSolvedEvent() {
   publish("game/event", "{\"node\":\"piano\",\"event\":\"solved\"}", false);
 }
 
-void PianoRiddle::openLock() const {
-}
 
 void PianoRiddle::resetProgress(const char* reason) {
   seqPos_ = 0;

@@ -266,8 +266,6 @@ void ImagesRiddle::publishSolvedEvent(const char* rid) {
   log("INF", String("SOLVED event sent for rid=") + rid);
 }
 
-void ImagesRiddle::openImagesMaglock() {
-}
 
 void ImagesRiddle::publishState() {
   if (!ctx_) return;
