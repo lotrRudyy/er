@@ -23,7 +23,6 @@ static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
 static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_EVT = "chess/evt";
 
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
@@ -41,6 +40,36 @@ static bool logFilter(const char* level, void* user) {
   return module ? module->shouldAllowLog(level) : true;
 }
 
+namespace {
+bool payloadHasName(const String& payload, const char* key, const char* value) {
+  if (!value || !value[0]) return false;
+  const String quoted = String(""") + key + "":"" + value + """;
+  if (payload.indexOf(quoted) >= 0) return true;
+  const String arr = String(""") + key + "":[";
+  int pos = payload.indexOf(arr);
+  if (pos < 0) return false;
+  String needle = String(""") + value + """;
+  int end = payload.indexOf("]", pos);
+  if (end < 0) end = payload.length();
+  return payload.indexOf(needle, pos) >= 0 && payload.indexOf(needle, pos) < end;
+}
+String detectMode(const String& payload) {
+  String upper = payload;
+  upper.trim();
+  upper.toUpperCase();
+  if (upper == "MODE_MAINTENANCE" || upper.indexOf(""MODE":"MODE_MAINTENANCE"") >= 0) return "MODE_MAINTENANCE";
+  if (upper == "MODE_PREPARE" || upper.indexOf(""MODE":"MODE_PREPARE"") >= 0) return "MODE_PREPARE";
+  if (upper == "MODE_INGAME" || upper.indexOf(""MODE":"MODE_INGAME"") >= 0) return "MODE_INGAME";
+  return "MODE_STANDBY";
+}
+bool shouldNodeBeActive(const String& payload, const char* nodeName) {
+  const String mode = detectMode(payload);
+  if (mode == "MODE_MAINTENANCE") return true;
+  if (mode != "MODE_INGAME") return false;
+  return payloadHasName(payload, "active", nodeName) || payloadHasName(payload, "solved", nodeName);
+}
+}
+
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   auto* module = static_cast<KnockingRiddle*>(user);
   ErrorInfo err{};
@@ -50,38 +79,19 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   buildHeartbeat(out, ctx, err);
 }
 
+static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<KnockingRiddle*>(user);
+  if (!module) return;
+  module->setGameMode(shouldNodeBeActive(payload, "knocking"));
+}
+
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<KnockingRiddle*>(user);
   return module ? module->onCmd(cmd, payload) : false;
 }
 
-static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<KnockingRiddle*>(user);
-  if (!module) return;
 
-  String msg = payload;
-  msg.trim();
-
-  String upper = msg;
-  upper.toUpperCase();
-
-  const bool inGame =
-      upper.indexOf("\"MODE\":\"INGAME\"") >= 0 ||
-      upper.indexOf("\"STATE\":\"INGAME\"") >= 0 ||
-      upper == "INGAME";
-
-  module->setGameMode(inGame);
-}
-
-static void eventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<KnockingRiddle*>(user);
-  if (!module) return;
-  if (payload.indexOf("\"type\":\"riddle_solved\"") == -1) return;
-  if (payload.indexOf("\"id\":\"chess\"") == -1) return;
-  module->setGameMode(true);
-}
 
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
@@ -137,7 +147,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &riddle);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &riddle);
-  nodeCore.registerSubscription(TOPIC_EVT, eventSubscription, &riddle);
 
   NodeContext& ctx = nodeCore.context();
   riddle.begin(ctx);

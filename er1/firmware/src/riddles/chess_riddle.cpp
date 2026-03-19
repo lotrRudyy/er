@@ -319,15 +319,7 @@ void ChessRiddle::evaluatePattern() {
 void ChessRiddle::publishSolvedEvent() {
   if (!ctx_) return;
 
-  // 1) Emit canonical riddle solved event
-  const String payload = "{\"id\":\"chess\"}";
-  const auto& topics = ctx_->config().topics;
-  if (topics.evt.length() > 0) {
-    publish(topics.evt.c_str(), "riddle_solved", 1, payload);
-  }
-
-  // 2) Directly command maglock to open r3
-  publish("maglock/lock/r3/cmd", "OPEN", false);
+  publish("game/event", String("{\"node\":\"chess\",\"event\":\"solved\"}"), false);
 }
 
 void ChessRiddle::resetState(const char* reason) {

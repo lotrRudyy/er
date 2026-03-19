@@ -39,7 +39,6 @@ String withSrc(const String& dataJson, const String& src) {
 void ImagesRiddle::begin(Core::NodeContext& ctx, const char* nodeId) {
   ctx_ = &ctx;
   nodeId_ = (nodeId && nodeId[0]) ? nodeId : "images";
-  topicLockImagesCmd_ = Core::topic("maglock", "lock/images/cmd");
 
   for (int i = 0; i < kButtonCount; i++) {
     buttons_[i].pin = kButtonPins[i];
@@ -111,7 +110,6 @@ bool ImagesRiddle::onCmd(const char* cmd, const char* /*payload*/) {
       ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
       log("INF", "IMAGES_SOLVED", "{\"mode\":\"cmd\",\"cmd\":\"OPEN\"}");
       publishSolvedEvent("images");
-      openImagesMaglock();
     } else {
       publishState();
     }
@@ -162,6 +160,7 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
                " dt=" + dtChange + "ms" +
                " presses=" + b.presses;
   log("INF", msg);
+  publishButtonStateEvent();
   publishState();
 }
 
@@ -234,7 +233,6 @@ void ImagesRiddle::handleAllDownHold(uint32_t nowMs) {
   ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
   log("INF", "IMAGES_SOLVED", "{\"mode\":\"all_hold\",\"cmd\":\"OPEN\"}");
   publishSolvedEvent("images");
-  openImagesMaglock();
 }
 
 void ImagesRiddle::startAllDownHold(uint32_t nowMs) {
@@ -268,8 +266,18 @@ void ImagesRiddle::publishSolvedEvent(const char* rid) {
 }
 
 void ImagesRiddle::openImagesMaglock() {
-  publish(topicLockImagesCmd_.c_str(), "OPEN");
-  log("INF", "Sent OPEN to images maglock");
+  log("INF", "Images lock opening delegated to Pi game master");
+}
+
+void ImagesRiddle::publishButtonStateEvent() {
+  if (!ctx_) return;
+  String data = String("{\"node\":\"images\",\"event\":\"button_state\",\"buttons\":{") +
+         "\"jesus\":" + String(buttons_[3].cur == LOW ? "true" : "false") + "," +
+         "\"blumen\":" + String(buttons_[2].cur == LOW ? "true" : "false") + "," +
+         "\"natur\":" + String(buttons_[0].cur == LOW ? "true" : "false") + "," +
+         "\"puppe\":" + String(buttons_[1].cur == LOW ? "true" : "false") +
+         "}}";
+  publish("game/event", withSrc(data, nodeId_));
 }
 
 void ImagesRiddle::publishState() {
@@ -281,8 +289,10 @@ void ImagesRiddle::publishState() {
 
   String data;
   data.reserve(320);
+  const char* nodeState = solved_ ? "NODE_SOLVED" : (effectiveEnabled ? "NODE_ACTIVE" : "NODE_SLEEPING");
   data = String("{\"id\":\"images\"") +
-         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+         ",\"mode\":\"" + (gameActive_ ? "MODE_INGAME" : "MODE_STANDBY") + "\"" +
+         ",\"state\":\"" + nodeState + "\"" +
          ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
          ",\"solved\":" + String(solved_ ? "true" : "false") +
          ",\"armed_after_release\":" + String(solveArmedAfterRelease_ ? "true" : "false") +

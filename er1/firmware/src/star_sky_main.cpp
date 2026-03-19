@@ -23,8 +23,6 @@ static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
-static String TOPIC_CANDLES_EVENT = Core::topic("candles", "evt");
-
 // ======================= TOPICS ==============================
 static const char* TOPIC_GAME = "game/state";
 
@@ -47,6 +45,36 @@ static bool logFilter(const char* level, void* user) {
   return true;  // star_sky logs everything but still tracks errors via module if needed
 }
 
+namespace {
+bool payloadHasName(const String& payload, const char* key, const char* value) {
+  if (!value || !value[0]) return false;
+  const String quoted = String(""") + key + "":"" + value + """;
+  if (payload.indexOf(quoted) >= 0) return true;
+  const String arr = String(""") + key + "":[";
+  int pos = payload.indexOf(arr);
+  if (pos < 0) return false;
+  String needle = String(""") + value + """;
+  int end = payload.indexOf("]", pos);
+  if (end < 0) end = payload.length();
+  return payload.indexOf(needle, pos) >= 0 && payload.indexOf(needle, pos) < end;
+}
+String detectMode(const String& payload) {
+  String upper = payload;
+  upper.trim();
+  upper.toUpperCase();
+  if (upper == "MODE_MAINTENANCE" || upper.indexOf(""MODE":"MODE_MAINTENANCE"") >= 0) return "MODE_MAINTENANCE";
+  if (upper == "MODE_PREPARE" || upper.indexOf(""MODE":"MODE_PREPARE"") >= 0) return "MODE_PREPARE";
+  if (upper == "MODE_INGAME" || upper.indexOf(""MODE":"MODE_INGAME"") >= 0) return "MODE_INGAME";
+  return "MODE_STANDBY";
+}
+bool shouldNodeBeActive(const String& payload, const char* nodeName) {
+  const String mode = detectMode(payload);
+  if (mode == "MODE_MAINTENANCE") return true;
+  if (mode != "MODE_INGAME") return false;
+  return payloadHasName(payload, "active", nodeName) || payloadHasName(payload, "solved", nodeName);
+}
+}
+
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   auto* module = static_cast<StarSkyRiddle*>(user);
   ErrorInfo err{};
@@ -56,28 +84,21 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   buildHeartbeat(out, ctx, err);
 }
 
+static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  if (!module) return;
+  const bool active = shouldNodeBeActive(payload, "star_sky");
+  module->setGameMode(active);
+  if (active) module->handleCandlesEvent("{\"event\":\"solved\",\"node\":\"candles\"}");
+}
+
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<StarSkyRiddle*>(user);
   return module ? module->onCmd(cmd, payload) : false;
 }
 
-static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<StarSkyRiddle*>(user);
-  if (!module) return;
-  String msg = payload;
-  msg.trim();
-  msg.toUpperCase();
-  module->setGameMode(false);
-}
 
-static void candlesEventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<StarSkyRiddle*>(user);
-  if (!module) return;
-  module->setGameMode(true);
-  module->handleCandlesEvent(payload);
-}
 
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
@@ -131,7 +152,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &starSky);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &starSky);
-  nodeCore.registerSubscription(TOPIC_CANDLES_EVENT.c_str(), candlesEventSubscription, &starSky);
 
   NodeContext& ctx = nodeCore.context();
   starSky.begin(ctx);

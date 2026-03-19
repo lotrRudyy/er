@@ -397,14 +397,12 @@ void PianoRiddle::publishSolvedEvent() {
   payload += seq;
   payload += "}";
   const auto& topics = ctx_->config().topics;
-  if (topics.evt.length() > 0) {
-    publish(topics.evt.c_str(), "riddle_solved", 1, withSrc(payload, srcId_));
-  }
+  publish("game/event", withSrc(String("{\"node\":\"piano\",\"event\":\"solved\",\"seq\":") + seq + "}", srcId_));
 }
 
 void PianoRiddle::openLock() const {
   if (!ctx_) return;
-  publish(topicLockCmd_.c_str(), "OPEN");
+  log("INF", "Piano lock opening delegated to Pi game master");
 }
 
 void PianoRiddle::resetProgress(const char* reason) {

@@ -27,6 +27,7 @@ private:
   void startAllDownHold(uint32_t nowMs);
   void cancelAllDownHold(const char* reason);
   void publishSolvedEvent(const char* rid);
+  void publishButtonStateEvent();
   void publishState();
   void openImagesMaglock();
   bool allButtonsPressed() const;

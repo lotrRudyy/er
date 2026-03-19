@@ -24,7 +24,6 @@ static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
 static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_EVT = "candles/evt";
 
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
@@ -37,6 +36,36 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static StarSliderRiddle starSlider;
 
+namespace {
+bool payloadHasName(const String& payload, const char* key, const char* value) {
+  if (!value || !value[0]) return false;
+  const String quoted = String(""") + key + "":"" + value + """;
+  if (payload.indexOf(quoted) >= 0) return true;
+  const String arr = String(""") + key + "":[";
+  int pos = payload.indexOf(arr);
+  if (pos < 0) return false;
+  String needle = String(""") + value + """;
+  int end = payload.indexOf("]", pos);
+  if (end < 0) end = payload.length();
+  return payload.indexOf(needle, pos) >= 0 && payload.indexOf(needle, pos) < end;
+}
+String detectMode(const String& payload) {
+  String upper = payload;
+  upper.trim();
+  upper.toUpperCase();
+  if (upper == "MODE_MAINTENANCE" || upper.indexOf(""MODE":"MODE_MAINTENANCE"") >= 0) return "MODE_MAINTENANCE";
+  if (upper == "MODE_PREPARE" || upper.indexOf(""MODE":"MODE_PREPARE"") >= 0) return "MODE_PREPARE";
+  if (upper == "MODE_INGAME" || upper.indexOf(""MODE":"MODE_INGAME"") >= 0) return "MODE_INGAME";
+  return "MODE_STANDBY";
+}
+bool shouldNodeBeActive(const String& payload, const char* nodeName) {
+  const String mode = detectMode(payload);
+  if (mode == "MODE_MAINTENANCE") return true;
+  if (mode != "MODE_INGAME") return false;
+  return payloadHasName(payload, "active", nodeName) || payloadHasName(payload, "solved", nodeName);
+}
+}
+
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* userData) {
   auto* module = static_cast<StarSliderRiddle*>(userData);
   ErrorInfo err{};
@@ -46,31 +75,19 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* userData
   buildHeartbeat(out, ctx, err);
 }
 
+static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<StarSliderRiddle*>(user);
+  if (!module) return;
+  module->setGameMode(shouldNodeBeActive(payload, "star_slider"));
+}
+
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* userData) {
   auto* module = static_cast<StarSliderRiddle*>(userData);
   return module ? module->onCmd(cmd, payload) : false;
 }
 
-static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
-  (void)ctx;
-  auto* module = static_cast<StarSliderRiddle*>(userData);
-  if (!module) return;
-  String msg = payload;
-  msg.trim();
-  msg.toUpperCase();
-  module->setGameMode(false);
-}
 
-static void eventSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
-  (void)ctx;
-  auto* module = static_cast<StarSliderRiddle*>(userData);
-  if (!module) return;
-  const bool isCandlesSolved =
-      (payload.indexOf("\"rid\":\"candles\"") >= 0 && payload.indexOf("\"event\":\"SOLVED\"") >= 0) ||
-      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0);
-  if (!isCandlesSolved) return;
-  module->setGameMode(true);
-}
 
 // ======================= ARDUINO LIFECYCLE ===================
 void setup() {
@@ -123,7 +140,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &starSlider);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &starSlider);
-  nodeCore.registerSubscription(TOPIC_EVT, eventSubscription, &starSlider);
 
   NodeContext& ctx = nodeCore.context();
   starSlider.begin(ctx);

@@ -118,7 +118,8 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
 void StarSkyRiddle::handleCandlesEvent(const String& payload) {
   const bool isCandlesSolved =
       (payload.indexOf("\"rid\":\"candles\"") >= 0 && payload.indexOf("\"event\":\"SOLVED\"") >= 0) ||
-      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0);
+      (payload.indexOf("\"type\":\"riddle_solved\"") >= 0 && payload.indexOf("\"id\":\"candles\"") >= 0) ||
+      (payload.indexOf("\"event\":\"solved\"") >= 0 && payload.indexOf("\"node\":\"candles\"") >= 0);
   if (!isCandlesSolved) {
     return;
   }

@@ -435,13 +435,7 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
 
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
-  String payload = String("{\"id\":\"star_slider\",\"attempt\":") + attemptIdx + "}";
-  const auto& topics = ctx_->config().topics;
-  if (topics.evt.length() > 0) {
-    publish(topics.evt.c_str(), "riddle_solved", 1, payload);
-  }
-  // Directly command maglock to open the slider lock
-  publish("maglock/lock/slider/cmd", "OPEN");
+  publish("game/event", String("{\"node\":\"star_slider\",\"event\":\"solved\",\"attempt\":") + String(attemptIdx) + "}");
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {

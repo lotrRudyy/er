@@ -2,20 +2,19 @@
 
 #include <Arduino.h>
 #include "core_node.h"
-#include "lighting_driver.h"
+#include "lighting_driver.h"   // from lib/drivers/include
 
 class LightingController {
 public:
   static constexpr size_t kChannelCount = 10;
 
   struct ChannelState {
-    const char* id = nullptr;
-    const char* name = nullptr;
+    const char* id = nullptr;     // "1".."10"
     uint8_t pin = 0;
     uint8_t ledcCh = 0;
     bool on = false;
     uint32_t duty = 0;
-    uint8_t dimPercent = 25;
+    uint8_t dimPercent = 25;      // default DIM/DIMMED
   };
 
   struct FadePair {
@@ -36,24 +35,20 @@ public:
 
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
+
+  // Node-level commands (<node>/cmd).
   bool onCmd(const char* cmd, const char* payload);
+
   void onGameModeMessage(const String& msg);
-  void onLightingCommand(const String& payload);
+  void onEventTopic(const char* topic, const String& payload);
+
+  // Called by NodeCore subscription callback for lighting/mosfet/<id>/cmd
   void onMosfetCommandTopic(const char* topic, const String& payload);
 
 private:
-  struct ParsedGameState {
-    String mode;
-    bool valid = false;
-  };
-
   bool parseChannelIdFromTopic(const String& topic, String& outId);
-  ChannelState* findById(const String& id);
-  ChannelState* findByName(const String& name);
-  ChannelState* findByAnyKey(const String& key);
 
-  ParsedGameState parseGameState(const String& payload) const;
-  String normalizeKey(const String& in) const;
+  ChannelState* findById(const String& id);
 
   uint32_t clampDuty(uint32_t duty) const;
   uint32_t percentToDuty(uint32_t pct) const;
@@ -62,7 +57,9 @@ private:
   void applyOutput(ChannelState& ch);
   void applySceneInitial(const char* reason);
   void applySceneAllOn(const char* reason);
-  void applySceneAllOff(const char* reason);
+  void handleProgressEvent(const char* rid);
+  void runPianoTorch(const char* reason);
+  void runChessRoom(const char* reason);
 
   bool setChannel(const char* id, bool on, uint32_t duty, bool preserveZeroDutyWhenOn = false);
   bool setChannelPercent(const char* id, bool on, uint32_t pct);
@@ -77,9 +74,6 @@ private:
                      const char* tickReason,
                      const char* doneReason);
   void updateFadePair(FadePair& fade, uint32_t nowMs);
-  void cancelScheduledEffects();
-
-  bool handleLightingJsonCommand(JsonDocument& doc);
 
   bool publish(const char* topic, const String& payload, bool retained) const;
   void publishChannelState(const ChannelState& ch, const char* reason);
@@ -92,13 +86,31 @@ private:
 
 private:
   Core::NodeContext* ctx_ = nullptr;
+
   ChannelState channels_[kChannelCount]{};
   LightingDriver driver_{};
 
+  uint32_t lastMetricMs_ = 0;
+  uint32_t errorCount_ = 0;
+
   bool bootStatePublished_ = false;
   bool lastMqttConnected_ = false;
-  String appliedMode_;
 
-  FadePair fade1_{};
-  FadePair fade2_{};
+  bool inGame_ = false;
+  bool pianoSolvedSeen_ = false;
+  bool chessSolvedSeen_ = false;
+  bool candlesSolvedSeen_ = false;
+
+  bool pianoTorchPending_ = false;
+  uint32_t pianoTorchDueMs_ = 0;
+
+  bool chessRoomPending_ = false;
+  uint32_t chessRoomDueMs_ = 0;
+
+  FadePair pianoFade_{};
+  FadePair chessFade_{};
+  FadePair candlesFade_{};
+
+  static constexpr uint32_t kFadeMs = 7000;
+  static constexpr uint32_t kProgressDelayMs = 7000;
 };

@@ -536,14 +536,7 @@ String KnockingRiddle::attemptedSequencesJson() const {
 void KnockingRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   solved_ = true;
-
-  String data = "{\"id\":\"knocking\"}";
-  const auto& topics = ctx_->config().topics;
-  if (topics.evt.length() > 0) {
-    publish(topics.evt.c_str(), "riddle_solved", 1, data);
-  }
-
-  publish("maglock/lock/knocking/cmd", "OPEN");
+  publish("game/event", String("{\"node\":\"knocking\",\"event\":\"solved\"}"));
   publishState();
 }
 
