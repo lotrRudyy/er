@@ -435,8 +435,15 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
 
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
-  String payload = String("{\"node\":\"star_slider\",\"event\":\"solved\",\"attempt\":") + attemptIdx + "}";
-  publish("game/event", payload, false);
+
+  String sliderPayload = String("{\"node\":\"star_slider\",\"event\":\"solved\",\"attempt\":") + attemptIdx + "}";
+  publish("game/event", sliderPayload, false);
+
+  String skyPayload = String("{\"node\":\"star_sky\",\"event\":\"solved\",\"src\":\"star_slider\",\"attempt\":") + attemptIdx + "}";
+  publish("game/event", skyPayload, false);
+
+  const String lightPayload = "{\"cmd\":\"fade_to\",\"lights\":[\"r3_slider\",\"r3_cage\"],\"pct\":100,\"duration_ms\":1000}";
+  publish("lighting/cmd", lightPayload, false);
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {
