@@ -60,8 +60,6 @@ private:
   String attemptedSequencesJson() const;
 
   Core::NodeContext* ctx_ = nullptr;
-  String topicCmdStarSky_;
-  String topicCmdLighting_;
   bool lit_[4] = {true, true, true, true};
   int progress_[4] = {-1, -1, -1, -1};
   int progressed_ = 0;

@@ -5,10 +5,6 @@
 
 void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
-  const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
-  topicEvent_ = Core::topic(node, "evt");
-  topicCmdStarSky_ = Core::topic("star_sky", "cmd");
-  topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
     pinMode(kLedPins[i], OUTPUT);
     setLed(i, false);
