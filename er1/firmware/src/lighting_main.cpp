@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <cstring>
+#include <esp_task_wdt.h>
 
 #include "core_node.h"
 #include "ctrl/lighting_controller.h"
@@ -18,6 +19,7 @@ static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
+static constexpr uint32_t LOOP_WDT_TIMEOUT_S = 8;
 
 static const char* TOPIC_GAME_STATE = "game/state";
 static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
@@ -60,6 +62,9 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
 void setup() {
   Serial.begin(115200);
   delay(200);
+
+  esp_task_wdt_init(LOOP_WDT_TIMEOUT_S, true);
+  esp_task_wdt_add(nullptr);
 
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
@@ -110,6 +115,8 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
   nodeCore.loop();
   lighting.tick(millis());
+  esp_task_wdt_reset();
 }

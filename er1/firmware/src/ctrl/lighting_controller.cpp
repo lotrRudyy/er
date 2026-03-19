@@ -12,6 +12,17 @@ constexpr const char* kCmdSuffix = "/cmd";
 constexpr uint8_t kBulkOrder[LightingController::kChannelCount] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 constexpr uint32_t kBulkStepGapMs = 30;
 constexpr uint32_t kPendingStepGapMs = 15;
+constexpr uint32_t kPersistDebounceMs = 300;
+constexpr uint32_t kPersistMagic = 0x4C475431;
+constexpr const char* kPrefsSnapshotKey = "snapshot";
+
+struct PersistedLightingSnapshot {
+  uint32_t magic;
+  uint8_t gameMode;
+  uint8_t reserved[3];
+  uint8_t on[LightingController::kChannelCount];
+  uint16_t duty[LightingController::kChannelCount];
+};
 
 String makeStateTopic(const char* id) {
   String t = "lighting/mosfet/";
@@ -151,7 +162,10 @@ bool LightingController::setChannel(size_t index, bool on, uint32_t duty, bool p
   const bool changed = (ch.on != on) || (ch.duty != duty);
   ch.on = on;
   ch.duty = duty;
-  if (changed) applyOutput(ch);
+  if (changed) {
+    applyOutput(ch);
+    markStatePersistDirty(millis());
+  }
   return changed;
 }
 
@@ -390,6 +404,46 @@ void LightingController::runPendingChannelStep(uint32_t nowMs) {
   }
 }
 
+void LightingController::markStatePersistDirty(uint32_t nowMs) {
+  persistPending_ = true;
+  lastStateChangeMs_ = nowMs;
+}
+
+void LightingController::persistSnapshot() {
+  if (!ctx_) return;
+  PersistedLightingSnapshot snap{};
+  snap.magic = kPersistMagic;
+  snap.gameMode = static_cast<uint8_t>(lastGameMode_);
+  for (size_t i = 0; i < kChannelCount; i++) {
+    snap.on[i] = channels_[i].on ? 1 : 0;
+    snap.duty[i] = (uint16_t)clampDuty(channels_[i].duty);
+  }
+  auto written = ctx_->prefs().putBytes(kPrefsSnapshotKey, &snap, sizeof(snap));
+  if (written == sizeof(snap)) {
+    persistPending_ = false;
+  } else {
+    log("WRN", "lighting snapshot persist failed");
+  }
+}
+
+bool LightingController::restoreSnapshot() {
+  if (!ctx_) return false;
+  PersistedLightingSnapshot snap{};
+  size_t got = ctx_->prefs().getBytes(kPrefsSnapshotKey, &snap, sizeof(snap));
+  if (got != sizeof(snap) || snap.magic != kPersistMagic) return false;
+
+  lastGameMode_ = static_cast<GameMode>(snap.gameMode);
+  for (size_t i = 0; i < kChannelCount; i++) {
+    channels_[i].on = snap.on[i] != 0;
+    channels_[i].duty = clampDuty(snap.duty[i]);
+    applyOutput(channels_[i]);
+  }
+
+  restoredSnapshot_ = true;
+  log("INF", "lighting snapshot restored");
+  return true;
+}
+
 void LightingController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
 
@@ -412,18 +466,22 @@ void LightingController::begin(Core::NodeContext& ctx) {
     applyOutput(channels_[i]);
   }
 
+  restoreSnapshot();
+
   bootStatePublished_ = false;
   cancelBulkCommand();
   clearAllPendingChannels();
   stopAllFades();
   lastPendingStepMs_ = 0;
+  persistPending_ = false;
+  lastStateChangeMs_ = millis();
   clearDirty();
 }
 
 void LightingController::tick(uint32_t nowMs) {
   const bool conn = mqttConnected();
   if (conn && !bootStatePublished_) {
-    publishAllStates("boot");
+    publishAllStates(restoredSnapshot_ ? "restore" : "boot");
     bootStatePublished_ = true;
   }
 
@@ -432,6 +490,10 @@ void LightingController::tick(uint32_t nowMs) {
 
   for (size_t i = 0; i < kChannelCount; i++) {
     updateFade(fades_[i], nowMs);
+  }
+
+  if (persistPending_ && (uint32_t)(nowMs - lastStateChangeMs_) >= kPersistDebounceMs) {
+    persistSnapshot();
   }
 
   if (conn) flushDirtyStates(1);
@@ -504,7 +566,14 @@ void LightingController::onGameStateMessage(const String& payload) {
   if (newMode == lastGameMode_) {
     return;
   }
+  const bool hadRestoredSnapshot = restoredSnapshot_;
   lastGameMode_ = newMode;
+  persistPending_ = true;
+
+  if (hadRestoredSnapshot) {
+    restoredSnapshot_ = false;
+    return;
+  }
 
   if (newMode == GameMode::InGame) {
     queueBulkCommand(BulkCommand::SceneInitial);
@@ -515,6 +584,7 @@ void LightingController::onGameStateMessage(const String& payload) {
 }
 
 void LightingController::onLightingCommandTopic(const String& payload) {
+  restoredSnapshot_ = false;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) {
@@ -656,6 +726,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
 }
 
 void LightingController::onMosfetCommandTopic(const char* topic, const String& payload) {
+  restoredSnapshot_ = false;
   String id;
   if (!parseChannelIdFromTopic(String(topic ? topic : ""), id)) {
     log("WRN", String("bad lighting topic: ") + (topic ? topic : ""));
