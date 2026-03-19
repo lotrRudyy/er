@@ -92,8 +92,7 @@ class GameMaster:
 
     def _publish_json(self, topic: str, payload: dict[str, Any], retained: bool = False) -> None:
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-        info = self._client.publish(topic, body, qos=0, retain=retained)
-        info.wait_for_publish(timeout=2.0)
+        self._client.publish(topic, body, qos=0, retain=retained)
         LOG.info("PUB %s %s", topic, body)
 
     def publish_game_state(self) -> None:
