@@ -117,6 +117,7 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &maglock);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &maglock);
+  nodeCore.registerSubscription(TOPIC_LOCK_CMD, lockCommandSubscription, &maglock);
   nodeCore.registerSubscription(TOPIC_MAGLOCK_CMD, maglockCommandSubscription, &maglock);
 
   NodeContext& ctx = nodeCore.context();

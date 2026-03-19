@@ -487,16 +487,31 @@ void LightingController::onGameStateMessage(const String& payload) {
   String modeS = String((const char*)(doc["mode"] | ""));
   modeS.trim();
 
+  GameMode newMode = GameMode::Unknown;
   if (modeS == "MODE_INGAME") {
-    queueBulkCommand(BulkCommand::SceneInitial);
-    return;
-  }
-  if (modeS == "MODE_MAINTENANCE" || modeS == "MODE_STANDBY" || modeS == "MODE_PREPARE") {
-    queueBulkCommand(BulkCommand::NonIngameAllOn);
+    newMode = GameMode::InGame;
+  } else if (modeS == "MODE_PREPARE") {
+    newMode = GameMode::Prepare;
+  } else if (modeS == "MODE_MAINTENANCE") {
+    newMode = GameMode::Maint;
+  } else if (modeS == "MODE_STANDBY") {
+    newMode = GameMode::Standby;
+  } else {
+    log("WRN", String("lighting unknown mode in game/state: ") + modeS);
     return;
   }
 
-  log("WRN", String("lighting unknown mode in game/state: ") + modeS);
+  if (newMode == lastGameMode_) {
+    return;
+  }
+  lastGameMode_ = newMode;
+
+  if (newMode == GameMode::InGame) {
+    queueBulkCommand(BulkCommand::SceneInitial);
+    return;
+  }
+
+  queueBulkCommand(BulkCommand::NonIngameAllOn);
 }
 
 void LightingController::onLightingCommandTopic(const String& payload) {

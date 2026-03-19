@@ -93,6 +93,8 @@ private:
 
   const char* dirtyReasons_[kChannelCount]{};
   bool dirty_[kChannelCount]{};
+  enum class GameMode : uint8_t { Unknown = 0, Standby, Prepare, InGame, Maint };
+  GameMode lastGameMode_ = GameMode::Unknown;
   bool bootStatePublished_ = false;
 
   BulkCommand queuedBulkCommand_ = BulkCommand::None;

@@ -106,6 +106,7 @@ void setup() {
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
+  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_GAME_STATE, gameStateSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 
