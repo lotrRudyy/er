@@ -74,6 +74,11 @@ private:
   void runBulkCommandStep(uint32_t nowMs);
   size_t bulkApplyCountForTick() const;
 
+  void queueChannelTarget(size_t index, bool on, uint32_t duty, const char* reason, bool preserveZeroDutyWhenOn = false);
+  void clearPendingChannel(size_t index);
+  void clearAllPendingChannels();
+  void runPendingChannelStep(uint32_t nowMs);
+
 private:
   Core::NodeContext* ctx_ = nullptr;
   LightingDriver driver_{};
@@ -90,4 +95,11 @@ private:
   bool bulkTargetOn_ = false;
   uint32_t bulkTargetDuty_ = 0;
   uint32_t lastBulkStepMs_ = 0;
+
+  bool pendingValid_[kChannelCount]{};
+  bool pendingOn_[kChannelCount]{};
+  uint32_t pendingDuty_[kChannelCount]{};
+  bool pendingPreserveZero_[kChannelCount]{};
+  const char* pendingReason_[kChannelCount]{};
+  uint32_t lastPendingStepMs_ = 0;
 };

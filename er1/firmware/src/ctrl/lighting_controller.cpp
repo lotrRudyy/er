@@ -11,6 +11,7 @@ constexpr const char* kCmdPrefix = "lighting/mosfet/";
 constexpr const char* kCmdSuffix = "/cmd";
 constexpr uint8_t kBulkOrder[LightingController::kChannelCount] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 constexpr uint32_t kBulkStepGapMs = 30;
+constexpr uint32_t kPendingStepGapMs = 15;
 
 String makeStateTopic(const char* id) {
   String t = "lighting/mosfet/";
@@ -57,6 +58,11 @@ LightingController::LightingController() {
     fades_[i].index = i;
     dirty_[i] = false;
     dirtyReasons_[i] = nullptr;
+    pendingValid_[i] = false;
+    pendingOn_[i] = false;
+    pendingDuty_[i] = 0;
+    pendingPreserveZero_[i] = false;
+    pendingReason_[i] = nullptr;
   }
 }
 
@@ -214,6 +220,11 @@ void LightingController::clearDirty() {
   for (size_t i = 0; i < kChannelCount; i++) {
     dirty_[i] = false;
     dirtyReasons_[i] = nullptr;
+    pendingValid_[i] = false;
+    pendingOn_[i] = false;
+    pendingDuty_[i] = 0;
+    pendingPreserveZero_[i] = false;
+    pendingReason_[i] = nullptr;
   }
 }
 
@@ -241,7 +252,7 @@ void LightingController::cancelBulkCommand() {
 
 void LightingController::startBulkCommand(BulkCommand cmd) {
   stopAllFades();
-  clearDirty();
+  clearAllPendingChannels();
   activeBulkCommand_ = cmd;
   queuedBulkCommand_ = BulkCommand::None;
   bulkIndex_ = 0;
@@ -284,18 +295,18 @@ void LightingController::runBulkCommandStep(uint32_t nowMs) {
   if (lastBulkStepMs_ != 0 && (uint32_t)(nowMs - lastBulkStepMs_) < kBulkStepGapMs) return;
   lastBulkStepMs_ = nowMs;
 
+  if (activeBulkCommand_ == BulkCommand::None) return;
+
   size_t steps = bulkApplyCountForTick();
   while (steps-- && bulkIndex_ < kChannelCount) {
     const size_t idx = kBulkOrder[bulkIndex_++];
-    bool changed = false;
     if (activeBulkCommand_ == BulkCommand::SceneInitial) {
       bool on = (idx == 2 || idx == 3 || idx == 6);
       uint32_t duty = on ? driver_.maxDuty() : 0;
-      changed = setChannel(idx, on, duty);
+      queueChannelTarget(idx, on, duty, bulkReason_ ? bulkReason_ : "bulk", false);
     } else {
-      changed = setChannel(idx, bulkTargetOn_, bulkTargetDuty_);
+      queueChannelTarget(idx, bulkTargetOn_, bulkTargetDuty_, bulkReason_ ? bulkReason_ : "bulk", false);
     }
-    if (changed) markDirty(idx, bulkReason_ ? bulkReason_ : "bulk");
   }
 
   if (bulkIndex_ >= kChannelCount) {
@@ -322,7 +333,9 @@ void LightingController::begin(Core::NodeContext& ctx) {
   for (size_t i = 0; i < kChannelCount; i++) applyOutput(channels_[i]);
   bootStatePublished_ = false;
   cancelBulkCommand();
+  clearAllPendingChannels();
   stopAllFades();
+  lastPendingStepMs_ = 0;
 }
 
 void LightingController::tick(uint32_t nowMs) {
@@ -332,6 +345,7 @@ void LightingController::tick(uint32_t nowMs) {
     bootStatePublished_ = true;
   }
   runBulkCommandStep(nowMs);
+  runPendingChannelStep(nowMs);
   for (size_t i = 0; i < kChannelCount; i++) updateFade(fades_[i], nowMs);
   if (conn) flushDirtyStates(1);
 }
@@ -432,15 +446,14 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     cancelBulkCommand();
     size_t idx = (size_t)ch->ledcCh;
     stopFade(idx);
-    bool changed = false;
-    if (cmd == "TURN_ON") changed = setChannel(idx, true, driver_.maxDuty());
-    else if (cmd == "TURN_OFF") changed = setChannel(idx, false, 0);
+    clearPendingChannel(idx);
+    if (cmd == "TURN_ON") queueChannelTarget(idx, true, driver_.maxDuty(), "cmd_single", false);
+    else if (cmd == "TURN_OFF") queueChannelTarget(idx, false, 0, "cmd_single", false);
     else {
       int32_t pct = pickInt("pct", "PCT", 100);
       if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-      changed = setChannel(idx, true, percentToDuty((uint32_t)pct), true);
+      queueChannelTarget(idx, true, percentToDuty((uint32_t)pct), "cmd_single", true);
     }
-    if (changed) markDirty(idx, "cmd_single");
     return;
   }
 
@@ -459,7 +472,8 @@ void LightingController::onLightingCommandTopic(const String& payload) {
       if (!ch) continue;
       size_t idx = (size_t)ch->ledcCh;
       stopFade(idx);
-      if (setChannel(idx, true, driver_.maxDuty())) markDirty(idx, "cmd_turn_on_many");
+      clearPendingChannel(idx);
+      queueChannelTarget(idx, true, driver_.maxDuty(), "cmd_turn_on_many", false);
     }
     return;
   }
@@ -538,6 +552,8 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
     return;
   }
   cancelBulkCommand();
-  stopFade((size_t)ch->ledcCh);
-  if (setChannel((size_t)ch->ledcCh, on, duty, true)) markDirty((size_t)ch->ledcCh, "mosfet_cmd");
+  const size_t idx = (size_t)ch->ledcCh;
+  stopFade(idx);
+  clearPendingChannel(idx);
+  queueChannelTarget(idx, on, duty, "mosfet_cmd", true);
 }
