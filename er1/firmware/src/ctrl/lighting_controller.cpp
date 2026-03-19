@@ -9,7 +9,7 @@ namespace {
 
 constexpr const char* kCmdPrefix = "lighting/mosfet/";
 constexpr const char* kCmdSuffix = "/cmd";
-constexpr uint8_t kBulkOrder[LightingController::kChannelCount] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+constexpr uint8_t kBulkOrder[LightingController::kChannelCount] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
 constexpr uint32_t kBulkStepGapMs = 30;
 constexpr uint32_t kPendingStepGapMs = 15;
 
@@ -49,10 +49,17 @@ bool parseIntLoose(const String& s, int32_t& out) {
 } // namespace
 
 LightingController::LightingController() {
-  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9","10"};
+  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9"};
   static const char* names[kChannelCount] = {
-    "r2_chess", "r2_schronk", "r1_bild", "r1_stuen", "r3_slider",
-    "r3_cage", "torch_stiege", "torch_r2r3", "torch_r2", "r3_uv",
+    "r2_chess",
+    "r2_schronk",
+    "r1_bild",
+    "r1_stuen",
+    "r3_slider",
+    "r3_cage",
+    "torch_stiege",
+    "torch_r2r3",
+    "torch_r2"
   };
 
   for (size_t i = 0; i < kChannelCount; i++) {
@@ -160,7 +167,9 @@ void LightingController::stopFade(size_t index) {
 }
 
 void LightingController::stopAllFades() {
-  for (size_t i = 0; i < kChannelCount; i++) fades_[i].active = false;
+  for (size_t i = 0; i < kChannelCount; i++) {
+    fades_[i].active = false;
+  }
 }
 
 void LightingController::startFade(size_t index, uint32_t toDuty, uint32_t durationMs, const char* reason) {
@@ -245,11 +254,6 @@ void LightingController::clearDirty() {
   for (size_t i = 0; i < kChannelCount; i++) {
     dirty_[i] = false;
     dirtyReasons_[i] = nullptr;
-    pendingValid_[i] = false;
-    pendingOn_[i] = false;
-    pendingDuty_[i] = 0;
-    pendingPreserveZero_[i] = false;
-    pendingReason_[i] = nullptr;
   }
 }
 
@@ -335,6 +339,7 @@ void LightingController::runBulkCommandStep(uint32_t nowMs) {
     const size_t idx = kBulkOrder[bulkIndex_++];
 
     if (activeBulkCommand_ == BulkCommand::SceneInitial) {
+      // initial ingame scene: r1_bild (index 2), r1_stuen (index 3), torch_stiege (index 6)
       const bool on = (idx == 2 || idx == 3 || idx == 6);
       const uint32_t duty = on ? driver_.maxDuty() : 0;
       queueChannelTarget(idx, on, duty, bulkReason_ ? bulkReason_ : "bulk", false);
@@ -393,7 +398,8 @@ void LightingController::runPendingChannelStep(uint32_t nowMs) {
 void LightingController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
 
-  static const uint8_t kPins[kChannelCount] = {16, 17, 21, 22, 14, 26, 25, 32, 33, 4};
+  // GPIO4 / UV removed for isolation test
+  static const uint8_t kPins[kChannelCount] = {16, 17, 21, 22, 14, 26, 25, 32, 33};
   constexpr uint32_t kFreqHz = 2000;
   constexpr uint8_t kResBits = 12;
 
@@ -557,6 +563,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
       log("WRN", String("lighting/cmd missing light for ") + cmd);
       return;
     }
+
     ChannelState* ch = findLight(light);
     if (!ch) {
       log("WRN", String("unknown light: ") + light);

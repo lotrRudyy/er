@@ -6,7 +6,7 @@
 
 class LightingController {
 public:
-  static constexpr size_t kChannelCount = 10;
+  static constexpr size_t kChannelCount = 9;
 
   struct ChannelState {
     const char* id = nullptr;
@@ -32,7 +32,7 @@ public:
     AllOn,
     AllOff,
     SceneInitial,
-    NonIngameAllOn,
+    NonIngameAllOn
   };
 
   LightingController();

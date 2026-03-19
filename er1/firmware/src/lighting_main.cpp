@@ -8,8 +8,8 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "50";
-static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
+static const char* FW_VERSION = "52";
+static const char* FW_DESC = "lighting controller (9x mosfet pwm, uv/gpio4 removed for isolation test)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
 static const IPAddress NET_IP(192, 168, 0, 12);
