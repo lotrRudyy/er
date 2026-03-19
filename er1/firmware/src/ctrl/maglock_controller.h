@@ -12,8 +12,8 @@ public:
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
 
-  void onGameModeMessage(const String& msg);
-  void onLockCommandTopic(const char* topic, const String& payload);
+  void onGameStateMessage(const String& msg);
+  void onMaglockCommandMessage(const String& payload);
 
   uint32_t errorCount() const { return errorCount_; }
   uint32_t currentHeartbeatIntervalMs() const;
@@ -21,9 +21,10 @@ public:
 
 private:
   enum class GameMode : uint8_t {
-    Standby = 0,
-    InGame,
-    Maint
+    ModeMaintenance = 0,
+    ModeStandby,
+    ModePrepare,
+    ModeInGame
   };
 
   enum class LockMode : uint8_t {
@@ -55,13 +56,14 @@ private:
   LockState locks_[kLockCount] = {
       {"images", 26, LockMode::FailSecure},
       {"r2", 16, LockMode::FailSafe},
-      {"r3", 17, LockMode::FailSafe},
+      {"r2r3", 17, LockMode::FailSafe},
       {"slider", 33, LockMode::FailSecure},
       {"knocking", 25, LockMode::FailSecure},
   };
 
   void applyLockOutput(LockState& lk);
   const char* lockStateName(const LockState& lk) const;
+  const char* gameModeName(GameMode mode) const;
   void publishLockState(const LockState& lk, const char* reason);
   void publishStateSnapshot();
   LockState* findLockById(const String& id);
@@ -69,12 +71,12 @@ private:
   void setFailSafe(LockState& lk, bool locked, const char* reason);
   void updatePulseTimers(uint32_t nowMs);
   void publishMetricsIfDue(uint32_t nowMs);
-  void handleLockCommand(LockState& lk, const String& cmd);
-  void handleLockCommandTopicInternal(const String& topic, const String& payload);
 
   void forceAllFailSecureOff(const char* reason);
-  void persistGameMode();
-  void loadGameMode();
+  void applyModeDefaults(const char* reason);
+  void setGameModeInternal(GameMode newMode, const char* reason);
+  bool parseGameStatePayload(const String& msg, GameMode& outMode);
+  bool parseMaglockCommand(const String& payload, String& outCmd, String& outLock, bool& outEnabled);
 
   uint32_t hbIntervalForMode(GameMode mode) const;
   void applyHeartbeatInterval();
@@ -87,9 +89,8 @@ private:
   Core::NodeContext* ctx_ = nullptr;
   MaglockDriver driver_;
   Preferences* prefs_ = nullptr;
-  GameMode gameMode_ = GameMode::Standby;
+  GameMode gameMode_ = GameMode::ModeStandby;
   uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
-  String topicDbg_;
 };

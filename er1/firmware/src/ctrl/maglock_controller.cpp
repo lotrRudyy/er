@@ -1,33 +1,11 @@
 #include "ctrl/maglock_controller.h"
 
+#include <ArduinoJson.h>
 #include <cstring>
 
 namespace {
-
-constexpr const char* kLockCmdPrefix = "maglock/lock/";
-constexpr const char* kLockStatePrefix = "maglock/lock/";
-constexpr const char* kLockCmdSuffix = "/cmd";
 constexpr const char* kPrefsGameModeKey = "game_mode";
-
-String makeLockStateTopic(const char* id) {
-  String topic = kLockStatePrefix;
-  topic += id;
-  topic += "/state";
-  return topic;
 }
-
-bool parseLockIdFromTopic(const String& topic, String& outId) {
-  if (!topic.startsWith(kLockCmdPrefix) || !topic.endsWith(kLockCmdSuffix)) {
-    return false;
-  }
-  int start = strlen(kLockCmdPrefix);
-  int end = topic.length() - strlen(kLockCmdSuffix);
-  if (end <= start) return false;
-  outId = topic.substring(start, end);
-  return true;
-}
-
-}  // namespace
 
 void MaglockController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
@@ -48,8 +26,6 @@ void MaglockController::begin(Core::NodeContext& ctx) {
 
   driver_.begin(channels, kLockCount);
 
-  // Force dangerous fail-secure outputs OFF immediately on boot and
-  // start a boot guard so they cannot be retriggered right away.
   for (auto& lk : locks_) {
     if (lk.mode == LockMode::FailSecure) {
       lk.coilOn = false;
@@ -61,13 +37,11 @@ void MaglockController::begin(Core::NodeContext& ctx) {
     applyLockOutput(lk);
   }
 
-  // SAFETY: always boot into standby locally.
-  loadGameMode();
-
+  gameMode_ = GameMode::ModeStandby;
   lastMetricMs_ = millis();
+  applyModeDefaults("boot");
   applyHeartbeatInterval();
   publishStateSnapshot();
-  topicDbg_ = ctx.config().topics.dbg;
 }
 
 void MaglockController::tick(uint32_t nowMs) {
@@ -86,54 +60,79 @@ bool MaglockController::onCmd(const char* cmd, const char* payload) {
   return true;
 }
 
-void MaglockController::onGameModeMessage(const String& msg) {
-  if (!ctx_) return;
-  String trimmed = msg;
-  trimmed.trim();
-  trimmed.toUpperCase();
-
-  GameMode old = gameMode_;
-  if (trimmed == "INGAME") {
-    gameMode_ = GameMode::InGame;
-  } else if (trimmed == "MAINT" || trimmed == "MAINTENANCE") {
-    gameMode_ = GameMode::Maint;
-  } else {
-    gameMode_ = GameMode::Standby;
+void MaglockController::onGameStateMessage(const String& msg) {
+  GameMode parsed = gameMode_;
+  if (!parseGameStatePayload(msg, parsed)) {
+    log("WRN", "GAME_STATE_PARSE_FAILED", String("{\"payload\":") + "\"" + msg + "\"}");
+    return;
   }
-
-  auto modeName = [](GameMode m) -> const char* {
-    switch (m) {
-      case GameMode::InGame: return "INGAME";
-      case GameMode::Maint: return "MAINT";
-      case GameMode::Standby:
-      default: return "STANDBY";
-    }
-  };
-
-  if (old != gameMode_) {
-    String data = String("{\"from\":\"") + modeName(old) +
-                  "\",\"to\":\"" + modeName(gameMode_) + "\"}";
-    log("INF", "gameMode changed", data);
-    applyHeartbeatInterval();
-    persistGameMode();
-  }
-
-  if (gameMode_ == GameMode::InGame) {
-    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, "game_start");
-    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, "game_start");
-  } else {
-    // Any non-InGame mode should force fail-secure outputs safe
-    // and open the fail-safe room locks.
-    forceAllFailSecureOff("mode_safe");
-    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, "standby_open");
-    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, false, "standby_open");
-  }
-
-  publishStateSnapshot();
+  setGameModeInternal(parsed, "game_state");
 }
 
-void MaglockController::onLockCommandTopic(const char* topic, const String& payload) {
-  handleLockCommandTopicInternal(String(topic ? topic : ""), payload);
+void MaglockController::onMaglockCommandMessage(const String& payload) {
+  String cmd;
+  String lock;
+  bool enabled = false;
+  if (!parseMaglockCommand(payload, cmd, lock, enabled)) {
+    log("WRN", "MAGLOCK_CMD_PARSE_FAILED", String("{\"payload\":") + "\"" + payload + "\"}");
+    return;
+  }
+
+  cmd.toLowerCase();
+  if (cmd == "set_mode") {
+    GameMode newMode = gameMode_;
+    if (lock.equalsIgnoreCase("MODE_MAINTENANCE")) newMode = GameMode::ModeMaintenance;
+    else if (lock.equalsIgnoreCase("MODE_STANDBY")) newMode = GameMode::ModeStandby;
+    else if (lock.equalsIgnoreCase("MODE_PREPARE")) newMode = GameMode::ModePrepare;
+    else if (lock.equalsIgnoreCase("MODE_INGAME")) newMode = GameMode::ModeInGame;
+    else {
+      log("WRN", String("Unknown set_mode value: ") + lock);
+      return;
+    }
+    setGameModeInternal(newMode, "cmd:set_mode");
+    return;
+  }
+
+  if (cmd == "open" || cmd == "close") {
+    LockState* lk = findLockById(lock);
+    if (!lk) {
+      log("ERR", String("Lock id not found: ") + lock);
+      return;
+    }
+    if (cmd == "open") {
+      if (lk->mode == LockMode::FailSecure) startPulse(*lk, "cmd:open");
+      else setFailSafe(*lk, false, "cmd:open");
+    } else {
+      if (lk->mode == LockMode::FailSecure) {
+        lk->coilOn = false;
+        lk->pulsing = false;
+        lk->cooldown = true;
+        lk->bootGuard = false;
+        lk->cooldownStartMs = millis();
+        applyLockOutput(*lk);
+        publishLockState(*lk, "cmd:close");
+      } else {
+        setFailSafe(*lk, true, "cmd:close");
+      }
+    }
+    return;
+  }
+
+  if (cmd == "set_fail_safe") {
+    LockState* lk = findLockById(lock);
+    if (!lk) {
+      log("ERR", String("Lock id not found: ") + lock);
+      return;
+    }
+    if (lk->mode != LockMode::FailSafe) {
+      log("WRN", String("set_fail_safe on non-failsafe: ") + lock);
+      return;
+    }
+    setFailSafe(*lk, enabled, "cmd:set_fail_safe");
+    return;
+  }
+
+  log("WRN", String("Unknown maglock cmd: ") + cmd);
 }
 
 uint32_t MaglockController::currentHeartbeatIntervalMs() const {
@@ -141,21 +140,19 @@ uint32_t MaglockController::currentHeartbeatIntervalMs() const {
 }
 
 bool MaglockController::shouldAllowLog(const char* level) {
-  bool isErr = (strcmp(level, "ERR") == 0);
-  bool isDbg = (strcmp(level, "DBG") == 0);
+  const bool isErr = (strcmp(level, "ERR") == 0);
+  const bool isDbg = (strcmp(level, "DBG") == 0);
   bool allow = false;
   if (isErr) {
     allow = true;
-  } else if (gameMode_ == GameMode::Standby) {
+  } else if (gameMode_ == GameMode::ModeStandby) {
     allow = false;
-  } else if (gameMode_ == GameMode::InGame) {
+  } else if (gameMode_ == GameMode::ModeInGame) {
     allow = !isDbg;
   } else {
     allow = true;
   }
-  if (isErr) {
-    errorCount_++;
-  }
+  if (isErr) errorCount_++;
   return allow;
 }
 
@@ -164,15 +161,23 @@ void MaglockController::applyLockOutput(LockState& lk) {
 }
 
 const char* MaglockController::lockStateName(const LockState& lk) const {
-  if (lk.mode == LockMode::FailSecure) {
-    return lk.coilOn ? "OPEN" : "CLOSED";
-  }
+  if (lk.mode == LockMode::FailSecure) return lk.coilOn ? "OPEN" : "CLOSED";
   return lk.coilOn ? "CLOSED" : "OPEN";
+}
+
+const char* MaglockController::gameModeName(GameMode mode) const {
+  switch (mode) {
+    case GameMode::ModeMaintenance: return "MODE_MAINTENANCE";
+    case GameMode::ModePrepare: return "MODE_PREPARE";
+    case GameMode::ModeInGame: return "MODE_INGAME";
+    case GameMode::ModeStandby:
+    default: return "MODE_STANDBY";
+  }
 }
 
 void MaglockController::publishLockState(const LockState& lk, const char* reason) {
   if (!ctx_) return;
-  String topic = makeLockStateTopic(lk.id);
+  String topic = String("maglock/lock/") + lk.id + "/state";
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(millis() / 1000) +
                    ",\"id\":\"" + lk.id + "\"" +
@@ -195,9 +200,8 @@ void MaglockController::publishLockState(const LockState& lk, const char* reason
 
 MaglockController::LockState* MaglockController::findLockById(const String& id) {
   for (auto& lk : locks_) {
-    if (id.equalsIgnoreCase(lk.id)) {
-      return &lk;
-    }
+    if (id.equalsIgnoreCase(lk.id)) return &lk;
+    if (lk.id && String(lk.id).equalsIgnoreCase("r2r3") && id.equalsIgnoreCase("r3")) return &lk;
   }
   return nullptr;
 }
@@ -205,52 +209,104 @@ MaglockController::LockState* MaglockController::findLockById(const String& id) 
 void MaglockController::forceAllFailSecureOff(const char* reason) {
   for (auto& lk : locks_) {
     if (lk.mode != LockMode::FailSecure) continue;
-
-    bool changed = lk.coilOn || lk.pulsing;
-
+    const bool changed = lk.coilOn || lk.pulsing;
     lk.coilOn = false;
     lk.pulsing = false;
     lk.cooldown = true;
     lk.bootGuard = true;
     lk.cooldownStartMs = millis();
-
     applyLockOutput(lk);
-
-    if (changed) {
-      publishLockState(lk, reason);
-    }
+    if (changed) publishLockState(lk, reason);
   }
 }
 
-void MaglockController::persistGameMode() {
-  if (!prefs_) return;
-
-  const char* modeStr = "STANDBY";
-  switch (gameMode_) {
-    case GameMode::InGame: modeStr = "INGAME"; break;
-    case GameMode::Maint: modeStr = "MAINT"; break;
-    case GameMode::Standby:
-    default: modeStr = "STANDBY"; break;
-  }
-
-  prefs_->putString(kPrefsGameModeKey, modeStr);
-}
-
-void MaglockController::loadGameMode() {
-  if (!prefs_) {
-    gameMode_ = GameMode::Standby;
+void MaglockController::applyModeDefaults(const char* reason) {
+  if (gameMode_ == GameMode::ModeMaintenance) {
+    forceAllFailSecureOff(reason);
+    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, reason);
+    if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, false, reason);
     return;
   }
 
-  String stored = prefs_->getString(kPrefsGameModeKey, "STANDBY");
-  stored.trim();
-  stored.toUpperCase();
+  if (gameMode_ == GameMode::ModePrepare || gameMode_ == GameMode::ModeInGame) {
+    forceAllFailSecureOff(reason);
+    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, reason);
+    if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, true, reason);
+    return;
+  }
 
-  // SAFETY CHOICE: never auto-resume game mode on boot.
-  gameMode_ = GameMode::Standby;
+  forceAllFailSecureOff(reason);
+  if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, reason);
+  if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, false, reason);
+}
 
-  String data = String("{\"stored\":\"") + stored + "\",\"boot\":\"STANDBY\"}";
-  log("INF", "MAGLOCK_BOOT_MODE", data);
+void MaglockController::setGameModeInternal(GameMode newMode, const char* reason) {
+  const GameMode old = gameMode_;
+  gameMode_ = newMode;
+  if (old != newMode) {
+    String data = String("{\"from\":\"") + gameModeName(old) +
+                  "\",\"to\":\"" + gameModeName(newMode) +
+                  "\",\"reason\":\"" + (reason ? reason : "") + "\"}";
+    log("INF", "MAGLOCK_MODE_CHANGED", data);
+  }
+  applyHeartbeatInterval();
+  applyModeDefaults(reason ? reason : "mode");
+  if (prefs_) prefs_->putString(kPrefsGameModeKey, gameModeName(gameMode_));
+  publishStateSnapshot();
+}
+
+bool MaglockController::parseGameStatePayload(const String& msg, GameMode& outMode) {
+  String trimmed = msg;
+  trimmed.trim();
+  if (trimmed.startsWith("{")) {
+    StaticJsonDocument<384> doc;
+    DeserializationError err = deserializeJson(doc, trimmed);
+    if (err) return false;
+    const char* mode = doc["mode"] | nullptr;
+    if (!mode) return false;
+    String m(mode);
+    if (m.equalsIgnoreCase("MODE_MAINTENANCE")) outMode = GameMode::ModeMaintenance;
+    else if (m.equalsIgnoreCase("MODE_STANDBY")) outMode = GameMode::ModeStandby;
+    else if (m.equalsIgnoreCase("MODE_PREPARE")) outMode = GameMode::ModePrepare;
+    else if (m.equalsIgnoreCase("MODE_INGAME")) outMode = GameMode::ModeInGame;
+    else return false;
+    return true;
+  }
+
+  trimmed.toUpperCase();
+  if (trimmed == "MODE_MAINTENANCE" || trimmed == "MAINT" || trimmed == "MAINTENANCE") outMode = GameMode::ModeMaintenance;
+  else if (trimmed == "MODE_STANDBY" || trimmed == "STANDBY") outMode = GameMode::ModeStandby;
+  else if (trimmed == "MODE_PREPARE" || trimmed == "PREPARE") outMode = GameMode::ModePrepare;
+  else if (trimmed == "MODE_INGAME" || trimmed == "INGAME") outMode = GameMode::ModeInGame;
+  else return false;
+  return true;
+}
+
+bool MaglockController::parseMaglockCommand(const String& payload, String& outCmd, String& outLock, bool& outEnabled) {
+  StaticJsonDocument<384> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) return false;
+  outCmd = String((const char*)(doc["cmd"] | ""));
+  if (doc.containsKey("lock")) outLock = String((const char*)(doc["lock"] | ""));
+  else if (doc.containsKey("mode")) outLock = String((const char*)(doc["mode"] | ""));
+  outEnabled = doc["enabled"] | false;
+
+  if (outCmd == "set_fail_safe") {
+    if (doc.containsKey("locks") && doc["locks"].is<JsonArray>()) {
+      JsonArray arr = doc["locks"].as<JsonArray>();
+      for (JsonVariant v : arr) {
+        String id = String((const char*)(v | ""));
+        if (id.length() == 0) continue;
+        LockState* lk = findLockById(id);
+        if (!lk) continue;
+        if (lk->mode != LockMode::FailSafe) continue;
+        setFailSafe(*lk, outEnabled, "cmd:set_fail_safe");
+      }
+      outCmd = "noop_done";
+      return true;
+    }
+  }
+  return outCmd.length() > 0;
 }
 
 void MaglockController::startPulse(LockState& lk, const char* reason) {
@@ -258,17 +314,14 @@ void MaglockController::startPulse(LockState& lk, const char* reason) {
     log("WRN", String("OPEN on non-failsecure via pulse: ") + lk.id);
     return;
   }
-
-  if (gameMode_ == GameMode::Standby) {
-    log("WRN", String("OPEN ignored while STANDBY for ") + lk.id);
+  if (gameMode_ == GameMode::ModeStandby) {
+    log("WRN", String("OPEN ignored while MODE_STANDBY for ") + lk.id);
     return;
   }
-
   if (lk.pulsing || lk.cooldown || lk.bootGuard) {
     log("WRN", String("OPEN ignored (pulse/cooldown/bootguard active) for ") + lk.id);
     return;
   }
-
   lk.coilOn = true;
   lk.pulsing = true;
   lk.cooldown = false;
@@ -295,7 +348,6 @@ void MaglockController::setFailSafe(LockState& lk, bool locked, const char* reas
 void MaglockController::updatePulseTimers(uint32_t nowMs) {
   for (auto& lk : locks_) {
     if (lk.mode != LockMode::FailSecure) continue;
-
     if (lk.coilOn && (nowMs - lk.pulseStartMs >= kHardCutoffMs)) {
       lk.coilOn = false;
       lk.pulsing = false;
@@ -306,7 +358,6 @@ void MaglockController::updatePulseTimers(uint32_t nowMs) {
       publishLockState(lk, "hard_cutoff");
       continue;
     }
-
     if (lk.pulsing && (nowMs - lk.pulseStartMs >= kPulseMs)) {
       lk.pulsing = false;
       lk.coilOn = false;
@@ -316,7 +367,6 @@ void MaglockController::updatePulseTimers(uint32_t nowMs) {
       lk.bootGuard = false;
       lk.cooldownStartMs = nowMs;
     }
-
     if (lk.bootGuard && (nowMs - lk.cooldownStartMs >= kBootGuardMs)) {
       lk.bootGuard = false;
       lk.cooldown = false;
@@ -333,19 +383,10 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
   if (nowMs - lastMetricMs_ < kMetricIntervalMs) return;
   lastMetricMs_ = nowMs;
 
-  auto modeName = [](GameMode m) -> const char* {
-    switch (m) {
-      case GameMode::InGame: return "INGAME";
-      case GameMode::Maint: return "MAINT";
-      case GameMode::Standby:
-      default: return "STANDBY";
-    }
-  };
-
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(nowMs / 1000) +
                    ",\"t\":\"MAG\"" +
-                   ",\"mode\":\"" + String(modeName(gameMode_)) + "\"" +
+                   ",\"mode\":\"" + String(gameModeName(gameMode_)) + "\"" +
                    ",\"en\":" + (ctx_->enabled() ? "1" : "0") +
                    ",\"locks\":[";
   for (size_t i = 0; i < kLockCount; i++) {
@@ -365,28 +406,21 @@ void MaglockController::publishMetricsIfDue(uint32_t nowMs) {
     payload += "}";
   }
   payload += "]}";
-
   log("DBG", "maglock_metrics", payload);
 }
 
 void MaglockController::publishStateSnapshot() {
   if (!ctx_) return;
-  auto modeName = [](GameMode m) -> const char* {
-    switch (m) {
-      case GameMode::InGame: return "INGAME";
-      case GameMode::Maint: return "MAINT";
-      case GameMode::Standby:
-      default: return "STANDBY";
-    }
-  };
-  String data = String("{\"mode\":\"") + modeName(gameMode_) + "\",\"locks\":[";
+  String data = String("{\"mode\":\"") + gameModeName(gameMode_) + "\",\"locks\":[";
   for (size_t i = 0; i < kLockCount; i++) {
     if (i > 0) data += ",";
     data += "{\"id\":\"";
     data += locks_[i].id;
     data += "\",\"coil\":";
     data += locks_[i].coilOn ? "1" : "0";
-    data += ",\"pulse\":";
+    data += ",\"state\":\"";
+    data += lockStateName(locks_[i]);
+    data += "\",\"pulse\":";
     data += locks_[i].pulsing ? "1" : "0";
     data += ",\"cooldown\":";
     data += locks_[i].cooldown ? "1" : "0";
@@ -396,42 +430,7 @@ void MaglockController::publishStateSnapshot() {
   }
   data += "]}";
   const auto& topics = ctx_->config().topics;
-  if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
-  }
-}
-
-void MaglockController::handleLockCommand(LockState& lk, const String& cmd) {
-  if (!ctx_->enabled()) {
-    log("WRN", String("Lock cmd while DISABLED: ") + lk.id + " cmd=" + cmd);
-    return;
-  }
-
-  if (cmd == "OPEN") {
-    if (lk.mode == LockMode::FailSecure) {
-      startPulse(lk, "cmd:OPEN");
-    } else {
-      setFailSafe(lk, false, "cmd:OPEN");
-    }
-    return;
-  }
-
-  if (cmd == "CLOSE") {
-    if (lk.mode == LockMode::FailSecure) {
-      lk.coilOn = false;
-      lk.pulsing = false;
-      lk.cooldown = true;
-      lk.bootGuard = false;
-      lk.cooldownStartMs = millis();
-      applyLockOutput(lk);
-      publishLockState(lk, "cmd:CLOSE");
-    } else {
-      setFailSafe(lk, true, "cmd:CLOSE");
-    }
-    return;
-  }
-
-  log("WRN", String("Unknown lock cmd for ") + lk.id + ": " + cmd);
+  if (topics.state.length() > 0) publish(topics.state.c_str(), "state", 1, data, nullptr, true);
 }
 
 void MaglockController::log(const char* level, const String& msg) const {
@@ -453,18 +452,6 @@ bool MaglockController::publish(const char* topic, const char* type, uint32_t ve
 bool MaglockController::publish(const char* topic, const String& payload, bool retained) const {
   if (!ctx_) return false;
   return ctx_->publish(topic, payload, retained);
-}
-
-void MaglockController::handleLockCommandTopicInternal(const String& topic, const String& payload) {
-  String lockId;
-  if (!parseLockIdFromTopic(topic, lockId)) return;
-
-  LockState* lk = findLockById(lockId);
-  if (!lk) {
-    log("ERR", String("Lock id not found: ") + lockId);
-    return;
-  }
-  handleLockCommand(*lk, payload);
 }
 
 uint32_t MaglockController::hbIntervalForMode(GameMode mode) const {
