@@ -23,9 +23,8 @@ static constexpr uint16_t MQTT_PORT = 1883;
 
 // ======================= TOPICS ==============================
 static const char* TOPIC_MOSFET_CMD = "lighting/mosfet/+/cmd";
+static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
 static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_IMAGES_PIANO_EVT = "images_piano/evt";
-static const char* TOPIC_CHESS_EVT = "chess/evt";
 
 // ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
@@ -83,10 +82,10 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   if (module) module->onGameModeMessage(payload);
 }
 
-static void eventSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
+static void lightingCommandSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
   auto* module = static_cast<LightingController*>(user);
-  if (module) module->onEventTopic(topic, payload);
+  if (module) module->onLightingCommand(payload);
 }
 
 // ✅ Heartbeat builder REQUIRED, otherwise hb stays "offline" (LWT only)
@@ -114,8 +113,7 @@ void setup() {
   SDBG("MQTT port %u", (unsigned)MQTT_PORT);
   SDBG("Sub topic: %s", TOPIC_MOSFET_CMD);
   SDBG("Sub topic: %s", TOPIC_GAME);
-  SDBG("Sub topic: %s", TOPIC_IMAGES_PIANO_EVT);
-  SDBG("Sub topic: %s", TOPIC_CHESS_EVT);
+  SDBG("Sub topic: %s", TOPIC_LIGHTING_CMD);
 #endif
 
   NodeCoreConfig cfg;
@@ -172,8 +170,7 @@ void setup() {
 #endif
   nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_IMAGES_PIANO_EVT, eventSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_CHESS_EVT, eventSubscription, &lighting);
+  nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 
   NodeContext& ctx = nodeCore.context();
 

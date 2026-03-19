@@ -52,26 +52,41 @@ bool parseIntLoose(const String& s, int32_t& out) {
   return true;
 }
 
-bool payloadContainsSolvedId(const String& payload, const char* rid) {
-  if (!rid || !rid[0]) return false;
-  if (payload.indexOf("\"type\":\"riddle_solved\"") == -1) return false;
-  const String needle = String("\"id\":\"") + rid + "\"";
-  if (payload.indexOf(needle) >= 0) return true;
-  const String dNeedle = String("\"d\":{\"id\":\"") + rid + "\"";
-  return payload.indexOf(dNeedle) >= 0;
-}
-
-} // namespace
+}  // namespace
 
 LightingController::LightingController() {
-  static const char* ids[kChannelCount] = {"1","2","3","4","5","6","7","8","9","10"};
-  for (size_t i = 0; i < kChannelCount; i++) channels_[i].id = ids[i];
+  static const char* ids[kChannelCount] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
+  static const char* names[kChannelCount] = {
+    "r2_chess",
+    "r2_schronk",
+    "r1_bild",
+    "r1_stuen",
+    "r3_slider",
+    "r3_cage",
+    "torch_stiege",
+    "torch_r2r3",
+    "torch_r2",
+    "uv_bulb"
+  };
+  for (size_t i = 0; i < kChannelCount; i++) {
+    channels_[i].id = ids[i];
+    channels_[i].name = names[i];
+  }
 }
 
 bool LightingController::mqttConnected() const {
   if (!ctx_) return false;
   auto* c = ctx_->mqttClient();
   return c && c->connected();
+}
+
+String LightingController::normalizeKey(const String& in) const {
+  String s = in;
+  s.trim();
+  s.toLowerCase();
+  s.replace("-", "_");
+  s.replace(" ", "_");
+  return s;
 }
 
 bool LightingController::parseChannelIdFromTopic(const String& topic, String& outId) {
@@ -81,6 +96,50 @@ bool LightingController::parseChannelIdFromTopic(const String& topic, String& ou
   if (end <= start) return false;
   outId = topic.substring(start, end);
   return outId.length() > 0;
+}
+
+LightingController::ChannelState* LightingController::findById(const String& id) {
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (id.equalsIgnoreCase(channels_[i].id)) return &channels_[i];
+  }
+  return nullptr;
+}
+
+LightingController::ChannelState* LightingController::findByName(const String& name) {
+  const String n = normalizeKey(name);
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (n == normalizeKey(channels_[i].name)) return &channels_[i];
+  }
+  if (n == "r2_schach") return findById("1");
+  if (n == "torch_r2_r3") return findById("8");
+  if (n == "uv_light_bulb" || n == "uv") return findById("10");
+  return nullptr;
+}
+
+LightingController::ChannelState* LightingController::findByAnyKey(const String& key) {
+  ChannelState* ch = findById(key);
+  if (ch) return ch;
+  return findByName(key);
+}
+
+LightingController::ParsedGameState LightingController::parseGameState(const String& payload) const {
+  ParsedGameState gs;
+  String t = payload;
+  t.trim();
+  if (!t.length()) return gs;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, t) == DeserializationError::Ok) {
+    if (doc["mode"].is<const char*>()) {
+      gs.mode = upperTrim(String(doc["mode"].as<const char*>()));
+      gs.valid = gs.mode.length() > 0;
+      return gs;
+    }
+  }
+
+  gs.mode = upperTrim(t);
+  gs.valid = gs.mode.length() > 0;
+  return gs;
 }
 
 void LightingController::begin(Core::NodeContext& ctx) {
@@ -102,8 +161,6 @@ void LightingController::begin(Core::NodeContext& ctx) {
   constexpr uint32_t kFreqHz = 2000;
   constexpr uint8_t kResBits = 12;
 
-  SDBG("controller.begin(): init pwm freq=%lu res=%u", (unsigned long)kFreqHz, (unsigned)kResBits);
-
   LightingChannelConfig cfg[kChannelCount];
   for (size_t i = 0; i < kChannelCount; i++) {
     channels_[i].pin = kPins[i];
@@ -111,33 +168,16 @@ void LightingController::begin(Core::NodeContext& ctx) {
     channels_[i].on = false;
     channels_[i].duty = 0;
     cfg[i] = {channels_[i].id, channels_[i].pin, channels_[i].ledcCh};
-    SDBG("ch%u id=%s pin=%u ledc=%u", (unsigned)(i + 1), channels_[i].id, (unsigned)channels_[i].pin, (unsigned)channels_[i].ledcCh);
   }
 
   driver_.begin(cfg, kChannelCount, kFreqHz, kResBits);
-  SDBG("pwm driver ready (maxDuty=%lu)", (unsigned long)driver_.maxDuty());
-
-  for (size_t i = 0; i < kChannelCount; i++) {
-    applyOutput(channels_[i]);
-  }
+  for (size_t i = 0; i < kChannelCount; i++) applyOutput(channels_[i]);
 
   bootStatePublished_ = false;
   lastMqttConnected_ = false;
-  lastMetricMs_ = millis();
-  inGame_ = false;
-  pianoSolvedSeen_ = false;
-  chessSolvedSeen_ = false;
-  candlesSolvedSeen_ = false;
-
-  pianoTorchPending_ = false;
-  pianoTorchDueMs_ = 0;
-
-  chessRoomPending_ = false;
-  chessRoomDueMs_ = 0;
-
-  resetFade(pianoFade_);
-  resetFade(chessFade_);
-  resetFade(candlesFade_);
+  appliedMode_ = "MODE_STANDBY";
+  resetFade(fade1_);
+  resetFade(fade2_);
 }
 
 void LightingController::tick(uint32_t nowMs) {
@@ -146,119 +186,134 @@ void LightingController::tick(uint32_t nowMs) {
     SDBG("MQTT connected=%d", (int)conn);
     lastMqttConnected_ = conn;
   }
-
   if (conn && !bootStatePublished_) {
-    SDBG("publishing retained boot state (all channels)");
     publishAllStates("boot");
     bootStatePublished_ = true;
   }
-
-  if (pianoTorchPending_ && (nowMs - pianoTorchDueMs_ >= kProgressDelayMs)) {
-    pianoTorchPending_ = false;
-    runPianoTorch("piano_delay");
-  }
-
-  if (chessRoomPending_ && (nowMs - chessRoomDueMs_ >= kProgressDelayMs)) {
-    chessRoomPending_ = false;
-    runChessRoom("chess_delay");
-  }
-
-  updateFadePair(pianoFade_, nowMs);
-  updateFadePair(chessFade_, nowMs);
-  updateFadePair(candlesFade_, nowMs);
+  updateFadePair(fade1_, nowMs);
+  updateFadePair(fade2_, nowMs);
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
   if (!ctx_) return false;
-  String cmdUp = upperTrim(String(cmd ? cmd : ""));
-
-  if (cmdUp == "CANDLES_SOLVED") {
-    handleProgressEvent("candles");
-    return true;
-  }
-
   String msg(cmd ? cmd : "");
   if (payload && payload[0]) {
     msg += " ";
     msg += payload;
   }
-  SDBG("node cmd (ignored): %s", msg.c_str());
   log("WRN", String("Unknown node CMD: ") + msg);
   return true;
 }
 
+void LightingController::cancelScheduledEffects() {
+  resetFade(fade1_);
+  resetFade(fade2_);
+}
+
 void LightingController::onGameModeMessage(const String& msg) {
-  String trimmed = upperTrim(msg);
-  const bool nextInGame = (trimmed == "INGAME");
-  const bool nextPrepare = (trimmed == "PREPARE");
-  const bool nextStandby = (trimmed == "STANDBY" || trimmed == "OFF");
-  const bool nextMaint = (trimmed == "MAINT" || trimmed == "MAINTENANCE");
-
-  if (nextInGame) {
-    inGame_ = true;
-    pianoSolvedSeen_ = false;
-    chessSolvedSeen_ = false;
-    candlesSolvedSeen_ = false;
-
-    pianoTorchPending_ = false;
-    pianoTorchDueMs_ = 0;
-
-    chessRoomPending_ = false;
-    chessRoomDueMs_ = 0;
-
-    resetFade(pianoFade_);
-    resetFade(chessFade_);
-    resetFade(candlesFade_);
-
-    applySceneInitial("game_start");
-    log("INF", "LIGHT_SCENE_INGAME");
+  ParsedGameState gs = parseGameState(msg);
+  if (!gs.valid) {
+    log("WRN", String("Bad game/state payload: ") + msg);
     return;
   }
 
-  if (inGame_) {
-    log("INF", String("LIGHT_GAME_MODE ") + trimmed);
-  }
-  inGame_ = false;
+  cancelScheduledEffects();
+  appliedMode_ = gs.mode;
 
-  pianoTorchPending_ = false;
-  pianoTorchDueMs_ = 0;
-
-  chessRoomPending_ = false;
-  chessRoomDueMs_ = 0;
-
-  resetFade(pianoFade_);
-  resetFade(chessFade_);
-  resetFade(candlesFade_);
-
-  if (nextPrepare || nextStandby || nextMaint) {
-    applySceneAllOn(trimmed.c_str());
+  if (gs.mode == "MODE_INGAME" || gs.mode == "INGAME") {
+    applySceneInitial("game_state");
     return;
   }
 
-  applySceneAllOn("unknown_mode");
+  if (gs.mode == "MODE_MAINTENANCE" || gs.mode == "MODE_STANDBY" || gs.mode == "MODE_PREPARE" ||
+      gs.mode == "MAINTENANCE" || gs.mode == "MAINT" || gs.mode == "STANDBY" || gs.mode == "PREPARE") {
+    applySceneAllOn("game_state");
+    return;
+  }
+
+  log("WRN", String("Unknown game mode: ") + gs.mode);
 }
 
-void LightingController::onEventTopic(const char* topic, const String& payload) {
-  (void)topic;
-  if (payloadContainsSolvedId(payload, "piano")) {
-    handleProgressEvent("piano");
-    return;
+bool LightingController::handleLightingJsonCommand(JsonDocument& doc) {
+  String cmd;
+  if (doc["cmd"].is<const char*>()) cmd = upperTrim(String(doc["cmd"].as<const char*>()));
+  if (!cmd.length()) return false;
+
+  if (cmd == "SCENE") {
+    String name;
+    if (doc["name"].is<const char*>()) name = upperTrim(String(doc["name"].as<const char*>()));
+    if (name == "INGAME_START") {
+      cancelScheduledEffects();
+      applySceneInitial("lighting_cmd");
+      return true;
+    }
+    if (name == "ALL_ON" || name == "STANDBY" || name == "PREPARE" || name == "MAINTENANCE") {
+      cancelScheduledEffects();
+      applySceneAllOn("lighting_cmd");
+      return true;
+    }
+    if (name == "ALL_OFF") {
+      cancelScheduledEffects();
+      applySceneAllOff("lighting_cmd");
+      return true;
+    }
+    return false;
   }
-  if (payloadContainsSolvedId(payload, "chess")) {
-    handleProgressEvent("chess");
-    return;
+
+  auto applySingle = [&](const String& key, bool on, int pct, const char* reason) -> bool {
+    ChannelState* ch = findByAnyKey(key);
+    if (!ch) return false;
+    bool changed[kChannelCount] = {};
+    changed[(size_t)ch->ledcCh] = (pct >= 0)
+      ? setChannelPercent(ch->id, on, (uint32_t)pct)
+      : setChannel(ch->id, on, on ? driver_.maxDuty() : 0);
+    publishChangedStates(changed, reason);
+    return true;
+  };
+
+  if (cmd == "TURN_ON" || cmd == "ON") {
+    String light = doc["light"].is<const char*>() ? String(doc["light"].as<const char*>()) : String();
+    return applySingle(light, true, -1, "lighting_cmd");
   }
-  if (payloadContainsSolvedId(payload, "candles")) {
-    handleProgressEvent("candles");
-    return;
+  if (cmd == "TURN_OFF" || cmd == "OFF") {
+    String light = doc["light"].is<const char*>() ? String(doc["light"].as<const char*>()) : String();
+    return applySingle(light, false, -1, "lighting_cmd");
   }
+  if (cmd == "SET") {
+    String light = doc["light"].is<const char*>() ? String(doc["light"].as<const char*>()) : String();
+    int pct = doc["pct"].is<int>() ? doc["pct"].as<int>() : 100;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return applySingle(light, pct > 0, pct, "lighting_cmd");
+  }
+  if (cmd == "FADE_IN") {
+    JsonArray lights = doc["lights"].as<JsonArray>();
+    if (lights.isNull() || lights.size() != 2) return false;
+    String keyA = lights[0].is<const char*>() ? String(lights[0].as<const char*>()) : String();
+    String keyB = lights[1].is<const char*>() ? String(lights[1].as<const char*>()) : String();
+    ChannelState* chA = findByAnyKey(keyA);
+    ChannelState* chB = findByAnyKey(keyB);
+    if (!chA || !chB) return false;
+    uint32_t durationMs = doc["duration_ms"].is<unsigned long>() ? doc["duration_ms"].as<unsigned long>() : 10000UL;
+    bool changed[kChannelCount] = {};
+    changed[(size_t)chA->ledcCh] = setChannel(chA->id, false, 0, true);
+    changed[(size_t)chB->ledcCh] = setChannel(chB->id, false, 0, true);
+    publishChangedStates(changed, "lighting_cmd");
+    startFadePair(fade1_, chA->id, chB->id, 0, 0, driver_.maxDuty(), driver_.maxDuty(), durationMs, "fade_in", "fade_in_done");
+    return true;
+  }
+  return false;
 }
 
-LightingController::ChannelState* LightingController::findById(const String& id) {
-  for (size_t i = 0; i < kChannelCount; i++) {
-    if (id.equalsIgnoreCase(channels_[i].id)) return &channels_[i];
+void LightingController::onLightingCommand(const String& payload) {
+  JsonDocument doc;
+  if (deserializeJson(doc, payload) != DeserializationError::Ok) {
+    log("WRN", String("Bad lighting/cmd payload: ") + payload);
+    return;
   }
-  return nullptr;
+  if (!handleLightingJsonCommand(doc)) {
+    log("WRN", String("Unhandled lighting/cmd payload: ") + payload);
+  }
 }
 
 uint32_t LightingController::clampDuty(uint32_t duty) const {
@@ -285,22 +340,16 @@ uint32_t LightingController::mapUserValueToDuty(int32_t v) const {
 void LightingController::applyOutput(ChannelState& ch) {
   const uint32_t duty = ch.on ? ch.duty : 0;
   driver_.writeDuty(ch.ledcCh, duty);
-  SDBG("apply: id=%s on=%d duty=%lu", ch.id, (int)ch.on, (unsigned long)duty);
 }
 
 bool LightingController::setChannel(const char* id, bool on, uint32_t duty, bool preserveZeroDutyWhenOn) {
   ChannelState* ch = findById(String(id ? id : ""));
   if (!ch) return false;
-
   duty = clampDuty(duty);
-  if (on && duty == 0 && !preserveZeroDutyWhenOn) {
-    duty = driver_.maxDuty();
-  }
-
+  if (on && duty == 0 && !preserveZeroDutyWhenOn) duty = driver_.maxDuty();
   bool changed = (ch->on != on) || (ch->duty != duty);
   ch->on = on;
   ch->duty = duty;
-
   if (changed) applyOutput(*ch);
   return changed;
 }
@@ -310,9 +359,7 @@ bool LightingController::setChannelPercent(const char* id, bool on, uint32_t pct
 }
 
 void LightingController::publishChangedStates(const bool changed[], const char* reason) {
-  for (size_t i = 0; i < kChannelCount; i++) {
-    if (changed[i]) publishChannelState(channels_[i], reason);
-  }
+  for (size_t i = 0; i < kChannelCount; i++) if (changed[i]) publishChannelState(channels_[i], reason);
 }
 
 void LightingController::resetFade(FadePair& fade) {
@@ -353,28 +400,21 @@ void LightingController::updateFadePair(FadePair& fade, uint32_t nowMs) {
   if (!fade.active || !fade.idA || !fade.idB || fade.durationMs == 0) return;
 
   const uint32_t elapsed = (uint32_t)(nowMs - fade.startMs);
-
   uint32_t dutyA = fade.toDutyA;
   uint32_t dutyB = fade.toDutyB;
   const char* reason = fade.doneReason;
 
   if (elapsed < fade.durationMs) {
     reason = fade.tickReason;
-
     if (fade.toDutyA >= fade.fromDutyA) {
-      dutyA = fade.fromDutyA +
-              (uint32_t)(((uint64_t)(fade.toDutyA - fade.fromDutyA) * elapsed) / fade.durationMs);
+      dutyA = fade.fromDutyA + (uint32_t)(((uint64_t)(fade.toDutyA - fade.fromDutyA) * elapsed) / fade.durationMs);
     } else {
-      dutyA = fade.fromDutyA -
-              (uint32_t)(((uint64_t)(fade.fromDutyA - fade.toDutyA) * elapsed) / fade.durationMs);
+      dutyA = fade.fromDutyA - (uint32_t)(((uint64_t)(fade.fromDutyA - fade.toDutyA) * elapsed) / fade.durationMs);
     }
-
     if (fade.toDutyB >= fade.fromDutyB) {
-      dutyB = fade.fromDutyB +
-              (uint32_t)(((uint64_t)(fade.toDutyB - fade.fromDutyB) * elapsed) / fade.durationMs);
+      dutyB = fade.fromDutyB + (uint32_t)(((uint64_t)(fade.toDutyB - fade.fromDutyB) * elapsed) / fade.durationMs);
     } else {
-      dutyB = fade.fromDutyB -
-              (uint32_t)(((uint64_t)(fade.fromDutyB - fade.toDutyB) * elapsed) / fade.durationMs);
+      dutyB = fade.fromDutyB - (uint32_t)(((uint64_t)(fade.fromDutyB - fade.toDutyB) * elapsed) / fade.durationMs);
     }
   } else {
     fade.active = false;
@@ -383,13 +423,10 @@ void LightingController::updateFadePair(FadePair& fade, uint32_t nowMs) {
   bool changed[kChannelCount] = {};
   ChannelState* chA = findById(String(fade.idA));
   ChannelState* chB = findById(String(fade.idB));
-
   const bool onA = (dutyA > 0) || !fade.active;
   const bool onB = (dutyB > 0) || !fade.active;
-
   if (chA) changed[(size_t)chA->ledcCh] = setChannel(fade.idA, onA, dutyA, true);
   if (chB) changed[(size_t)chB->ledcCh] = setChannel(fade.idB, onB, dutyB, true);
-
   publishChangedStates(changed, reason);
 }
 
@@ -410,114 +447,14 @@ void LightingController::applySceneInitial(const char* reason) {
 
 void LightingController::applySceneAllOn(const char* reason) {
   bool changed[kChannelCount] = {};
-  for (size_t i = 0; i < kChannelCount; i++) {
-    changed[i] = setChannel(channels_[i].id, true, driver_.maxDuty());
-  }
+  for (size_t i = 0; i < kChannelCount; i++) changed[i] = setChannel(channels_[i].id, true, driver_.maxDuty());
   publishChangedStates(changed, reason);
 }
 
-void LightingController::runPianoTorch(const char* reason) {
+void LightingController::applySceneAllOff(const char* reason) {
   bool changed[kChannelCount] = {};
-  changed[8] = setChannel("9", true, driver_.maxDuty());
+  for (size_t i = 0; i < kChannelCount; i++) changed[i] = setChannel(channels_[i].id, false, 0);
   publishChangedStates(changed, reason);
-}
-
-void LightingController::runChessRoom(const char* reason) {
-  bool changed[kChannelCount] = {};
-
-  // Keep both channels fully OFF until the fade loop starts driving them.
-  changed[4] = setChannel("5", false, 0);
-  changed[5] = setChannel("6", false, 0);
-  publishChangedStates(changed, reason);
-
-  startFadePair(
-    chessFade_,
-    "5", "6",
-    0, 0,
-    driver_.maxDuty(), driver_.maxDuty(),
-    kFadeMs,
-    "chess_fade",
-    "chess_fade_done"
-  );
-}
-
-void LightingController::handleProgressEvent(const char* rid) {
-  if (!rid || !rid[0]) return;
-  if (!inGame_) {
-    log("DBG", String("Ignoring progress while not INGAME: ") + rid);
-    return;
-  }
-
-  bool changed[kChannelCount] = {};
-
-  if (strcmp(rid, "piano") == 0) {
-    if (pianoSolvedSeen_) return;
-    pianoSolvedSeen_ = true;
-
-    // Pins 16 and 17 (channels 1 and 2) fade from 0 to 100 immediately.
-    changed[0] = setChannel("1", true, 0, true);
-    changed[1] = setChannel("2", true, 0, true);
-    publishChangedStates(changed, "piano_solved");
-
-    startFadePair(
-      pianoFade_,
-      "1", "2",
-      0, 0,
-      driver_.maxDuty(), driver_.maxDuty(),
-      kFadeMs,
-      "piano_fade",
-      "piano_fade_done"
-    );
-
-    pianoTorchPending_ = true;
-    pianoTorchDueMs_ = millis();
-
-    log("INF", "LIGHT_PIANO_SOLVED");
-    return;
-  }
-
-  if (strcmp(rid, "chess") == 0) {
-    if (chessSolvedSeen_) return;
-    chessSolvedSeen_ = true;
-
-    changed[7] = setChannel("8", true, driver_.maxDuty());
-    publishChangedStates(changed, "chess_solved");
-
-    chessRoomPending_ = true;
-    chessRoomDueMs_ = millis();
-
-    log("INF", "LIGHT_CHESS_SOLVED");
-    return;
-  }
-
-  if (strcmp(rid, "candles") == 0) {
-    if (candlesSolvedSeen_) return;
-    candlesSolvedSeen_ = true;
-
-    ChannelState* ch5 = findById("5");
-    ChannelState* ch6 = findById("6");
-
-    const uint32_t fromDuty5 = ch5 ? (ch5->on ? ch5->duty : driver_.maxDuty()) : driver_.maxDuty();
-    const uint32_t fromDuty6 = ch6 ? (ch6->on ? ch6->duty : driver_.maxDuty()) : driver_.maxDuty();
-
-    changed[4] = setChannel("5", true, fromDuty5, true);
-    changed[5] = setChannel("6", true, fromDuty6, true);
-    changed[9] = setChannel("10", true, driver_.maxDuty());
-    publishChangedStates(changed, "candles_solved");
-
-    startFadePair(
-      candlesFade_,
-      "5", "6",
-      fromDuty5, fromDuty6,
-      percentToDuty(30), percentToDuty(30),
-      kFadeMs,
-      "candles_fade",
-      "candles_fade_done"
-    );
-
-    log("INF", "LIGHT_CANDLES_SOLVED");
-    return;
-  }
 }
 
 bool LightingController::publish(const char* topic, const String& payload, bool retained) const {
@@ -527,78 +464,60 @@ bool LightingController::publish(const char* topic, const String& payload, bool 
 }
 
 void LightingController::publishAllStates(const char* reason) {
-  for (size_t i = 0; i < kChannelCount; i++) {
-    publishChannelState(channels_[i], reason);
-  }
+  for (size_t i = 0; i < kChannelCount; i++) publishChannelState(channels_[i], reason);
 }
 
 void LightingController::log(const char* level, const String& msg) const {
-  if (!ctx_) return;
-  ctx_->log(level, msg);
+  if (ctx_) ctx_->log(level, msg);
 }
 
 void LightingController::log(const char* level, const String& msg, const String& dataJson) const {
-  if (!ctx_) return;
-  ctx_->log(level, msg, dataJson);
+  if (ctx_) ctx_->log(level, msg, dataJson);
 }
 
 void LightingController::publishChannelState(const ChannelState& ch, const char* reason) {
   if (!ctx_) return;
-
   const uint32_t max = driver_.maxDuty();
   const uint32_t pct = (max == 0) ? 0 : (uint32_t)((ch.duty * (uint64_t)100 + (max / 2)) / max);
-
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(millis() / 1000) +
-                   ",\"id\":\"" + ch.id + "\"" +
-                   ",\"on\":" + String(ch.on ? 1 : 0) +
+                   ",\"id\":\"" + ch.id +
+                   "\",\"name\":\"" + ch.name +
+                   "\",\"mode\":\"" + appliedMode_ +
+                   "\",\"on\":" + String(ch.on ? 1 : 0) +
                    ",\"duty\":" + String(ch.duty) +
                    ",\"pct\":" + String(pct) +
                    ",\"max\":" + String(max);
-
   if (reason && reason[0]) {
     payload += ",\"reason\":\"";
     payload += reason;
     payload += "\"";
   }
   payload += "}";
-
   String topic = makeStateTopic(ch.id);
-  const bool ok = publish(topic.c_str(), payload, true);
-  SDBG("state: id=%s on=%d duty=%lu pct=%lu reason=%s pub=%s",
-       ch.id, (int)ch.on, (unsigned long)ch.duty, (unsigned long)pct,
-       (reason ? reason : ""), ok ? "ok" : "skip/offline");
+  publish(topic.c_str(), payload, true);
 }
 
 void LightingController::onMosfetCommandTopic(const char* topic, const String& payload) {
   if (!ctx_) return;
-
-  SDBG("RX: topic=%s payload=%s", topic ? topic : "?", payload.c_str());
-
   String id;
   if (!parseChannelIdFromTopic(String(topic ? topic : ""), id)) {
-    SDBG("RX: bad topic");
     log("WRN", String("bad topic: ") + (topic ? topic : ""));
     return;
   }
 
   ChannelState* ch = findById(id);
   if (!ch) {
-    SDBG("RX: unknown id=%s", id.c_str());
     log("WRN", String("unknown channel id: ") + id);
     return;
   }
 
   bool handled = false;
-
   {
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, payload);
-    if (!err) {
+    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
       String cmdS;
-      if (doc["cmd"].is<const char*>()) cmdS = doc["cmd"].as<const char*>();
-      cmdS = upperTrim(cmdS);
-
+      if (doc["cmd"].is<const char*>()) cmdS = upperTrim(String(doc["cmd"].as<const char*>()));
       if (cmdS == "ON") { ch->on = true; handled = true; }
       else if (cmdS == "OFF") { ch->on = false; handled = true; }
       else if (cmdS == "DIM" || cmdS == "DIMMED") {
@@ -610,10 +529,8 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
         if (doc["value"].is<int>()) v = doc["value"].as<int>();
         else if (doc["pwm"].is<int>()) v = doc["pwm"].as<int>();
         else if (doc["duty"].is<int>()) v = doc["duty"].as<int>();
-
         String unit;
         if (doc["unit"].is<const char*>()) unit = upperTrim(String(doc["unit"].as<const char*>()));
-
         ch->on = true;
         if (unit == "PERCENT" || unit == "%") {
           v = max(0, min(100, v));
@@ -627,27 +544,14 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
           ch->duty = mapUserValueToDuty(v);
         }
         handled = true;
-      } else if (doc["pwm"].is<int>() || doc["duty"].is<int>()) {
-        int32_t v = doc["pwm"].is<int>() ? doc["pwm"].as<int>() : doc["duty"].as<int>();
-        ch->on = true;
-        ch->duty = mapUserValueToDuty(v);
-        handled = true;
-      } else if (doc["on"].is<bool>()) {
-        ch->on = doc["on"].as<bool>();
-        handled = true;
       }
     }
   }
-
   if (!handled) {
     String p = upperTrim(payload);
-    if (p == "ON") {
-      ch->on = true;
-      handled = true;
-    } else if (p == "OFF") {
-      ch->on = false;
-      handled = true;
-    } else if (p == "DIM" || p == "DIMMED") {
+    if (p == "ON") { ch->on = true; handled = true; }
+    else if (p == "OFF") { ch->on = false; handled = true; }
+    else if (p == "DIM" || p == "DIMMED") {
       ch->on = true;
       ch->duty = percentToDuty(ch->dimPercent);
       handled = true;
@@ -660,15 +564,12 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
       }
     }
   }
-
   if (!handled) {
     log("WRN", String("Unrecognized payload on channel ") + id + ": " + payload);
     return;
   }
-
   if (ch->on && ch->duty == 0) ch->duty = driver_.maxDuty();
   if (!ch->on) ch->duty = 0;
-
   applyOutput(*ch);
   publishChannelState(*ch, "cmd");
 }
