@@ -412,7 +412,9 @@ class GameMaster:
             timing.solve_time_from_activation_s = round((solved_dt - activated_dt).total_seconds(), 3)
 
     def _apply_progression_side_effects(self, solved_node: str) -> None:
-        if solved_node == "piano":
+        if solved_node == "images":
+            self.publish_maglock_cmd({"cmd": "open", "lock": "images"})
+        elif solved_node == "piano":
             self.publish_maglock_cmd({"cmd": "open", "lock": "r2"})
             self.schedule_in(10.0, "lighting_batch", {
                 "commands": [
