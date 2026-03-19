@@ -314,13 +314,14 @@ function Invoke-OtaSingleTarget {
         }
         Write-Host "== HTTP firmware matches uploaded file =="
 
-        Write-Host ("== Triggering OTA on {0}/sys/cmd ==" -f $cmdNode)
+        $otaCmdNode = if ($cmdNode -in @("maglock", "lighting")) { "$cmdNode/sys" } else { $cmdNode }
+        Write-Host ("== Triggering OTA on {0}/cmd ==" -f $otaCmdNode)
 
         $remotePublisher = "/home/$piUser/er1/scripts/ota_publish.py"
         $remoteCmd = @(
             "python3", $remotePublisher,
             "--dev", $Dev,
-            "--cmd-node", "$cmdNode/sys",
+            "--cmd-node", $otaCmdNode,
             "--http-host", $deviceHttpHost,
             "--version", $ver,
             "--target", $Dev,
