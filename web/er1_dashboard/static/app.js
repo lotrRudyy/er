@@ -47,6 +47,19 @@ function renderPlayers() {
   });
 }
 
+function renderControllers() {
+  const wrap = document.getElementById('controllersList');
+  wrap.innerHTML = '';
+  for (const item of state.controllers || []) {
+    const el = document.createElement('div');
+    el.className = 'controller-chip ' + (item.online ? 'online' : 'offline');
+    const fw = item.fw ? ` · fw ${item.fw}` : '';
+    const up = Number.isFinite(item.up) ? ` · up ${item.up}s` : '';
+    el.textContent = `${item.label}: ${item.online ? 'online' : 'offline'}${fw}${up}`;
+    wrap.appendChild(el);
+  }
+}
+
 function renderLocks() {
   const names = document.getElementById('locksNamesRow');
   const buttons = document.getElementById('locksButtonsRow');
@@ -166,6 +179,7 @@ function renderTop() {
 
 function renderAll() {
   renderTop();
+  renderControllers();
   renderLocks();
   renderLights();
   renderRiddles();

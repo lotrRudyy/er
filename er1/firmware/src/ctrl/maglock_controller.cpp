@@ -96,34 +96,43 @@ bool MaglockController::onCmd(const char* cmd, const char* payload) {
 
 void MaglockController::applyMode(GameMode newMode, const char* reason) {
   if (!ctx_) return;
+
   GameMode old = gameMode_;
+  const bool changed = (old != newMode);
   gameMode_ = newMode;
 
-  if (old != gameMode_) {
+  if (changed) {
     String data = String("{\"from\":\"") + modeName(old) +
                   "\",\"to\":\"" + modeName(gameMode_) + "\"}";
     log("INF", reason && reason[0] ? reason : "gameMode changed", data);
     applyHeartbeatInterval();
     persistGameMode();
-  }
 
-  if (gameMode_ == GameMode::InGame || gameMode_ == GameMode::Prepare) {
-    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
-    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
-  } else {
-    forceAllFailSecureOff("mode_safe");
-
-    if (gameMode_ == GameMode::Maint) {
-      for (auto& lk : locks_) {
-        if (lk.mode != LockMode::FailSecure) continue;
-        lk.cooldown = false;
-        lk.bootGuard = false;
+    if (gameMode_ == GameMode::InGame || gameMode_ == GameMode::Prepare) {
+      if (LockState* r2 = findLockById("r2")) {
+        setFailSafe(*r2, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
       }
-      publishStateSnapshot();
-    }
+      if (LockState* r3 = findLockById("r3")) {
+        setFailSafe(*r3, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
+      }
+    } else {
+      forceAllFailSecureOff("mode_safe");
 
-    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
-    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
+      if (gameMode_ == GameMode::Maint) {
+        for (auto& lk : locks_) {
+          if (lk.mode != LockMode::FailSecure) continue;
+          lk.cooldown = false;
+          lk.bootGuard = false;
+        }
+      }
+
+      if (LockState* r2 = findLockById("r2")) {
+        setFailSafe(*r2, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
+      }
+      if (LockState* r3 = findLockById("r3")) {
+        setFailSafe(*r3, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
+      }
+    }
   }
 
   publishStateSnapshot();

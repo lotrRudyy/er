@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <cstring>
-#include <esp_task_wdt.h>
 
 #include "core_node.h"
 #include "ctrl/lighting_controller.h"
@@ -9,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "62";
+static const char* FW_VERSION = "59";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
@@ -19,7 +18,6 @@ static const IPAddress NET_GW(0, 0, 0, 0);
 static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
-static constexpr uint32_t LOOP_WDT_TIMEOUT_S = 8;
 
 static const char* TOPIC_GAME_STATE = "game/state";
 static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
@@ -33,11 +31,66 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static LightingController lighting;
 
+namespace {
+enum class LoopStage : uint8_t {
+  Boot = 0,
+  BeforeNodeCore,
+  AfterNodeCore,
+  BeforeLightingTick,
+  AfterLightingTick,
+  Idle,
+};
+
+volatile uint32_t gLoopCounter = 0;
+volatile uint32_t gLastLoopStartMs = 0;
+volatile uint32_t gLastLoopEndMs = 0;
+volatile uint32_t gMaxLoopGapMs = 0;
+volatile uint32_t gLastNodeCoreStartMs = 0;
+volatile uint32_t gLastNodeCoreEndMs = 0;
+volatile uint32_t gLastLightingStartMs = 0;
+volatile uint32_t gLastLightingEndMs = 0;
+volatile uint32_t gLastStageChangeMs = 0;
+volatile LoopStage gLoopStage = LoopStage::Boot;
+uint32_t gLastGapWarnMs = 0;
+
+const char* loopStageName(LoopStage s) {
+  switch (s) {
+    case LoopStage::Boot: return "boot";
+    case LoopStage::BeforeNodeCore: return "before_nodecore";
+    case LoopStage::AfterNodeCore: return "after_nodecore";
+    case LoopStage::BeforeLightingTick: return "before_lighting_tick";
+    case LoopStage::AfterLightingTick: return "after_lighting_tick";
+    case LoopStage::Idle: return "idle";
+    default: return "unknown";
+  }
+}
+
+void setLoopStage(LoopStage s, uint32_t nowMs) {
+  gLoopStage = s;
+  gLastStageChangeMs = nowMs;
+}
+
+void appendDiagFields(String& out, uint32_t nowMs) {
+  if (!out.endsWith("}")) return;
+  out.remove(out.length() - 1);
+  out += ",\"diag\":{"n         "\"loop_ctr\":" + String((uint32_t)gLoopCounter) +
+         ",\"loop_last_start\":" + String((uint32_t)gLastLoopStartMs) +
+         ",\"loop_last_end\":" + String((uint32_t)gLastLoopEndMs) +
+         ",\"loop_gap_max\":" + String((uint32_t)gMaxLoopGapMs) +
+         ",\"nodecore_start\":" + String((uint32_t)gLastNodeCoreStartMs) +
+         ",\"nodecore_end\":" + String((uint32_t)gLastNodeCoreEndMs) +
+         ",\"lighting_start\":" + String((uint32_t)gLastLightingStartMs) +
+         ",\"lighting_end\":" + String((uint32_t)gLastLightingEndMs) +
+         ",\"stage\":\"" + String(loopStageName(gLoopStage)) + "\"" +
+         ",\"stage_age_ms\":" + String((uint32_t)(nowMs - gLastStageChangeMs)) +
+         "}}";
+}
+} // namespace
+
 static bool moduleCommandHandler(const char* cmd, const char* payload, void* user) {
   auto* module = static_cast<LightingController*>(user);
   return module ? module->onCmd(cmd, payload) : false;
 }
-
 
 static void gameStateSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
@@ -57,14 +110,18 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
   (void)user;
   ErrorInfo err{};
   buildHeartbeat(out, ctx, err);
+  appendDiagFields(out, millis());
 }
 
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  esp_task_wdt_init(LOOP_WDT_TIMEOUT_S, true);
-  esp_task_wdt_add(nullptr);
+  const uint32_t nowMs = millis();
+  gLastLoopStartMs = nowMs;
+  gLastLoopEndMs = nowMs;
+  gLastStageChangeMs = nowMs;
+  setLoopStage(LoopStage::Boot, nowMs);
 
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;
@@ -115,8 +172,38 @@ void setup() {
 }
 
 void loop() {
-  esp_task_wdt_reset();
+  const uint32_t nowMs = millis();
+  const uint32_t gapMs = (gLastLoopStartMs == 0) ? 0 : (uint32_t)(nowMs - gLastLoopStartMs);
+  gLastLoopStartMs = nowMs;
+  gLoopCounter++;
+  if (gapMs > gMaxLoopGapMs) gMaxLoopGapMs = gapMs;
+
+  if (gapMs > 1500 && (uint32_t)(nowMs - gLastGapWarnMs) > 1000) {
+    gLastGapWarnMs = nowMs;
+    Serial.printf("[lighting][WRN] LOOP_GAP gap=%lu stage=%s stage_age=%lu ctr=%lu\n",
+                  (unsigned long)gapMs,
+                  loopStageName(gLoopStage),
+                  (unsigned long)(nowMs - gLastStageChangeMs),
+                  (unsigned long)gLoopCounter);
+    NodeContext& ctx = nodeCore.context();
+    String data = String("{\"gap_ms\":") + String(gapMs) +
+                  ",\"stage\":\"" + loopStageName(gLoopStage) + "\"" +
+                  ",\"stage_age_ms\":" + String((uint32_t)(nowMs - gLastStageChangeMs)) +
+                  ",\"loop_ctr\":" + String((uint32_t)gLoopCounter) +
+                  "}";
+    ctx.log("WRN", "lighting loop gap", data);
+  }
+
+  setLoopStage(LoopStage::BeforeNodeCore, nowMs);
+  gLastNodeCoreStartMs = nowMs;
   nodeCore.loop();
-  lighting.tick(millis());
-  esp_task_wdt_reset();
+  gLastNodeCoreEndMs = millis();
+
+  const uint32_t afterNodeMs = millis();
+  setLoopStage(LoopStage::BeforeLightingTick, afterNodeMs);
+  gLastLightingStartMs = afterNodeMs;
+  lighting.tick(afterNodeMs);
+  gLastLightingEndMs = millis();
+  setLoopStage(LoopStage::Idle, gLastLightingEndMs);
+  gLastLoopEndMs = gLastLightingEndMs;
 }

@@ -35,7 +35,7 @@ body { padding: 12px; }
 }
 .top-grid {
   display: grid;
-  grid-template-columns: 520px 260px 1fr;
+  grid-template-columns: 420px 240px 360px 1fr;
   gap: 16px;
   align-items: start;
 }
@@ -136,3 +136,23 @@ button:hover { border-color: var(--accent); }
 .riddles-table th:nth-child(6) { width: 70px; }
 .riddles-table th:nth-child(8) { width: 320px; }
 .hint-list { margin-top: 4px; }
+
+.controllers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.controller-chip {
+  border: 1px solid #999;
+  padding: 8px 10px;
+  background: #fafafa;
+  font-size: 15px;
+}
+.controller-chip.online {
+  border-color: #2c8a3d;
+  background: #eef9f0;
+}
+.controller-chip.offline {
+  border-color: #c24b4b;
+  background: #fff1f1;
+}

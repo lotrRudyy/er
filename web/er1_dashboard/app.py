@@ -168,6 +168,7 @@ class DashboardStore:
 
         return {
             "game": self._build_game_summary(game),
+            "controllers": self._build_controller_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, node_last_hb, local_hints),
@@ -195,6 +196,22 @@ class DashboardStore:
             "solved": list(game.get("solved") or []),
             "seq": game.get("seq", 0),
         }
+
+    def _build_controller_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        now_mono = time.monotonic()
+        out = []
+        for node_id, label in [("lighting", "Lighting Controller"), ("maglock", "Maglock Controller")]:
+            last = node_last_hb.get(node_id)
+            online = (last is not None) and (now_mono - last <= 8.0)
+            hb = node_states.get(node_id, {}).get("hb", {})
+            out.append({
+                "id": node_id,
+                "label": label,
+                "online": online,
+                "fw": hb.get("fw") if isinstance(hb, dict) else None,
+                "up": hb.get("up") if isinstance(hb, dict) else None,
+            })
+        return out
 
     def _build_lock_summary(self, locks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
