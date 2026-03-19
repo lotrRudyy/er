@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "maglock";
-static const char* FW_VERSION = "30";
+static const char* FW_VERSION = "29";
 static const char* FW_DESC = "maglock with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x50};
@@ -56,11 +56,6 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   if (module) module->onGameModeMessage(payload);
 }
 
-static void lockCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<MaglockController*>(user);
-  if (module) module->onLockCommandTopic(topic, payload);
-}
 
 static void maglockCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
@@ -117,7 +112,6 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &maglock);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &maglock);
-  nodeCore.registerSubscription(TOPIC_LOCK_CMD, lockCommandSubscription, &maglock);
   nodeCore.registerSubscription(TOPIC_MAGLOCK_CMD, maglockCommandSubscription, &maglock);
 
   NodeContext& ctx = nodeCore.context();

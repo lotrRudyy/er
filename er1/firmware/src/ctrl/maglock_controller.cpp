@@ -101,8 +101,8 @@ void MaglockController::applyMode(GameMode newMode, const char* reason) {
   gameMode_ = newMode;
 
   if (changed) {
-    String data = String("{"from":"") + modeName(old) +
-                  "","to":"" + modeName(gameMode_) + ""}";
+    String data = String("{\"from\":\"") + modeName(old) +
+                  "\",\"to\":\"" + modeName(gameMode_) + "\"}";
     log("INF", reason && reason[0] ? reason : "gameMode changed", data);
     applyHeartbeatInterval();
     persistGameMode();

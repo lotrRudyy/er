@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "54";
+static const char* FW_VERSION = "53";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
@@ -36,11 +36,6 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
   return module ? module->onCmd(cmd, payload) : false;
 }
 
-static void mosfetCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
-  (void)ctx;
-  auto* module = static_cast<LightingController*>(user);
-  if (module) module->onMosfetCommandTopic(topic, payload);
-}
 
 static void gameStateSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
@@ -106,7 +101,6 @@ void setup() {
 
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
-  nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_GAME_STATE, gameStateSubscription, &lighting);
   nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 
