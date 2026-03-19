@@ -66,7 +66,7 @@ LightingController::LightingController() {
     "torch_stiege",
     "torch_r2r3",
     "torch_r2",
-    "uv_bulb"
+    "r3_uv"
   };
   for (size_t i = 0; i < kChannelCount; i++) {
     channels_[i].id = ids[i];
@@ -112,7 +112,6 @@ LightingController::ChannelState* LightingController::findByName(const String& n
   }
   if (n == "r2_schach") return findById("1");
   if (n == "torch_r2_r3") return findById("8");
-  if (n == "uv_light_bulb" || n == "uv") return findById("10");
   return nullptr;
 }
 
@@ -155,7 +154,7 @@ void LightingController::begin(Core::NodeContext& ctx) {
     25,   // torch stiege
     32,   // torch r2-r3
     33,   // torch r2
-    4,    // uv light bulb
+    4,    // r3 uv
   };
 
   constexpr uint32_t kFreqHz = 2000;
@@ -300,6 +299,31 @@ bool LightingController::handleLightingJsonCommand(JsonDocument& doc) {
     changed[(size_t)chB->ledcCh] = setChannel(chB->id, false, 0, true);
     publishChangedStates(changed, "lighting_cmd");
     startFadePair(fade1_, chA->id, chB->id, 0, 0, driver_.maxDuty(), driver_.maxDuty(), durationMs, "fade_in", "fade_in_done");
+    return true;
+  }
+  if (cmd == "FADE_TO") {
+    JsonArray lights = doc["lights"].as<JsonArray>();
+    if (lights.isNull() || lights.size() != 2) return false;
+    String keyA = lights[0].is<const char*>() ? String(lights[0].as<const char*>()) : String();
+    String keyB = lights[1].is<const char*>() ? String(lights[1].as<const char*>()) : String();
+    ChannelState* chA = findByAnyKey(keyA);
+    ChannelState* chB = findByAnyKey(keyB);
+    if (!chA || !chB) return false;
+    int pct = doc["pct"].is<int>() ? doc["pct"].as<int>() : 100;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    uint32_t durationMs = doc["duration_ms"].is<unsigned long>() ? doc["duration_ms"].as<unsigned long>() : 10000UL;
+    startFadePair(
+      fade1_,
+      chA->id, chB->id,
+      chA->on ? chA->duty : 0,
+      chB->on ? chB->duty : 0,
+      percentToDuty((uint32_t)pct),
+      percentToDuty((uint32_t)pct),
+      durationMs,
+      "fade_to",
+      "fade_to_done"
+    );
     return true;
   }
   return false;

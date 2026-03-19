@@ -405,7 +405,13 @@ class GameMaster:
         elif solved_node == "knocking":
             self.publish_maglock_cmd({"cmd": "open", "lock": "knocking"})
         elif solved_node == "candles":
-            self.publish_lighting_cmd({"cmd": "turn_on", "light": "uv_bulb"})
+            self.publish_lighting_cmd({"cmd": "turn_on", "light": "r3_uv"})
+            self.publish_lighting_cmd({
+                "cmd": "fade_to",
+                "lights": ["r3_slider", "r3_cage"],
+                "pct": 25,
+                "duration_ms": 7000,
+            })
         elif solved_node == "star_slider":
             self.publish_maglock_cmd({"cmd": "open", "lock": "slider"})
 
