@@ -1,0 +1,82 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, initial-scale=1.0" />
+  <title>ER1 Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="page">
+    <section class="panel top-panel">
+      <div class="top-grid">
+        <div class="game-box">
+          <div class="label">Game Mode</div>
+          <div id="gameMode" class="value big">MODE_STANDBY</div>
+          <div class="mode-buttons">
+            <button data-mode="MODE_INGAME">Start</button>
+            <button data-mode="MODE_STANDBY">Stop</button>
+            <button data-mode="MODE_PREPARE">Prepare Game</button>
+            <button data-mode="MODE_MAINTENANCE">Maintenance</button>
+          </div>
+        </div>
+
+        <div class="timer-box">
+          <div class="label">Timer</div>
+          <div id="timer" class="value timer">00:00:00</div>
+        </div>
+
+        <div class="players-box">
+          <div class="label">Players</div>
+          <input id="playerInput" class="player-input" type="text" placeholder="Type player name and press Enter" />
+          <div id="playersList" class="players-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="middle-grid">
+      <div class="panel compact-panel">
+        <h2>Locks</h2>
+        <table class="matrix-table">
+          <tbody>
+            <tr id="locksNamesRow"></tr>
+            <tr id="locksButtonsRow"></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel compact-panel">
+        <h2>Lights</h2>
+        <table class="matrix-table">
+          <tbody>
+            <tr id="lightsNamesRow"></tr>
+            <tr id="lightsButtonsRow"></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel riddles-panel">
+      <h2>Riddles</h2>
+      <table class="simple-table riddles-table">
+        <thead>
+          <tr>
+            <th>Riddle</th>
+            <th>Solve</th>
+            <th>Last HB State</th>
+            <th>Solved</th>
+            <th>Solve Time</th>
+            <th>Tries</th>
+            <th>Riddle Info</th>
+            <th>Hints</th>
+          </tr>
+        </thead>
+        <tbody id="riddlesBody"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+
+:root {
+  --bg: #f4f4f4;
+  --panel: #ffffff;
+  --line: #cfcfcf;
+  --text: #111111;
+  --muted: #666666;
+  --accent: #1f4de3;
+  --btn: #f8f8f8;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-width: 1920px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+body { padding: 12px; }
+.page {
+  width: 1896px;
+  min-height: 1056px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 12px;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+.top-grid {
+  display: grid;
+  grid-template-columns: 520px 260px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.label {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.value.big {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.value.timer {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.mode-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+button {
+  appearance: none;
+  border: 1px solid #999;
+  background: var(--btn);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 15px;
+}
+button:hover { border-color: var(--accent); }
+.player-input,
+.hint-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #999;
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.players-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+}
+.player-chip,
+.hint-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #999;
+  padding: 6px 8px;
+  background: #fafafa;
+  margin: 0 6px 6px 0;
+}
+.player-remove,
+.hint-remove {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 20px;
+}
+.middle-grid {
+  display: grid;
+  grid-template-columns: 760px 1fr;
+  gap: 12px;
+}
+.compact-panel h2,
+.riddles-panel h2 {
+  margin: 0 0 10px 0;
+}
+.matrix-table,
+.simple-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.matrix-table th,
+.matrix-table td,
+.simple-table th,
+.simple-table td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  vertical-align: top;
+  font-size: 15px;
+}
+.matrix-table th,
+.simple-table th {
+  text-align: left;
+  background: #f0f0f0;
+}
+.riddles-table th:nth-child(1) { width: 140px; }
+.riddles-table th:nth-child(2) { width: 90px; }
+.riddles-table th:nth-child(3) { width: 180px; }
+.riddles-table th:nth-child(4) { width: 70px; }
+.riddles-table th:nth-child(5) { width: 100px; }
+.riddles-table th:nth-child(6) { width: 70px; }
+.riddles-table th:nth-child(8) { width: 320px; }
+.hint-list { margin-top: 4px; }
