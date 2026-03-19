@@ -56,7 +56,7 @@ private:
   LockState locks_[kLockCount] = {
       {"images", 26, LockMode::FailSecure},
       {"r2", 16, LockMode::FailSafe},
-      {"r2r3", 17, LockMode::FailSafe},
+      {"r3", 17, LockMode::FailSafe},
       {"slider", 33, LockMode::FailSecure},
       {"knocking", 25, LockMode::FailSecure},
   };

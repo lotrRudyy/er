@@ -201,7 +201,6 @@ void MaglockController::publishLockState(const LockState& lk, const char* reason
 MaglockController::LockState* MaglockController::findLockById(const String& id) {
   for (auto& lk : locks_) {
     if (id.equalsIgnoreCase(lk.id)) return &lk;
-    if (lk.id && String(lk.id).equalsIgnoreCase("r2r3") && id.equalsIgnoreCase("r3")) return &lk;
   }
   return nullptr;
 }
@@ -224,20 +223,20 @@ void MaglockController::applyModeDefaults(const char* reason) {
   if (gameMode_ == GameMode::ModeMaintenance) {
     forceAllFailSecureOff(reason);
     if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, reason);
-    if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, false, reason);
+    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, false, reason);
     return;
   }
 
   if (gameMode_ == GameMode::ModePrepare || gameMode_ == GameMode::ModeInGame) {
     forceAllFailSecureOff(reason);
     if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, true, reason);
-    if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, true, reason);
+    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, true, reason);
     return;
   }
 
   forceAllFailSecureOff(reason);
   if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, false, reason);
-  if (LockState* r2r3 = findLockById("r2r3")) setFailSafe(*r2r3, false, reason);
+  if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, false, reason);
 }
 
 void MaglockController::setGameModeInternal(GameMode newMode, const char* reason) {

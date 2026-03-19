@@ -153,17 +153,17 @@ class GameMaster:
     def _apply_controller_defaults_for_mode(self, mode: GameMode) -> None:
         if mode == GameMode.MODE_MAINTENANCE:
             self.publish_lighting_cmd({"cmd": "all_on"})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r2r3"], "enabled": False})
+            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": False})
         elif mode == GameMode.MODE_STANDBY:
             self.publish_lighting_cmd({"cmd": "all_on"})
             self.publish_maglock_cmd({"cmd": "set_mode", "mode": mode.value})
         elif mode == GameMode.MODE_PREPARE:
             self.publish_lighting_cmd({"cmd": "all_on"})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r2r3"], "enabled": True})
+            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": True})
         elif mode == GameMode.MODE_INGAME:
             self.publish_lighting_cmd({"cmd": "all_off"})
             self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": list(config.INGAME_START_LIGHTS_ON)})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r2r3"], "enabled": True})
+            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": True})
 
     def _start_new_run(self) -> None:
         now = utc_now()
@@ -395,7 +395,7 @@ class GameMaster:
                 ]
             })
         elif solved_node == "chess":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "r2r3"})
+            self.publish_maglock_cmd({"cmd": "open", "lock": "r3"})
             self.schedule_in(5.0, "lighting_batch", {
                 "commands": [
                     {"cmd": "turn_on", "light": "torch_r2r3"},
