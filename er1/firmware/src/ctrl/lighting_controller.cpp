@@ -30,6 +30,7 @@ bool parseIntLoose(const String& s, int32_t& out) {
   String t = s;
   t.trim();
   if (!t.length()) return false;
+
   int idx = t.indexOf(' ');
   if (idx < 0) idx = t.indexOf(':');
   if (idx < 0) idx = t.indexOf('=');
@@ -37,6 +38,7 @@ bool parseIntLoose(const String& s, int32_t& out) {
     t = t.substring(idx + 1);
     t.trim();
   }
+
   char* endp = nullptr;
   long v = strtol(t.c_str(), &endp, 10);
   if (endp == t.c_str()) return false;
@@ -52,6 +54,7 @@ LightingController::LightingController() {
     "r2_chess", "r2_schronk", "r1_bild", "r1_stuen", "r3_slider",
     "r3_cage", "torch_stiege", "torch_r2r3", "torch_r2", "r3_uv",
   };
+
   for (size_t i = 0; i < kChannelCount; i++) {
     channels_[i].id = ids[i];
     channels_[i].name = names[i];
@@ -87,20 +90,24 @@ void LightingController::log(const char* level, const String& msg, const String&
 
 bool LightingController::parseChannelIdFromTopic(const String& topic, String& outId) const {
   if (!topic.startsWith(kCmdPrefix) || !topic.endsWith(kCmdSuffix)) return false;
-  int start = strlen(kCmdPrefix);
-  int end = topic.length() - strlen(kCmdSuffix);
+  int start = (int)strlen(kCmdPrefix);
+  int end = topic.length() - (int)strlen(kCmdSuffix);
   if (end <= start) return false;
   outId = topic.substring(start, end);
   return outId.length() > 0;
 }
 
 LightingController::ChannelState* LightingController::findById(const String& id) {
-  for (size_t i = 0; i < kChannelCount; i++) if (id.equalsIgnoreCase(channels_[i].id)) return &channels_[i];
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (id.equalsIgnoreCase(channels_[i].id)) return &channels_[i];
+  }
   return nullptr;
 }
 
 LightingController::ChannelState* LightingController::findByName(const String& name) {
-  for (size_t i = 0; i < kChannelCount; i++) if (name.equalsIgnoreCase(channels_[i].name)) return &channels_[i];
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (name.equalsIgnoreCase(channels_[i].name)) return &channels_[i];
+  }
   return nullptr;
 }
 
@@ -136,9 +143,11 @@ void LightingController::applyOutput(ChannelState& ch) {
 
 bool LightingController::setChannel(size_t index, bool on, uint32_t duty, bool preserveZeroDutyWhenOn) {
   if (index >= kChannelCount) return false;
+
   ChannelState& ch = channels_[index];
   duty = clampDuty(duty);
   if (on && duty == 0 && !preserveZeroDutyWhenOn) duty = driver_.maxDuty();
+
   const bool changed = (ch.on != on) || (ch.duty != duty);
   ch.on = on;
   ch.duty = duty;
@@ -156,6 +165,7 @@ void LightingController::stopAllFades() {
 
 void LightingController::startFade(size_t index, uint32_t toDuty, uint32_t durationMs, const char* reason) {
   if (index >= kChannelCount) return;
+
   FadeState& fade = fades_[index];
   ChannelState& ch = channels_[index];
   fade.active = true;
@@ -165,49 +175,64 @@ void LightingController::startFade(size_t index, uint32_t toDuty, uint32_t durat
   fade.fromDuty = ch.on ? ch.duty : 0;
   fade.toDuty = clampDuty(toDuty);
   fade.reason = reason;
+
   ch.on = true;
   applyOutput(ch);
 }
 
 void LightingController::updateFade(FadeState& fade, uint32_t nowMs) {
   if (!fade.active) return;
+
   const uint32_t elapsed = (uint32_t)(nowMs - fade.startMs);
   const uint32_t duration = fade.durationMs == 0 ? 1 : fade.durationMs;
   uint32_t duty = fade.toDuty;
+
   if (elapsed < duration) {
-    if (fade.toDuty >= fade.fromDuty) duty = fade.fromDuty + (uint32_t)(((uint64_t)(fade.toDuty - fade.fromDuty) * elapsed) / duration);
-    else duty = fade.fromDuty - (uint32_t)(((uint64_t)(fade.fromDuty - fade.toDuty) * elapsed) / duration);
+    if (fade.toDuty >= fade.fromDuty) {
+      duty = fade.fromDuty + (uint32_t)(((uint64_t)(fade.toDuty - fade.fromDuty) * elapsed) / duration);
+    } else {
+      duty = fade.fromDuty - (uint32_t)(((uint64_t)(fade.fromDuty - fade.toDuty) * elapsed) / duration);
+    }
   } else {
     fade.active = false;
   }
+
   const bool on = duty > 0 || fade.toDuty > 0;
-  if (setChannel(fade.index, on, duty, true)) markDirty(fade.index, fade.reason ? fade.reason : "fade");
+  if (setChannel(fade.index, on, duty, true)) {
+    markDirty(fade.index, fade.reason ? fade.reason : "fade");
+  }
 }
 
 void LightingController::publishChannelState(const ChannelState& ch, const char* reason) {
   if (!ctx_) return;
+
   const uint32_t max = driver_.maxDuty();
   const uint32_t pct = (max == 0) ? 0 : (uint32_t)((ch.duty * (uint64_t)100 + (max / 2)) / max);
+
   String payload = String("{\"fw\":\"") + ctx_->fwVersion() +
                    "\",\"up\":" + String(millis() / 1000) +
-                   "\",\"id\":\"" + ch.id +
+                   ",\"id\":\"" + ch.id +
                    "\",\"light\":\"" + ch.name +
                    "\",\"on\":" + String(ch.on ? 1 : 0) +
-                   "\",\"duty\":" + String(ch.duty) +
-                   "\",\"pct\":" + String(pct) +
-                   "\",\"max\":" + String(max);
+                   ",\"duty\":" + String(ch.duty) +
+                   ",\"pct\":" + String(pct) +
+                   ",\"max\":" + String(max);
+
   if (reason && reason[0]) {
     payload += ",\"reason\":\"";
     payload += reason;
     payload += "\"";
   }
+
   payload += "}";
   String topic = makeStateTopic(ch.id);
   publish(topic.c_str(), payload, true);
 }
 
 void LightingController::publishAllStates(const char* reason) {
-  for (size_t i = 0; i < kChannelCount; i++) publishChannelState(channels_[i], reason);
+  for (size_t i = 0; i < kChannelCount; i++) {
+    publishChannelState(channels_[i], reason);
+  }
 }
 
 void LightingController::markDirty(size_t index, const char* reason) {
@@ -248,15 +273,20 @@ void LightingController::cancelBulkCommand() {
   queuedBulkCommand_ = BulkCommand::None;
   bulkIndex_ = 0;
   lastBulkStepMs_ = 0;
+  bulkReason_ = nullptr;
+  bulkTargetOn_ = false;
+  bulkTargetDuty_ = 0;
 }
 
 void LightingController::startBulkCommand(BulkCommand cmd) {
   stopAllFades();
   clearAllPendingChannels();
+
   activeBulkCommand_ = cmd;
   queuedBulkCommand_ = BulkCommand::None;
   bulkIndex_ = 0;
   lastBulkStepMs_ = 0;
+
   switch (cmd) {
     case BulkCommand::AllOn:
       bulkReason_ = "cmd_all_on";
@@ -278,7 +308,11 @@ void LightingController::startBulkCommand(BulkCommand cmd) {
       bulkTargetOn_ = false;
       bulkTargetDuty_ = 0;
       break;
+    case BulkCommand::None:
     default:
+      bulkReason_ = nullptr;
+      bulkTargetOn_ = false;
+      bulkTargetDuty_ = 0;
       break;
   }
 }
@@ -293,16 +327,16 @@ void LightingController::runBulkCommandStep(uint32_t nowMs) {
   }
   if (activeBulkCommand_ == BulkCommand::None) return;
   if (lastBulkStepMs_ != 0 && (uint32_t)(nowMs - lastBulkStepMs_) < kBulkStepGapMs) return;
-  lastBulkStepMs_ = nowMs;
 
-  if (activeBulkCommand_ == BulkCommand::None) return;
+  lastBulkStepMs_ = nowMs;
 
   size_t steps = bulkApplyCountForTick();
   while (steps-- && bulkIndex_ < kChannelCount) {
     const size_t idx = kBulkOrder[bulkIndex_++];
+
     if (activeBulkCommand_ == BulkCommand::SceneInitial) {
-      bool on = (idx == 2 || idx == 3 || idx == 6);
-      uint32_t duty = on ? driver_.maxDuty() : 0;
+      const bool on = (idx == 2 || idx == 3 || idx == 6);
+      const uint32_t duty = on ? driver_.maxDuty() : 0;
       queueChannelTarget(idx, on, duty, bulkReason_ ? bulkReason_ : "bulk", false);
     } else {
       queueChannelTarget(idx, bulkTargetOn_, bulkTargetDuty_, bulkReason_ ? bulkReason_ : "bulk", false);
@@ -316,11 +350,53 @@ void LightingController::runBulkCommandStep(uint32_t nowMs) {
   }
 }
 
+void LightingController::queueChannelTarget(size_t index, bool on, uint32_t duty, const char* reason, bool preserveZeroDutyWhenOn) {
+  if (index >= kChannelCount) return;
+  pendingValid_[index] = true;
+  pendingOn_[index] = on;
+  pendingDuty_[index] = clampDuty(duty);
+  pendingPreserveZero_[index] = preserveZeroDutyWhenOn;
+  pendingReason_[index] = reason;
+}
+
+void LightingController::clearPendingChannel(size_t index) {
+  if (index >= kChannelCount) return;
+  pendingValid_[index] = false;
+  pendingOn_[index] = false;
+  pendingDuty_[index] = 0;
+  pendingPreserveZero_[index] = false;
+  pendingReason_[index] = nullptr;
+}
+
+void LightingController::clearAllPendingChannels() {
+  for (size_t i = 0; i < kChannelCount; i++) {
+    clearPendingChannel(i);
+  }
+}
+
+void LightingController::runPendingChannelStep(uint32_t nowMs) {
+  if (lastPendingStepMs_ != 0 && (uint32_t)(nowMs - lastPendingStepMs_) < kPendingStepGapMs) return;
+
+  for (size_t i = 0; i < kChannelCount; i++) {
+    if (!pendingValid_[i]) continue;
+
+    const bool changed = setChannel(i, pendingOn_[i], pendingDuty_[i], pendingPreserveZero_[i]);
+    const char* reason = pendingReason_[i];
+    clearPendingChannel(i);
+    lastPendingStepMs_ = nowMs;
+
+    if (changed) markDirty(i, reason ? reason : "pending");
+    break;
+  }
+}
+
 void LightingController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
+
   static const uint8_t kPins[kChannelCount] = {16, 17, 21, 22, 14, 26, 25, 32, 33, 4};
   constexpr uint32_t kFreqHz = 2000;
   constexpr uint8_t kResBits = 12;
+
   LightingChannelConfig cfg[kChannelCount];
   for (size_t i = 0; i < kChannelCount; i++) {
     channels_[i].pin = kPins[i];
@@ -329,13 +405,19 @@ void LightingController::begin(Core::NodeContext& ctx) {
     channels_[i].duty = 0;
     cfg[i] = {channels_[i].id, channels_[i].pin, channels_[i].ledcCh};
   }
+
   driver_.begin(cfg, kChannelCount, kFreqHz, kResBits);
-  for (size_t i = 0; i < kChannelCount; i++) applyOutput(channels_[i]);
+
+  for (size_t i = 0; i < kChannelCount; i++) {
+    applyOutput(channels_[i]);
+  }
+
   bootStatePublished_ = false;
   cancelBulkCommand();
   clearAllPendingChannels();
   stopAllFades();
   lastPendingStepMs_ = 0;
+  clearDirty();
 }
 
 void LightingController::tick(uint32_t nowMs) {
@@ -344,9 +426,14 @@ void LightingController::tick(uint32_t nowMs) {
     publishAllStates("boot");
     bootStatePublished_ = true;
   }
+
   runBulkCommandStep(nowMs);
   runPendingChannelStep(nowMs);
-  for (size_t i = 0; i < kChannelCount; i++) updateFade(fades_[i], nowMs);
+
+  for (size_t i = 0; i < kChannelCount; i++) {
+    updateFade(fades_[i], nowMs);
+  }
+
   if (conn) flushDirtyStates(1);
 }
 
@@ -367,10 +454,23 @@ bool LightingController::onCmd(const char* cmd, const char* payload) {
 
   String upper = cmdStr;
   upper.toUpperCase();
-  if (upper == "ALL_ON") { onLightingCommandTopic(String("{\"cmd\":\"all_on\"}")); return true; }
-  if (upper == "ALL_OFF") { onLightingCommandTopic(String("{\"cmd\":\"all_off\"}")); return true; }
-  if (upper == "TURN_ON" && payloadStr.length()) { onLightingCommandTopic(String("{\"cmd\":\"turn_on\",\"light\":\"") + payloadStr + "\"}"); return true; }
-  if (upper == "TURN_OFF" && payloadStr.length()) { onLightingCommandTopic(String("{\"cmd\":\"turn_off\",\"light\":\"") + payloadStr + "\"}"); return true; }
+
+  if (upper == "ALL_ON") {
+    onLightingCommandTopic(String("{\"cmd\":\"all_on\"}"));
+    return true;
+  }
+  if (upper == "ALL_OFF") {
+    onLightingCommandTopic(String("{\"cmd\":\"all_off\"}"));
+    return true;
+  }
+  if (upper == "TURN_ON" && payloadStr.length()) {
+    onLightingCommandTopic(String("{\"cmd\":\"turn_on\",\"light\":\"") + payloadStr + "\"}");
+    return true;
+  }
+  if (upper == "TURN_OFF" && payloadStr.length()) {
+    onLightingCommandTopic(String("{\"cmd\":\"turn_off\",\"light\":\"") + payloadStr + "\"}");
+    return true;
+  }
 
   log("DBG", String("Lighting node cmd ignored: ") + cmdStr + (payloadStr.length() ? String(" ") + payloadStr : String("")));
   return true;
@@ -383,8 +483,10 @@ void LightingController::onGameStateMessage(const String& payload) {
     log("WRN", String("lighting game/state json parse failed: ") + err.c_str());
     return;
   }
+
   String modeS = String((const char*)(doc["mode"] | ""));
   modeS.trim();
+
   if (modeS == "MODE_INGAME") {
     queueBulkCommand(BulkCommand::SceneInitial);
     return;
@@ -393,6 +495,7 @@ void LightingController::onGameStateMessage(const String& payload) {
     queueBulkCommand(BulkCommand::NonIngameAllOn);
     return;
   }
+
   log("WRN", String("lighting unknown mode in game/state: ") + modeS);
 }
 
@@ -409,6 +512,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     if (b && doc[b].is<const char*>()) return String(doc[b].as<const char*>());
     return String();
   };
+
   auto pickInt = [&](const char* a, const char* b = nullptr, int def = 0) -> int {
     if (a && doc[a].is<int>()) return doc[a].as<int>();
     if (b && doc[b].is<int>()) return doc[b].as<int>();
@@ -421,13 +525,28 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     return;
   }
 
-  if (cmd == "ALL_ON") { queueBulkCommand(BulkCommand::AllOn); return; }
-  if (cmd == "ALL_OFF") { queueBulkCommand(BulkCommand::AllOff); return; }
+  if (cmd == "ALL_ON") {
+    queueBulkCommand(BulkCommand::AllOn);
+    return;
+  }
+  if (cmd == "ALL_OFF") {
+    queueBulkCommand(BulkCommand::AllOff);
+    return;
+  }
   if (cmd == "SCENE") {
     String scene = upperTrim(pickString("scene", "SCENE"));
-    if (scene == "INITIAL_INGAME") { queueBulkCommand(BulkCommand::SceneInitial); return; }
-    if (scene == "ALL_ON") { queueBulkCommand(BulkCommand::AllOn); return; }
-    if (scene == "ALL_OFF") { queueBulkCommand(BulkCommand::AllOff); return; }
+    if (scene == "INITIAL_INGAME") {
+      queueBulkCommand(BulkCommand::SceneInitial);
+      return;
+    }
+    if (scene == "ALL_ON") {
+      queueBulkCommand(BulkCommand::AllOn);
+      return;
+    }
+    if (scene == "ALL_OFF") {
+      queueBulkCommand(BulkCommand::AllOff);
+      return;
+    }
     log("WRN", String("unknown lighting scene: ") + scene);
     return;
   }
@@ -443,15 +562,20 @@ void LightingController::onLightingCommandTopic(const String& payload) {
       log("WRN", String("unknown light: ") + light);
       return;
     }
+
     cancelBulkCommand();
     size_t idx = (size_t)ch->ledcCh;
     stopFade(idx);
     clearPendingChannel(idx);
-    if (cmd == "TURN_ON") queueChannelTarget(idx, true, driver_.maxDuty(), "cmd_single", false);
-    else if (cmd == "TURN_OFF") queueChannelTarget(idx, false, 0, "cmd_single", false);
-    else {
+
+    if (cmd == "TURN_ON") {
+      queueChannelTarget(idx, true, driver_.maxDuty(), "cmd_single", false);
+    } else if (cmd == "TURN_OFF") {
+      queueChannelTarget(idx, false, 0, "cmd_single", false);
+    } else {
       int32_t pct = pickInt("pct", "PCT", 100);
-      if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
       queueChannelTarget(idx, true, percentToDuty((uint32_t)pct), "cmd_single", true);
     }
     return;
@@ -464,6 +588,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
       log("WRN", String("turn_on_many requires lights[] payload=") + payload);
       return;
     }
+
     cancelBulkCommand();
     for (JsonVariant v : arr) {
       const char* name = v.as<const char*>();
@@ -485,17 +610,22 @@ void LightingController::onLightingCommandTopic(const String& payload) {
       log("WRN", String(cmd) + " requires lights[] payload=" + payload);
       return;
     }
+
     cancelBulkCommand();
     int pct = pickInt("pct", "PCT", 100);
-    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
     const uint32_t targetDuty = percentToDuty((uint32_t)pct);
     const uint32_t durationMs = (uint32_t)pickInt("duration_ms", "DURATION_MS", 1000);
+
     for (JsonVariant v : arr) {
       const char* name = v.as<const char*>();
       if (!name) continue;
       ChannelState* ch = findLight(String(name));
       if (!ch) continue;
       size_t idx = (size_t)ch->ledcCh;
+
       if (cmd == "FADE_IN") {
         setChannel(idx, true, 0, true);
         startFade(idx, targetDuty, durationMs, "cmd_fade_in");
@@ -516,6 +646,7 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
     log("WRN", String("bad lighting topic: ") + (topic ? topic : ""));
     return;
   }
+
   ChannelState* ch = findById(id);
   if (!ch) {
     log("WRN", String("unknown channel id: ") + id);
@@ -525,32 +656,54 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
   bool handled = false;
   bool on = ch->on;
   uint32_t duty = ch->duty;
+
   JsonDocument doc;
   if (!deserializeJson(doc, payload)) {
     String cmd = upperTrim(String((const char*)(doc["cmd"] | "")));
-    if (cmd == "ON") { on = true; duty = driver_.maxDuty(); handled = true; }
-    else if (cmd == "OFF") { on = false; duty = 0; handled = true; }
-    else if (cmd == "PWM") {
+    if (cmd == "ON") {
+      on = true;
+      duty = driver_.maxDuty();
+      handled = true;
+    } else if (cmd == "OFF") {
+      on = false;
+      duty = 0;
+      handled = true;
+    } else if (cmd == "PWM") {
       int32_t v = 0;
       if (doc["value"].is<int>()) v = doc["value"].as<int>();
       else if (doc["pwm"].is<int>()) v = doc["pwm"].as<int>();
       else if (doc["duty"].is<int>()) v = doc["duty"].as<int>();
-      on = true; duty = mapUserValueToDuty(v); handled = true;
+      on = true;
+      duty = mapUserValueToDuty(v);
+      handled = true;
     }
   }
+
   if (!handled) {
     String p = upperTrim(payload);
-    if (p == "ON") { on = true; duty = driver_.maxDuty(); handled = true; }
-    else if (p == "OFF") { on = false; duty = 0; handled = true; }
-    else {
+    if (p == "ON") {
+      on = true;
+      duty = driver_.maxDuty();
+      handled = true;
+    } else if (p == "OFF") {
+      on = false;
+      duty = 0;
+      handled = true;
+    } else {
       int32_t v = 0;
-      if (parseIntLoose(p, v)) { on = v > 0; duty = mapUserValueToDuty(v); handled = true; }
+      if (parseIntLoose(p, v)) {
+        on = v > 0;
+        duty = mapUserValueToDuty(v);
+        handled = true;
+      }
     }
   }
+
   if (!handled) {
     log("WRN", String("Unrecognized payload on channel ") + id + ": " + payload);
     return;
   }
+
   cancelBulkCommand();
   const size_t idx = (size_t)ch->ledcCh;
   stopFade(idx);

@@ -27,7 +27,13 @@ public:
     const char* reason = nullptr;
   };
 
-  enum class BulkCommand : uint8_t { None = 0, AllOn, AllOff, SceneInitial, NonIngameAllOn };
+  enum class BulkCommand : uint8_t {
+    None = 0,
+    AllOn,
+    AllOff,
+    SceneInitial,
+    NonIngameAllOn,
+  };
 
   LightingController();
 
@@ -84,6 +90,7 @@ private:
   LightingDriver driver_{};
   ChannelState channels_[kChannelCount]{};
   FadeState fades_[kChannelCount]{};
+
   const char* dirtyReasons_[kChannelCount]{};
   bool dirty_[kChannelCount]{};
   bool bootStatePublished_ = false;
