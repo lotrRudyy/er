@@ -70,7 +70,11 @@ private:
   void publishAllStates(const char* reason);
   void publishChangedStates(const bool changed[], const char* reason);
   void markDirty(size_t index, const char* reason);
-  void flushDirtyStates(uint32_t maxCount = 2);
+  void flushDirtyStates(uint32_t maxCount = 1);
+
+  enum class BulkCommand : uint8_t { None = 0, AllOn, AllOff, SceneInitial };
+  void queueBulkCommand(BulkCommand cmd);
+  void runQueuedBulkCommand();
 
 private:
   Core::NodeContext* ctx_ = nullptr;
@@ -81,4 +85,7 @@ private:
   bool dirty_[kChannelCount]{};
   bool bootStatePublished_ = false;
   bool lastMqttConnected_ = false;
+  BulkCommand queuedBulkCommand_ = BulkCommand::None;
+  uint32_t queuedBulkAtMs_ = 0;
+  uint32_t lastBulkApplyMs_ = 0;
 };

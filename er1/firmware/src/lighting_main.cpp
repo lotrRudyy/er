@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "39";
+static const char* FW_VERSION = "43";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};

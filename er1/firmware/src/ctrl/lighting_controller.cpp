@@ -297,6 +297,34 @@ void LightingController::flushDirtyStates(uint32_t maxCount) {
   }
 }
 
+
+void LightingController::queueBulkCommand(BulkCommand cmd) {
+  queuedBulkCommand_ = cmd;
+  queuedBulkAtMs_ = millis();
+}
+
+void LightingController::runQueuedBulkCommand() {
+  if (queuedBulkCommand_ == BulkCommand::None) return;
+  const uint32_t nowMs = millis();
+  if ((uint32_t)(nowMs - lastBulkApplyMs_) < 150) return;
+
+  const BulkCommand cmd = queuedBulkCommand_;
+  queuedBulkCommand_ = BulkCommand::None;
+  lastBulkApplyMs_ = nowMs;
+
+  if (cmd == BulkCommand::AllOn) {
+    applySceneAllOn("cmd_all_on");
+    return;
+  }
+  if (cmd == BulkCommand::AllOff) {
+    applySceneAllOff("cmd_all_off");
+    return;
+  }
+  if (cmd == BulkCommand::SceneInitial) {
+    applySceneInitial("cmd_scene_initial_ingame");
+    return;
+  }
+}
 void LightingController::publishChangedStates(const bool changed[], const char* reason) {
   for (size_t i = 0; i < kChannelCount; i++) {
     if (changed[i]) markDirty(i, reason);
@@ -324,6 +352,9 @@ void LightingController::begin(Core::NodeContext& ctx) {
 
   bootStatePublished_ = false;
   lastMqttConnected_ = false;
+  queuedBulkCommand_ = BulkCommand::None;
+  queuedBulkAtMs_ = 0;
+  lastBulkApplyMs_ = 0;
   stopAllFades();
 }
 
@@ -334,8 +365,9 @@ void LightingController::tick(uint32_t nowMs) {
     bootStatePublished_ = true;
   }
   lastMqttConnected_ = conn;
+  runQueuedBulkCommand();
   for (size_t i = 0; i < kChannelCount; i++) updateFade(fades_[i], nowMs);
-  if (conn) flushDirtyStates(2);
+  if (conn) flushDirtyStates(1);
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
@@ -435,25 +467,25 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   }
 
   if (cmd == "ALL_ON") {
-    applySceneAllOn("cmd_all_on");
+    queueBulkCommand(BulkCommand::AllOn);
     return;
   }
   if (cmd == "ALL_OFF") {
-    applySceneAllOff("cmd_all_off");
+    queueBulkCommand(BulkCommand::AllOff);
     return;
   }
   if (cmd == "SCENE") {
     String scene = upperTrim(pickString("scene", "SCENE"));
     if (scene == "INITIAL_INGAME") {
-      applySceneInitial("cmd_scene_initial_ingame");
+      queueBulkCommand(BulkCommand::SceneInitial);
       return;
     }
     if (scene == "ALL_ON") {
-      applySceneAllOn("cmd_scene_all_on");
+      queueBulkCommand(BulkCommand::AllOn);
       return;
     }
     if (scene == "ALL_OFF") {
-      applySceneAllOff("cmd_scene_all_off");
+      queueBulkCommand(BulkCommand::AllOff);
       return;
     }
     log("WRN", String("unknown lighting scene: ") + scene);
