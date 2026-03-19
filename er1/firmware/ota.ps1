@@ -314,13 +314,13 @@ function Invoke-OtaSingleTarget {
         }
         Write-Host "== HTTP firmware matches uploaded file =="
 
-        Write-Host ("== Triggering OTA on {0}/cmd ==" -f $cmdNode)
+        Write-Host ("== Triggering OTA on {0}/sys/cmd ==" -f $cmdNode)
 
         $remotePublisher = "/home/$piUser/er1/scripts/ota_publish.py"
         $remoteCmd = @(
             "python3", $remotePublisher,
             "--dev", $Dev,
-            "--cmd-node", $cmdNode,
+            "--cmd-node", "$cmdNode/sys",
             "--http-host", $deviceHttpHost,
             "--version", $ver,
             "--target", $Dev,
