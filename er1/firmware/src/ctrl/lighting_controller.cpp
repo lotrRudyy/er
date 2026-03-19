@@ -319,12 +319,38 @@ void LightingController::tick(uint32_t nowMs) {
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
-  String msg(cmd ? cmd : "");
-  if (payload && payload[0]) {
-    msg += " ";
-    msg += payload;
+  String cmdStr = String(cmd ? cmd : "");
+  String payloadStr = String(payload ? payload : "");
+
+  String raw = cmdStr;
+  raw.trim();
+
+  if (!payloadStr.length() && raw.startsWith("{")) {
+    onLightingCommandTopic(raw);
+    return true;
   }
-  log("DBG", String("Lighting node cmd ignored: ") + msg);
+
+  String upper = raw;
+  upper.trim();
+  upper.toUpperCase();
+
+  if (upper == "ALL_ON") {
+    onLightingCommandTopic(String("{\"cmd\":\"all_on\"}"));
+    return true;
+  }
+
+  if (upper == "ALL_OFF") {
+    onLightingCommandTopic(String("{\"cmd\":\"all_off\"}"));
+    return true;
+  }
+
+  if (payloadStr.length()) {
+    String json = String("{\"cmd\":\"") + cmdStr + "\"," + payloadStr + "}";
+    onLightingCommandTopic(json);
+    return true;
+  }
+
+  log("DBG", String("Lighting node cmd ignored: ") + raw);
   return true;
 }
 
@@ -505,7 +531,7 @@ void LightingController::onMosfetCommandTopic(const char* topic, const String& p
         handled = true;
       } else if (doc["on"].is<bool>()) {
         on = doc["on"].as<bool>();
-        duty = on ? max<uint32_t>(ch->duty, driver_.maxDuty()) : 0;
+        duty = on ? max(ch->duty, driver_.maxDuty()) : 0;
         handled = true;
       }
     }
