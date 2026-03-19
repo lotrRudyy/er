@@ -1,6 +1,7 @@
 
 const state = {
   game: { players: [], elapsed_s: 0, started_at: null, ended_at: null, mode: 'MODE_STANDBY' },
+  controllers: [],
   locks: [],
   lights: [],
   riddles: []
@@ -188,6 +189,7 @@ function renderAll() {
 async function refreshState() {
   const data = await api('/api/state');
   state.game = data.game;
+  state.controllers = data.controllers || [];
   state.locks = data.locks;
   state.lights = data.lights;
   state.riddles = data.riddles;
