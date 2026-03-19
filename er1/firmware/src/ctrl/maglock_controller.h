@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 #include "core_node.h"
 #include "maglock_driver.h"
@@ -11,31 +12,32 @@ public:
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
 
-  void onGameStateMessage(const String& payload);
-  void onMaglockCommandTopic(const String& payload);
+  void onGameModeMessage(const String& msg);
   void onLockCommandTopic(const char* topic, const String& payload);
+  void onMaglockCommandTopic(const String& payload);
 
   uint32_t errorCount() const { return errorCount_; }
-  uint32_t currentHeartbeatIntervalMs() const { return 5000; }
+  uint32_t currentHeartbeatIntervalMs() const;
   bool shouldAllowLog(const char* level);
 
 private:
-  enum class GlobalMode : uint8_t {
-    Maintenance = 0,
-    Standby,
+  enum class GameMode : uint8_t {
+    Standby = 0,
     Prepare,
     InGame,
+    Maint
   };
 
   enum class LockMode : uint8_t {
     FailSecure = 0,
-    FailSafe,
+    FailSafe
   };
 
   struct LockState {
-    const char* id = nullptr;
-    uint8_t pin = 0;
-    LockMode mode = LockMode::FailSecure;
+    const char* id;
+    uint8_t pin;
+    LockMode mode;
+
     bool coilOn = false;
     bool pulsing = false;
     bool cooldown = false;
@@ -53,38 +55,45 @@ private:
 
   static constexpr size_t kLockCount = 5;
   LockState locks_[kLockCount] = {
-    {"r2", 16, LockMode::FailSafe},
-    {"r3", 17, LockMode::FailSafe},
-    {"images", 26, LockMode::FailSecure},
-    {"slider", 33, LockMode::FailSecure},
-    {"knocking", 25, LockMode::FailSecure},
+      {"images", 26, LockMode::FailSecure},
+      {"r2", 16, LockMode::FailSafe},
+      {"r3", 17, LockMode::FailSafe},
+      {"slider", 33, LockMode::FailSecure},
+      {"knocking", 25, LockMode::FailSecure},
   };
 
+  void applyMode(GameMode newMode, const char* reason);
+  static const char* modeName(GameMode mode);
   void applyLockOutput(LockState& lk);
   const char* lockStateName(const LockState& lk) const;
-  LockState* findLockById(const String& id);
-
   void publishLockState(const LockState& lk, const char* reason);
-  void publishStateSnapshot(const char* reason);
-
-  void setFailSafe(LockState& lk, bool locked, const char* reason);
+  void publishStateSnapshot();
+  LockState* findLockById(const String& id);
   void startPulse(LockState& lk, const char* reason);
-  void forceFailSecureSafe(const char* reason);
-  void applyModeDefaults(GlobalMode mode, const char* reason);
+  void setFailSafe(LockState& lk, bool locked, const char* reason);
   void updatePulseTimers(uint32_t nowMs);
   void publishMetricsIfDue(uint32_t nowMs);
+  void handleLockCommand(LockState& lk, const String& cmd);
+  void handleLockCommandTopicInternal(const String& topic, const String& payload);
 
-  void handleSingleLockCommand(LockState& lk, const String& cmd, const char* reason);
-  void handleLegacyLockCommandTopicInternal(const String& topic, const String& payload);
+  void forceAllFailSecureOff(const char* reason);
+  void persistGameMode();
+  void loadGameMode();
 
+  uint32_t hbIntervalForMode(GameMode mode) const;
+  void applyHeartbeatInterval();
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
+  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
+               const char* id = nullptr, bool retained = false) const;
   bool publish(const char* topic, const String& payload, bool retained = false) const;
 
   Core::NodeContext* ctx_ = nullptr;
-  MaglockDriver driver_{};
-  GlobalMode mode_ = GlobalMode::Standby;
+  MaglockDriver driver_;
+  Preferences* prefs_ = nullptr;
+  GameMode gameMode_ = GameMode::Standby;
   uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
+  String topicDbg_;
 };
