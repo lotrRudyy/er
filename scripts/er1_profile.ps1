@@ -44,13 +44,39 @@ $er1LogDevices = @(
 # Adjust to your real lock IDs; these are NOT necessarily firmware device names.
 $er1LockIds = @(
     "images",
+    "r2",
+    "r3",
+    "slider",
+    "knocking"
+)
+
+# ---- Light IDs ----
+$er1LightIds = @(
+    "r2_chess",
+    "r2_schronk",
+    "r1_bild",
+    "r1_stuen",
+    "r3_slider",
+    "r3_cage",
+    "torch_stiege",
+    "torch_r2r3",
+    "torch_r2",
+    "r3_uv"
+)
+
+# ---- Game modes / riddles ----
+$er1GameModes = @("maintenance","standby","prepare","ingame")
+$er1SolveIds = @(
+    "images",
     "piano",
+    "chains",
+    "tangram",
+    "magnet",
     "chess",
-    "knocking",
     "candles",
+    "knocking",
     "star_sky",
-    "star_slider",
-    "stop_timer"
+    "star_slider"
 )
 
 # ---- Command help strings ----
@@ -61,10 +87,10 @@ $er1Commands = [ordered]@{
     "logs"   = "Pi-side MQTT view (pretty dashboard)"
     "ota"    = "Upload firmware to a device via ota.ps1"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
+    "light"  = "Control lights: er1 light <light...> on|off|25%"
+    "mode"   = "Set game mode: er1 mode maintenance|ingame|prepare|standby"
+    "solve"  = "Mark riddle solved: er1 solve <riddle id>"
     "mqtt"   = "MQTT ops: er1 mqtt status|restart|logs"
-    "status" = "One-shot health summary"
-    "doctor" = "Collect diagnostic bundle to logs/"
-    "reset"  = "Reset riddles (all or one): er1 reset all | er1 reset <riddle>"
     "push"   = "Git add/commit/push from repo root"
     "commit" = "Legacy alias for 'er1 push'"
 }
@@ -477,6 +503,79 @@ function Invoke-Er1LogExtract {
     }
 }
 
+
+function Invoke-Er1Mode {
+    param([Parameter(Mandatory=$true)][string]$Mode)
+    $modeKey = $Mode.ToLowerInvariant()
+    $map = @{
+        "maintenance" = "MODE_MAINTENANCE"
+        "standby"     = "MODE_STANDBY"
+        "prepare"     = "MODE_PREPARE"
+        "ingame"      = "MODE_INGAME"
+    }
+    if (-not $map.ContainsKey($modeKey)) {
+        throw "Usage: er1 mode maintenance|ingame|prepare|standby"
+    }
+    $payload = (@{ cmd = "set_mode"; mode = $map[$modeKey] } | ConvertTo-Json -Compress)
+    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'game/cmd' -m '$payload'"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to publish game mode (exit $LASTEXITCODE)." }
+}
+
+function Invoke-Er1Solve {
+    param([Parameter(Mandatory=$true)][string]$Riddle)
+    $node = $Riddle.Trim()
+    if ([string]::IsNullOrWhiteSpace($node)) { throw "Usage: er1 solve <riddle id>" }
+    $payload = (@{ cmd = "solve"; node = $node } | ConvertTo-Json -Compress)
+    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'game/cmd' -m '$payload'"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to publish solve for $node (exit $LASTEXITCODE)." }
+}
+
+function Invoke-Er1Light {
+    param([Parameter(Mandatory=$true)][string[]]$Args)
+    if (-not $Args -or $Args.Count -lt 2) {
+        throw "Usage: er1 light <light...> on|off|25%"
+    }
+    $actionRaw = $Args[-1].Trim().ToLowerInvariant()
+    $lights = @($Args[0..($Args.Count - 2)])
+    if (-not $lights -or $lights.Count -lt 1) {
+        throw "Usage: er1 light <light...> on|off|25%"
+    }
+
+    if ($actionRaw -eq "on" -or $actionRaw -eq "off") {
+        if ($lights.Count -eq 1) {
+            $payload = if ($actionRaw -eq "on") {
+                @{ cmd = "turn_on"; light = $lights[0] }
+            } else {
+                @{ cmd = "turn_off"; light = $lights[0] }
+            }
+        } else {
+            $payload = if ($actionRaw -eq "on") {
+                @{ cmd = "turn_on_many"; lights = $lights }
+            } else {
+                @{ cmd = "turn_off_many"; lights = $lights }
+            }
+        }
+        $json = $payload | ConvertTo-Json -Compress
+        ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'lighting/cmd' -m '$json'"
+        if ($LASTEXITCODE -ne 0) { throw "Failed to publish light command (exit $LASTEXITCODE)." }
+        return
+    }
+
+    if ($actionRaw -match '^(\d{1,3})%?$') {
+        $pct = [int]$Matches[1]
+        if ($pct -lt 0 -or $pct -gt 100) { throw "Light percentage must be between 0 and 100." }
+        foreach ($light in $lights) {
+            $json = (@{ cmd = "set"; light = $light; pct = $pct } | ConvertTo-Json -Compress)
+            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'lighting/cmd' -m '$json'"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to publish light set for $light (exit $LASTEXITCODE)." }
+            Start-Sleep -Milliseconds 80
+        }
+        return
+    }
+
+    throw "Usage: er1 light <light...> on|off|25%"
+}
+
 # =========================================================
 # MAIN DISPATCHER
 # =========================================================
@@ -554,13 +653,13 @@ function Invoke-Er1ResetRiddles {
         Start-Sleep -Milliseconds 120
     }
 
-    # Also lock R2 + R3 (these are fail-open / need explicit close on reset)
+    # Also lock R2 + R3 (these are fail-safe / need explicit close on reset)
     foreach ($lockId in @("r2", "r3")) {
-        $lockTopic = "maglock/lock/$lockId/cmd"
-        Write-Host "$prefix -> $lockTopic  CLOSE" -ForegroundColor Cyan
-        ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t '$lockTopic' -m 'CLOSE'"
+        $json = (@{ cmd = "close"; lock = $lockId } | ConvertTo-Json -Compress)
+        Write-Host "$prefix -> maglock/cmd  $json" -ForegroundColor Cyan
+        ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/cmd' -m '$json'"
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to publish CLOSE to $lockTopic (exit $LASTEXITCODE)."
+            throw "Failed to publish close for $lockId to maglock/cmd (exit $LASTEXITCODE)."
         }
         Start-Sleep -Milliseconds 120
     }
@@ -591,20 +690,22 @@ function er1 {
             }
 
             Write-Host "`nLock examples:" -ForegroundColor Cyan
-            Write-Host "  er1 lock images open"
-            Write-Host "  er1 lock images close"
-            Write-Host "  er1 lock all open"
+            Write-Host "  er1 lock r3 open"
+            Write-Host "  er1 lock r3 close"
             Write-Host "  er1 lock all close"
+
+            Write-Host "`nLight examples:" -ForegroundColor Cyan
+            Write-Host "  er1 light r3_uv on"
+            Write-Host "  er1 light torch_r2 torch_r2r3 off"
+            Write-Host "  er1 light r3_cage r3_slider 25%"
+
+            Write-Host "`nMode/Solve examples:" -ForegroundColor Cyan
+            Write-Host "  er1 mode prepare"
+            Write-Host "  er1 mode ingame"
+            Write-Host "  er1 solve chess"
 
             Write-Host "`nOTA examples:" -ForegroundColor Cyan
             Write-Host "  er1 ota images_piano"
-
-            Write-Host "`nStatus/Doctor examples:" -ForegroundColor Cyan
-            Write-Host "  er1 status"
-            Write-Host "  er1 doctor"
-
-            Write-Host "`nReset examples:" -ForegroundColor Cyan
-            Write-Host "  er1 reset all"
 
             Write-Host "`nMQTT examples:" -ForegroundColor Cyan
             Write-Host "  er1 mqtt status"
@@ -632,31 +733,6 @@ function er1 {
             return
         }
 
-        "status" {
-            Invoke-Er1Status
-            return
-        }
-
-        "doctor" {
-            Invoke-Er1Doctor
-            return
-        }
-
-        "reset" {
-            if (-not $cmdArgs -or $cmdArgs.Count -lt 1) {
-                throw "Usage: er1 reset all | er1 reset <riddle> (e.g. er1 reset chess)"
-            }
-
-            $target = $cmdArgs[0].ToLowerInvariant()
-            if ($target -eq "all" -or $target -eq "riddles") {
-                Invoke-Er1ResetRiddles
-                return
-            }
-
-            Invoke-Er1ResetRiddle -Name $target
-            return
-        }
-
         "mqtt" {
             if (-not $cmdArgs -or $cmdArgs.Count -lt 1) { throw "Usage: er1 mqtt status|restart|logs" }
             Invoke-Er1Mqtt -Action $cmdArgs[0]
@@ -681,26 +757,29 @@ function er1 {
 
             $toAction = {
                 param([string]$a)
-                if ($a -eq "open") { return "OPEN" }
-                if ($a -eq "close") { return "CLOSE" }
+                $x = $a.ToLowerInvariant()
+                if ($x -eq "open") { return "open" }
+                if ($x -eq "close") { return "close" }
                 throw "Usage: er1 lock <id> open|close OR er1 lock all open|close"
             }
 
             if ($cmdArgs[0] -eq "all") {
                 $action = & $toAction $cmdArgs[1]
                 foreach ($id in $er1LockIds) {
-                    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/$id/cmd' -m '$action'"
+                    $json = (@{ cmd = $action; lock = $id } | ConvertTo-Json -Compress)
+                    ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/cmd' -m '$json'"
                 }
                 return
             }
 
             $id = $cmdArgs[0]
             $action2 = & $toAction $cmdArgs[1]
-            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/$id/cmd' -m '$action2'"
+            $json2 = (@{ cmd = $action2; lock = $id } | ConvertTo-Json -Compress)
+            ssh $er1Pi "mosquitto_pub -h 127.0.0.1 -t 'maglock/cmd' -m '$json2'"
             return
         }
 
-                "log" {
+        "log" {
             # Subcommands first
             if ($cmdArgs -and $cmdArgs.Count -gt 0) {
                 $sub = $cmdArgs[0].ToLowerInvariant()
@@ -988,5 +1067,55 @@ Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
         return
+    }
+}
+
+# ---- Autocomplete for light: <light...> and on|off|25% ----
+Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst)
+    $tokens = $commandAst.CommandElements
+    if ($tokens.Count -lt 2) { return }
+    if ($tokens[1].Value -ne "light") { return }
+
+    $lastToken = if ($tokens.Count -gt 0) { $tokens[$tokens.Count - 1].Value } else { "" }
+    $isActionPosition = $false
+    if ($lastToken -match '^(on|off|\d{1,3}%?)$') { $isActionPosition = $true }
+    if ($tokens.Count -ge 4) { $isActionPosition = $true }
+
+    if ($isActionPosition) {
+        @("on","off","25%") |
+            Where-Object { $_ -like "$wordToComplete*" } |
+            ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+        return
+    }
+
+    $er1LightIds |
+        Where-Object { $_ -like "$wordToComplete*" } |
+        ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+}
+
+# ---- Autocomplete for mode ----
+Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst)
+    $tokens = $commandAst.CommandElements
+    if ($tokens.Count -lt 2) { return }
+    if ($tokens[1].Value -ne "mode") { return }
+    if ($tokens.Count -eq 3) {
+        $er1GameModes |
+            Where-Object { $_ -like "$wordToComplete*" } |
+            ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+    }
+}
+
+# ---- Autocomplete for solve ----
+Register-ArgumentCompleter -CommandName er1 -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst)
+    $tokens = $commandAst.CommandElements
+    if ($tokens.Count -lt 2) { return }
+    if ($tokens[1].Value -ne "solve") { return }
+    if ($tokens.Count -eq 3) {
+        $er1SolveIds |
+            Where-Object { $_ -like "$wordToComplete*" } |
+            ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
     }
 }
