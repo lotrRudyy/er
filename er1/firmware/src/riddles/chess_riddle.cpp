@@ -318,8 +318,7 @@ void ChessRiddle::evaluatePattern() {
 
 void ChessRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-
-  publish("game/event", String("{\"node\":\"chess\",\"event\":\"solved\"}"), false);
+  publish("game/event", "{\"node\":\"chess\",\"event\":\"solved\"}", false);
 }
 
 void ChessRiddle::resetState(const char* reason) {

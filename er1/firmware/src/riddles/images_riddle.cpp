@@ -154,13 +154,18 @@ void ImagesRiddle::handleButtonEdge(int idx, bool newState) {
   }
 
   const char* stateStr = newState ? "RELEASED" : "PRESSED";
+  String ev = String("{\"node\":\"images\",\"event\":\"button_state\",\"buttons\":[") +
+              (buttons_[0].cur == LOW ? "1" : "0") + "," +
+              (buttons_[1].cur == LOW ? "1" : "0") + "," +
+              (buttons_[2].cur == LOW ? "1" : "0") + "," +
+              (buttons_[3].cur == LOW ? "1" : "0") + "]}";
+  publish("game/event", ev, false);
   String msg = String("BTN idx=") + idx +
                " pin=" + b.pin +
                " state=" + stateStr +
                " dt=" + dtChange + "ms" +
                " presses=" + b.presses;
   log("INF", msg);
-  publishButtonStateEvent();
   publishState();
 }
 
@@ -255,29 +260,13 @@ void ImagesRiddle::cancelAllDownHold(const char* reason) {
 void ImagesRiddle::publishSolvedEvent(const char* rid) {
   solved_ = true;
   ctx_->prefs().putBool(kImagesSolvedPrefKey, true);
-
-  String data = String("{\"id\":\"") + rid + "\"}";
-  const auto& topics = ctx_->config().topics;
-  if (topics.evt.length() > 0) {
-    publish(topics.evt.c_str(), "riddle_solved", 1, withSrc(data, nodeId_));
-  }
+  String payload = String("{\"node\":\"") + rid + "\",\"event\":\"solved\"}";
+  publish("game/event", payload, false);
   publishState();
   log("INF", String("SOLVED event sent for rid=") + rid);
 }
 
 void ImagesRiddle::openImagesMaglock() {
-  log("INF", "Images lock opening delegated to Pi game master");
-}
-
-void ImagesRiddle::publishButtonStateEvent() {
-  if (!ctx_) return;
-  String data = String("{\"node\":\"images\",\"event\":\"button_state\",\"buttons\":{") +
-         "\"jesus\":" + String(buttons_[3].cur == LOW ? "true" : "false") + "," +
-         "\"blumen\":" + String(buttons_[2].cur == LOW ? "true" : "false") + "," +
-         "\"natur\":" + String(buttons_[0].cur == LOW ? "true" : "false") + "," +
-         "\"puppe\":" + String(buttons_[1].cur == LOW ? "true" : "false") +
-         "}}";
-  publish("game/event", withSrc(data, nodeId_));
 }
 
 void ImagesRiddle::publishState() {
@@ -289,10 +278,8 @@ void ImagesRiddle::publishState() {
 
   String data;
   data.reserve(320);
-  const char* nodeState = solved_ ? "NODE_SOLVED" : (effectiveEnabled ? "NODE_ACTIVE" : "NODE_SLEEPING");
   data = String("{\"id\":\"images\"") +
-         ",\"mode\":\"" + (gameActive_ ? "MODE_INGAME" : "MODE_STANDBY") + "\"" +
-         ",\"state\":\"" + nodeState + "\"" +
+         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
          ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
          ",\"solved\":" + String(solved_ ? "true" : "false") +
          ",\"armed_after_release\":" + String(solveArmedAfterRelease_ ? "true" : "false") +

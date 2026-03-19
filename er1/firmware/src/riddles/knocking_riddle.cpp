@@ -536,7 +536,7 @@ String KnockingRiddle::attemptedSequencesJson() const {
 void KnockingRiddle::publishSolvedEvent() {
   if (!ctx_) return;
   solved_ = true;
-  publish("game/event", String("{\"node\":\"knocking\",\"event\":\"solved\"}"));
+  publish("game/event", "{\"node\":\"knocking\",\"event\":\"solved\"}", false);
   publishState();
 }
 

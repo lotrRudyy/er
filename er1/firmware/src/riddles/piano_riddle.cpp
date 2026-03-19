@@ -113,7 +113,6 @@ bool PianoRiddle::onCmd(const char* cmd, const char* /*payload*/) {
       solved_ = true;
       lastDetection_.solved = true;
       if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
-      openLock();
     }
     if (!solvedPublished_) {
       publishSolvedEvent();
@@ -253,8 +252,7 @@ void PianoRiddle::handleDetectorResult(int accepted, const char* pred, float s1,
 
     if (seqPos_ >= kSequenceLen) {
       if (!solved_) {
-        openLock();
-        solved_ = true;
+          solved_ = true;
         if (prefs_) prefs_->putBool(kPrefsSolvedKey, true);
       }
       lastDetection_.solved = true;
@@ -385,24 +383,10 @@ void PianoRiddle::publishState() {
 
 void PianoRiddle::publishSolvedEvent() {
   if (!ctx_) return;
-  String payload = "{\"id\":\"piano\",\"seq\":";
-  String seq = "[";
-  for (size_t i = 0; i < kSequenceLen; ++i) {
-    if (i > 0) seq += ",";
-    seq += "\"";
-    seq += kSequence[i];
-    seq += "\"";
-  }
-  seq += "]";
-  payload += seq;
-  payload += "}";
-  const auto& topics = ctx_->config().topics;
-  publish("game/event", withSrc(String("{\"node\":\"piano\",\"event\":\"solved\",\"seq\":") + seq + "}", srcId_));
+  publish("game/event", "{\"node\":\"piano\",\"event\":\"solved\"}", false);
 }
 
 void PianoRiddle::openLock() const {
-  if (!ctx_) return;
-  log("INF", "Piano lock opening delegated to Pi game master");
 }
 
 void PianoRiddle::resetProgress(const char* reason) {

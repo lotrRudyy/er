@@ -435,7 +435,8 @@ void StarSliderRiddle::handleButton(uint32_t nowMs) {
 
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
-  publish("game/event", String("{\"node\":\"star_slider\",\"event\":\"solved\",\"attempt\":") + String(attemptIdx) + "}");
+  String payload = String("{\"node\":\"star_slider\",\"event\":\"solved\",\"attempt\":") + attemptIdx + "}";
+  publish("game/event", payload, false);
 }
 
 void StarSliderRiddle::publishMetricsIfDue(uint32_t nowMs) {

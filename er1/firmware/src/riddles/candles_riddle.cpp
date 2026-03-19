@@ -6,7 +6,8 @@
 void CandlesRiddle::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   const char* node = ctx.nodeId() ? ctx.nodeId() : "candles";
-    topicCmdStarSky_ = Core::topic("star_sky", "cmd");
+  topicEvent_ = Core::topic(node, "evt");
+  topicCmdStarSky_ = Core::topic("star_sky", "cmd");
   topicCmdLighting_ = Core::topic("lighting", "cmd");
   for (int i = 0; i < 4; i++) {
     pinMode(kLedPins[i], OUTPUT);
@@ -436,10 +437,7 @@ void CandlesRiddle::resetAll() {
 void CandlesRiddle::publishSolvedEvent() {
   if (solvedEventSent_) return;
   if (!ctx_) return;
-  String payload = "{\"event\":\"SOLVED\",\"rid\":\"candles\"}";
-  publish(topicEvent_.c_str(), payload);
-  publish(topicCmdStarSky_.c_str(), "CANDLES_SOLVED");
-  publish(topicCmdLighting_.c_str(), "CANDLES_SOLVED");
+  publish("game/event", "{\"node\":\"candles\",\"event\":\"solved\"}", false);
   solvedEventSent_ = true;
 }
 
