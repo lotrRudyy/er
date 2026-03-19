@@ -123,8 +123,10 @@ class GameMaster:
         if previous_mode == GameMode.MODE_INGAME and new_mode == GameMode.MODE_STANDBY:
             self._finalize_current_run()
 
-        if new_mode == GameMode.MODE_INGAME:
-            self._start_new_run()
+        if new_mode == GameMode.MODE_PREPARE:
+            self._prepare_new_run()
+        elif new_mode == GameMode.MODE_INGAME:
+            self._start_run_timer()
 
         with self._lock:
             self.state.mode = new_mode
@@ -165,19 +167,42 @@ class GameMaster:
             self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": list(config.INGAME_START_LIGHTS_ON)})
             self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": True})
 
-    def _start_new_run(self) -> None:
+    def _new_run_shell(self, players: list[str] | None = None) -> CurrentRun:
         now = utc_now()
         run = CurrentRun(
             run_id=f"run_{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}",
             date=now.date().isoformat(),
             started_at=now.isoformat(timespec="seconds"),
             started_monotonic=time.monotonic(),
+            players=list(players or []),
         )
         for node in config.RIDDLES:
             source = "manual" if node in config.MANUAL_RIDDLES else "node"
             run.riddle_timings[node] = RiddleTiming(node=node, source=source)
+        return run
+
+    def _prepare_new_run(self) -> None:
         with self._lock:
-            self.state.current_run = run
+            players = list(self.state.current_run.players) if self.state.current_run is not None else []
+            self.state.current_run = self._new_run_shell(players)
+
+    def _start_run_timer(self) -> None:
+        with self._lock:
+            if self.state.current_run is None:
+                self.state.current_run = self._new_run_shell()
+            run = self.state.current_run
+            now = utc_now()
+            run.date = now.date().isoformat()
+            run.started_at = now.isoformat(timespec="seconds")
+            run.started_monotonic = time.monotonic()
+            run.ended_at = None
+            run.duration_s = None
+            run.hints.clear()
+            run.events.clear()
+            run.riddle_timings.clear()
+            for node in config.RIDDLES:
+                source = "manual" if node in config.MANUAL_RIDDLES else "node"
+                run.riddle_timings[node] = RiddleTiming(node=node, source=source)
 
     def _finalize_current_run(self) -> None:
         with self._lock:
@@ -309,8 +334,9 @@ class GameMaster:
         cleaned = [p.strip() for p in players if p.strip()]
         with self._lock:
             if self.state.current_run is None:
-                self._start_new_run()
-            self.state.current_run.players = cleaned
+                self.state.current_run = self._new_run_shell(cleaned)
+            else:
+                self.state.current_run.players = cleaned
         self._record_event("players_updated", {"players": cleaned})
         self.publish_game_state()
 

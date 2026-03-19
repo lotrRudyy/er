@@ -7,13 +7,11 @@
 
 using namespace Core;
 
-// ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "lighting";
-static const char* FW_VERSION = "29";
+static const char* FW_VERSION = "30";
 static const char* FW_DESC = "lighting controller (10x mosfet pwm incl. uv)";
 
-// ======================= NETWORK CONFIG ======================
-static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};  // must stay unique
+static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x54};
 static const IPAddress NET_IP(192, 168, 0, 12);
 static const IPAddress NET_DNS(0, 0, 0, 0);
 static const IPAddress NET_GW(0, 0, 0, 0);
@@ -21,20 +19,16 @@ static const IPAddress NET_SUBNET(255, 255, 255, 0);
 static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
-// ======================= TOPICS ==============================
 static const char* TOPIC_MOSFET_CMD = "lighting/mosfet/+/cmd";
-static const char* TOPIC_GAME = "game/state";
-static const char* TOPIC_IMAGES_PIANO_EVT = "images_piano/evt";
-static const char* TOPIC_CHESS_EVT = "chess/evt";
+static const char* TOPIC_GAME_STATE = "game/state";
+static const char* TOPIC_LIGHTING_CMD = "lighting/cmd";
 
-// ======================= OTA CONFIG ==========================
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
 static const char* OTA_PATH = "/node_firmware/lighting.bin";
 static const char* OTA_PATH_PREFIX = "/node_firmware/";
 static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 
-// ======================= SERIAL DEBUG =========================
 #ifndef LIGHTING_SERIAL_DEBUG
 #define LIGHTING_SERIAL_DEBUG 1
 #endif
@@ -45,24 +39,6 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
   #define SDBG(fmt, ...) do {} while(0)
 #endif
 
-static void printIp(const char* label, const IPAddress& ip) {
-#if LIGHTING_SERIAL_DEBUG
-  Serial.printf("[lighting] %s %u.%u.%u.%u\n", label, ip[0], ip[1], ip[2], ip[3]);
-#else
-  (void)label; (void)ip;
-#endif
-}
-
-static void printMac(const uint8_t mac[6]) {
-#if LIGHTING_SERIAL_DEBUG
-  Serial.printf("[lighting] MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-#else
-  (void)mac;
-#endif
-}
-
-// ======================= CORE + MODULE =======================
 static NodeCore nodeCore;
 static LightingController lighting;
 
@@ -77,26 +53,26 @@ static void mosfetCommandSubscription(NodeContext& ctx, const char* topic, const
   if (module) module->onMosfetCommandTopic(topic, payload);
 }
 
-static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+static void gameStateSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
+  (void)topic;
   auto* module = static_cast<LightingController*>(user);
-  if (module) module->onGameModeMessage(payload);
+  if (module) module->onGameStateMessage(payload);
 }
 
-static void eventSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
+static void lightingCommandSubscription(NodeContext& ctx, const char* topic, const String& payload, void* user) {
   (void)ctx;
+  (void)topic;
   auto* module = static_cast<LightingController*>(user);
-  if (module) module->onEventTopic(topic, payload);
+  if (module) module->onLightingCommandTopic(payload);
 }
 
-// ✅ Heartbeat builder REQUIRED, otherwise hb stays "offline" (LWT only)
-static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*user*/) {
-  // If you later expose error count from LightingController, set err.count here.
+static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
+  (void)user;
   ErrorInfo err{};
   buildHeartbeat(out, ctx, err);
 }
 
-// ======================= ARDUINO LIFECYCLE ===================
 void setup() {
 #if LIGHTING_SERIAL_DEBUG
   Serial.begin(115200);
@@ -104,18 +80,6 @@ void setup() {
   Serial.println();
   SDBG("BOOT setup()");
   SDBG("FW v%s - %s", FW_VERSION, FW_DESC);
-  SDBG("reset=%s", resetReasonShort());
-  printMac(MAC_ADDR);
-  printIp("IP     ", NET_IP);
-  printIp("SUBNET ", NET_SUBNET);
-  printIp("GW     ", NET_GW);
-  printIp("DNS    ", NET_DNS);
-  printIp("MQTT   ", MQTT_SERVER);
-  SDBG("MQTT port %u", (unsigned)MQTT_PORT);
-  SDBG("Sub topic: %s", TOPIC_MOSFET_CMD);
-  SDBG("Sub topic: %s", TOPIC_GAME);
-  SDBG("Sub topic: %s", TOPIC_IMAGES_PIANO_EVT);
-  SDBG("Sub topic: %s", TOPIC_CHESS_EVT);
 #endif
 
   NodeCoreConfig cfg;
@@ -136,7 +100,6 @@ void setup() {
   cfg.topics = makeTopicConfig(cfg.nodeId);
   cfg.log.format = LogFormat::FwUptimeLevelMsg;
 
-  // ✅ ENABLE HEARTBEAT (this makes lighting/hb overwrite the retained "offline")
   cfg.heartbeat.intervalMs = 5000;
   cfg.heartbeat.builder = heartbeatBuilder;
   cfg.heartbeat.user = &lighting;
@@ -157,36 +120,15 @@ void setup() {
   cfg.ota.infoLevel = "INF";
   cfg.ota.errLevel = "ERR";
 
-#if LIGHTING_SERIAL_DEBUG
-  SDBG("nodeCore.begin()");
-#endif
   nodeCore.begin(cfg);
-
-#if LIGHTING_SERIAL_DEBUG
-  SDBG("registerCommandHandler()");
-#endif
   nodeCore.registerCommandHandler(moduleCommandHandler, &lighting);
-
-#if LIGHTING_SERIAL_DEBUG
-  SDBG("registerSubscription(%s)", TOPIC_MOSFET_CMD);
-#endif
   nodeCore.registerSubscription(TOPIC_MOSFET_CMD, mosfetCommandSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_IMAGES_PIANO_EVT, eventSubscription, &lighting);
-  nodeCore.registerSubscription(TOPIC_CHESS_EVT, eventSubscription, &lighting);
+  nodeCore.registerSubscription(TOPIC_GAME_STATE, gameStateSubscription, &lighting);
+  nodeCore.registerSubscription(TOPIC_LIGHTING_CMD, lightingCommandSubscription, &lighting);
 
   NodeContext& ctx = nodeCore.context();
-
-#if LIGHTING_SERIAL_DEBUG
-  SDBG("lighting.begin()");
-#endif
   lighting.begin(ctx);
-
   ctx.log("INF", String("BOOT FW=") + FW_DESC + " rst=" + String(resetReasonShort()));
-
-#if LIGHTING_SERIAL_DEBUG
-  SDBG("setup() done");
-#endif
 }
 
 void loop() {
