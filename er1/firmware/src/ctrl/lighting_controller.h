@@ -69,12 +69,16 @@ private:
   void publishChannelState(const ChannelState& ch, const char* reason);
   void publishAllStates(const char* reason);
   void publishChangedStates(const bool changed[], const char* reason);
+  void markDirty(size_t index, const char* reason);
+  void flushDirtyStates(uint32_t maxCount = 2);
 
 private:
   Core::NodeContext* ctx_ = nullptr;
   LightingDriver driver_{};
   ChannelState channels_[kChannelCount]{};
   FadeState fades_[kChannelCount]{};
+  const char* dirtyReasons_[kChannelCount]{};
+  bool dirty_[kChannelCount]{};
   bool bootStatePublished_ = false;
   bool lastMqttConnected_ = false;
 };

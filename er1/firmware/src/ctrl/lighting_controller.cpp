@@ -73,6 +73,8 @@ LightingController::LightingController() {
     channels_[i].id = ids[i];
     channels_[i].name = names[i];
     fades_[i].index = i;
+    dirtyReasons_[i] = nullptr;
+    dirty_[i] = false;
   }
 }
 
@@ -216,7 +218,7 @@ void LightingController::updateFade(FadeState& fade, uint32_t nowMs) {
   ChannelState& ch = channels_[fade.index];
   const bool on = duty > 0 || fade.toDuty > 0;
   if (setChannel(fade.index, on, duty, true)) {
-    publishChannelState(ch, fade.reason ? fade.reason : "fade");
+    markDirty(fade.index, fade.reason ? fade.reason : "fade");
   }
 }
 
@@ -278,9 +280,26 @@ void LightingController::publishAllStates(const char* reason) {
   for (size_t i = 0; i < kChannelCount; i++) publishChannelState(channels_[i], reason);
 }
 
+void LightingController::markDirty(size_t index, const char* reason) {
+  if (index >= kChannelCount) return;
+  dirty_[index] = true;
+  dirtyReasons_[index] = reason;
+}
+
+void LightingController::flushDirtyStates(uint32_t maxCount) {
+  uint32_t sent = 0;
+  for (size_t i = 0; i < kChannelCount && sent < maxCount; i++) {
+    if (!dirty_[i]) continue;
+    dirty_[i] = false;
+    publishChannelState(channels_[i], dirtyReasons_[i] ? dirtyReasons_[i] : "state");
+    dirtyReasons_[i] = nullptr;
+    ++sent;
+  }
+}
+
 void LightingController::publishChangedStates(const bool changed[], const char* reason) {
   for (size_t i = 0; i < kChannelCount; i++) {
-    if (changed[i]) publishChannelState(channels_[i], reason);
+    if (changed[i]) markDirty(i, reason);
   }
 }
 
@@ -316,6 +335,7 @@ void LightingController::tick(uint32_t nowMs) {
   }
   lastMqttConnected_ = conn;
   for (size_t i = 0; i < kChannelCount; i++) updateFade(fades_[i], nowMs);
+  if (conn) flushDirtyStates(2);
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
