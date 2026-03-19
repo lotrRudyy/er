@@ -319,142 +319,44 @@ void LightingController::tick(uint32_t nowMs) {
 }
 
 bool LightingController::onCmd(const char* cmd, const char* payload) {
-  String rawCmd = String(cmd ? cmd : "");
-  String rawPayload = String(payload ? payload : "");
-  rawCmd.trim();
-  rawPayload.trim();
+  String cmdStr = String(cmd ? cmd : "");
+  String payloadStr = String(payload ? payload : "");
+  cmdStr.trim();
+  payloadStr.trim();
 
-  if (!rawCmd.length()) {
+  // NodeCore delivers node-specific topic <node>/cmd here.
+  // For JSON payloads published to lighting/cmd, some core paths pass the whole
+  // JSON blob in cmd and leave payload empty. Forward raw JSON unchanged.
+  if (cmdStr.startsWith("{")) {
+    onLightingCommandTopic(cmdStr);
+    return true;
+  }
+  if (payloadStr.startsWith("{")) {
+    onLightingCommandTopic(payloadStr);
     return true;
   }
 
-  // NodeCore uppercases command topics before dispatching to module handlers.
-  // For lighting/cmd JSON payloads that means we can receive the WHOLE payload as:
-  //   cmd = {"CMD":"ALL_OFF"}
-  //   payload = ""
-  // So we normalize both normal command words and uppercased JSON envelopes here.
-  if (rawCmd.startsWith("{")) {
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, rawCmd);
-    if (err) {
-      log("WRN", String("lighting onCmd json parse failed: ") + err.c_str(), rawCmd);
-      return true;
-    }
-
-    String jcmd;
-    if (doc["cmd"].is<const char*>()) jcmd = String(doc["cmd"].as<const char*>());
-    else if (doc["CMD"].is<const char*>()) jcmd = String(doc["CMD"].as<const char*>());
-    jcmd.trim();
-    jcmd.toLowerCase();
-
-    if (!jcmd.length()) {
-      log("WRN", "lighting/cmd missing cmd");
-      return true;
-    }
-
-    auto getStr = [&](const char* a, const char* b) -> String {
-      if (doc[a].is<const char*>()) return String(doc[a].as<const char*>());
-      if (doc[b].is<const char*>()) return String(doc[b].as<const char*>());
-      return String("");
-    };
-
-    if (jcmd == "all_on") {
-      applySceneAllOn("cmd_all_on");
-      return true;
-    }
-    if (jcmd == "all_off") {
-      applySceneAllOff("cmd_all_off");
-      return true;
-    }
-    if (jcmd == "scene") {
-      String scene = getStr("scene", "SCENE");
-      scene.trim();
-      scene.toUpperCase();
-      if (scene == "INITIAL_INGAME") { applySceneInitial("cmd_scene_initial_ingame"); return true; }
-      if (scene == "ALL_ON") { applySceneAllOn("cmd_scene_all_on"); return true; }
-      if (scene == "ALL_OFF") { applySceneAllOff("cmd_scene_all_off"); return true; }
-      log("WRN", String("unknown lighting scene: ") + scene);
-      return true;
-    }
-    if (jcmd == "turn_on" || jcmd == "turn_off" || jcmd == "set") {
-      String light = getStr("light", "LIGHT");
-      if (!light.length()) {
-        log("WRN", String("lighting/cmd missing light for ") + jcmd);
-        return true;
-      }
-      ChannelState* ch = findLight(light);
-      if (!ch) {
-        log("WRN", String("unknown light: ") + light);
-        return true;
-      }
-      size_t idx = (size_t)ch->ledcCh;
-      bool changed = false;
-      if (jcmd == "turn_on") changed = setChannel(idx, true, driver_.maxDuty());
-      else if (jcmd == "turn_off") changed = setChannel(idx, false, 0);
-      else {
-        int32_t pct = 100;
-        if (doc["pct"].is<int>()) pct = doc["pct"].as<int>();
-        else if (doc["PCT"].is<int>()) pct = doc["PCT"].as<int>();
-        pct = max(0, min(100, pct));
-        changed = setChannel(idx, true, percentToDuty((uint32_t)pct), true);
-      }
-      if (changed) publishChannelState(*ch, "cmd_single");
-      return true;
-    }
-    if (jcmd == "turn_on_many" || jcmd == "fade_in" || jcmd == "fade_to") {
-      JsonArray arr = doc["lights"].as<JsonArray>();
-      if (arr.isNull()) arr = doc["LIGHTS"].as<JsonArray>();
-      if (arr.isNull()) {
-        log("WRN", String(jcmd) + " requires lights[]");
-        return true;
-      }
-      uint32_t durationMs = 1000;
-      if (doc["duration_ms"].is<unsigned long>()) durationMs = doc["duration_ms"].as<unsigned long>();
-      else if (doc["DURATION_MS"].is<unsigned long>()) durationMs = doc["DURATION_MS"].as<unsigned long>();
-      int32_t pct = 100;
-      if (doc["pct"].is<int>()) pct = doc["pct"].as<int>();
-      else if (doc["PCT"].is<int>()) pct = doc["PCT"].as<int>();
-      pct = max(0, min(100, pct));
-      uint32_t targetDuty = percentToDuty((uint32_t)pct);
-      for (JsonVariant v : arr) {
-        const char* name = v.as<const char*>();
-        if (!name) continue;
-        ChannelState* ch = findLight(String(name));
-        if (!ch) continue;
-        size_t idx = (size_t)ch->ledcCh;
-        if (jcmd == "turn_on_many") {
-          if (setChannel(idx, true, driver_.maxDuty())) publishChannelState(*ch, "cmd_turn_on_many");
-        } else if (jcmd == "fade_in") {
-          setChannel(idx, true, 0, true);
-          startFade(idx, targetDuty, durationMs, "cmd_fade_in");
-          publishChannelState(*ch, "cmd_fade_in_start");
-        } else {
-          startFade(idx, targetDuty, durationMs, "cmd_fade_to");
-          publishChannelState(*ch, "cmd_fade_to_start");
-        }
-      }
-      return true;
-    }
-
-    log("WRN", String("unknown lighting/cmd: ") + jcmd, rawCmd);
-    return true;
-  }
-
-  String upper = rawCmd;
+  String upper = cmdStr;
   upper.toUpperCase();
   if (upper == "ALL_ON") {
-    applySceneAllOn("cmd_all_on");
+    onLightingCommandTopic(String("{\"cmd\":\"all_on\"}"));
     return true;
   }
   if (upper == "ALL_OFF") {
-    applySceneAllOff("cmd_all_off");
+    onLightingCommandTopic(String("{\"cmd\":\"all_off\"}"));
     return true;
   }
 
-  log("DBG", String("Lighting node cmd ignored: ") + rawCmd + (rawPayload.length() ? String(" ") + rawPayload : String("")));
+  // Support split command style, e.g. cmd='turn_on' payload='"light":"r3_uv"'
+  if (cmdStr.length() && payloadStr.length() && !payloadStr.startsWith("{")) {
+    String json = String("{\"cmd\":\"") + cmdStr + "\"," + payloadStr + "}";
+    onLightingCommandTopic(json);
+    return true;
+  }
+
+  log("DBG", String("Lighting node cmd ignored: ") + cmdStr + (payloadStr.length() ? String(" ") + payloadStr : String("")));
   return true;
 }
-
 
 void LightingController::onGameStateMessage(const String& payload) {
   JsonDocument doc;
@@ -488,9 +390,27 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     return;
   }
 
-  String cmd = upperTrim(String((const char*)(doc["cmd"] | "")));
+  auto pickString = [&](const char* a, const char* b = nullptr, const char* c = nullptr) -> String {
+    if (a && doc[a].is<const char*>()) return String(doc[a].as<const char*>());
+    if (b && doc[b].is<const char*>()) return String(doc[b].as<const char*>());
+    if (c && doc[c].is<const char*>()) return String(doc[c].as<const char*>());
+    return String();
+  };
+  auto pickInt = [&](const char* a, const char* b = nullptr, int def = 0) -> int {
+    if (a && doc[a].is<int>()) return doc[a].as<int>();
+    if (b && doc[b].is<int>()) return doc[b].as<int>();
+    return def;
+  };
+  auto pickArray = [&](const char* a, const char* b = nullptr) -> JsonArray {
+    JsonArray arr;
+    if (a) arr = doc[a].as<JsonArray>();
+    if (arr.isNull() && b) arr = doc[b].as<JsonArray>();
+    return arr;
+  };
+
+  String cmd = upperTrim(pickString("cmd", "CMD"));
   if (!cmd.length()) {
-    log("WRN", "lighting/cmd missing cmd");
+    log("WRN", String("lighting/cmd missing cmd payload=") + payload);
     return;
   }
 
@@ -503,7 +423,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     return;
   }
   if (cmd == "SCENE") {
-    String scene = upperTrim(String((const char*)(doc["scene"] | "")));
+    String scene = upperTrim(pickString("scene", "SCENE"));
     if (scene == "INITIAL_INGAME") {
       applySceneInitial("cmd_scene_initial_ingame");
       return;
@@ -523,7 +443,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   bool changed[kChannelCount] = {};
 
   if (cmd == "TURN_ON" || cmd == "TURN_OFF" || cmd == "SET") {
-    String light = String((const char*)(doc["light"] | ""));
+    String light = pickString("light", "LIGHT");
     if (!light.length()) {
       log("WRN", String("lighting/cmd missing light for ") + cmd);
       return;
@@ -537,7 +457,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
     if (cmd == "TURN_ON") changed[idx] = setChannel(idx, true, driver_.maxDuty());
     else if (cmd == "TURN_OFF") changed[idx] = setChannel(idx, false, 0);
     else {
-      int32_t pct = doc["pct"].is<int>() ? doc["pct"].as<int>() : 100;
+      int32_t pct = pickInt("pct", "PCT", 100);
       changed[idx] = setChannel(idx, true, percentToDuty((uint32_t)max(0, min(100, pct))), true);
     }
     publishChangedStates(changed, "cmd_single");
@@ -545,7 +465,7 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   }
 
   if (cmd == "TURN_ON_MANY") {
-    JsonArray arr = doc["lights"].as<JsonArray>();
+    JsonArray arr = pickArray("lights", "LIGHTS");
     if (arr.isNull()) {
       log("WRN", "turn_on_many requires lights[]");
       return;
@@ -562,14 +482,14 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   }
 
   if (cmd == "FADE_IN" || cmd == "FADE_TO") {
-    JsonArray arr = doc["lights"].as<JsonArray>();
+    JsonArray arr = pickArray("lights", "LIGHTS");
     if (arr.isNull()) {
       log("WRN", String(cmd) + " requires lights[]");
       return;
     }
-    const uint32_t durationMs = doc["duration_ms"].is<unsigned long>() ? doc["duration_ms"].as<unsigned long>() : 1000UL;
+    const uint32_t durationMs = (uint32_t)pickInt("duration_ms", "DURATION_MS", 1000);
     int32_t pct = 100;
-    if (doc["pct"].is<int>()) pct = doc["pct"].as<int>();
+    pct = pickInt("pct", "PCT", pct);
     pct = max(0, min(100, pct));
     const uint32_t targetDuty = percentToDuty((uint32_t)pct);
 
