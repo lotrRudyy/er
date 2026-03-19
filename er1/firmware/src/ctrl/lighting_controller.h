@@ -65,10 +65,12 @@ private:
   void publishChannelState(const ChannelState& ch, const char* reason);
   void publishAllStates(const char* reason);
   void markDirty(size_t index, const char* reason);
-  void flushDirtyStates(uint32_t maxCount = 2);
+  void clearDirty();
+  void flushDirtyStates(uint32_t maxCount = 1);
 
   void queueBulkCommand(BulkCommand cmd);
   void startBulkCommand(BulkCommand cmd);
+  void cancelBulkCommand();
   void runBulkCommandStep(uint32_t nowMs);
   size_t bulkApplyCountForTick() const;
 
