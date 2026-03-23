@@ -13,14 +13,13 @@ import paho.mqtt.client as mqtt
 
 import config
 from db import Database
-from models import CurrentRun, GameMode, RiddleTiming, RuntimeState, ScheduledAction
+from models import CurrentRun, RiddleTiming, RuntimeState, ScheduledAction
+from phases import PHASES, ADMIN_TARGET_PHASE, RIDDLE_SOLVE_EVENTS
 
 LOG = logging.getLogger("game_master")
 
-
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def iso_now() -> str:
     return utc_now().isoformat(timespec="seconds")
@@ -28,7 +27,7 @@ def iso_now() -> str:
 
 class GameMaster:
     def __init__(self) -> None:
-        self.state = RuntimeState(mode=config.DEFAULT_MODE)
+        self.state = RuntimeState(phase=config.DEFAULT_PHASE)
         self.db = Database(config.DB_PATH)
         self.runs_dir = Path(config.RUNS_DIR)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +46,7 @@ class GameMaster:
         self._client.connect(config.MQTT_HOST, config.MQTT_PORT, config.MQTT_KEEPALIVE)
         self._client.loop_start()
         self._scheduler_thread.start()
+        self._enter_phase(self.state.phase, "boot_settle")
 
     def stop(self) -> None:
         self._stop.set()
@@ -97,7 +97,6 @@ class GameMaster:
 
     def publish_game_state(self) -> None:
         with self._lock:
-            self.state.seq += 1
             payload = self.state.to_game_state_payload()
         self._publish_json(config.TOPIC_GAME_STATE, payload, retained=True)
 
@@ -112,59 +111,6 @@ class GameMaster:
         if d:
             payload["d"] = d
         self._publish_json(config.TOPIC_GAME_MASTER_DEBUG, payload, retained=False)
-
-    def set_mode(self, new_mode: GameMode) -> None:
-        previous_mode = self.state.mode
-        if previous_mode == new_mode:
-            self.publish_game_state()
-            return
-
-        if previous_mode == GameMode.MODE_INGAME and new_mode == GameMode.MODE_STANDBY:
-            self._finalize_current_run()
-
-        if new_mode == GameMode.MODE_PREPARE:
-            self._prepare_new_run()
-        elif new_mode == GameMode.MODE_INGAME:
-            self._start_run_timer()
-
-        with self._lock:
-            self.state.mode = new_mode
-            self.state.pending.clear()
-
-            if new_mode == GameMode.MODE_MAINTENANCE:
-                self.state.active = list(config.RIDDLES)
-                self.state.solved = []
-            elif new_mode == GameMode.MODE_STANDBY:
-                self.state.active = []
-                self.state.solved = []
-            elif new_mode == GameMode.MODE_PREPARE:
-                self.state.active = []
-                self.state.solved = []
-            elif new_mode == GameMode.MODE_INGAME:
-                self.state.active = list(config.INITIAL_ACTIVE)
-                self.state.solved = []
-                self._mark_activations(self.state.active)
-            else:
-                raise ValueError(f"Unsupported mode: {new_mode}")
-
-        self._record_event("mode_changed", {"mode": new_mode.value})
-        self._apply_controller_defaults_for_mode(new_mode)
-        self.publish_game_state()
-
-    def _apply_controller_defaults_for_mode(self, mode: GameMode) -> None:
-        if mode == GameMode.MODE_MAINTENANCE:
-            self.publish_lighting_cmd({"cmd": "all_on"})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": False})
-        elif mode == GameMode.MODE_STANDBY:
-            self.publish_lighting_cmd({"cmd": "all_on"})
-            self.publish_maglock_cmd({"cmd": "set_mode", "mode": mode.value})
-        elif mode == GameMode.MODE_PREPARE:
-            self.publish_lighting_cmd({"cmd": "all_on"})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": True})
-        elif mode == GameMode.MODE_INGAME:
-            self.publish_lighting_cmd({"cmd": "all_off"})
-            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": list(config.INGAME_START_LIGHTS_ON)})
-            self.publish_maglock_cmd({"cmd": "set_fail_safe", "locks": ["r2", "r3"], "enabled": True})
 
     def _new_run_shell(self, players: list[str] | None = None) -> CurrentRun:
         now = utc_now()
@@ -184,6 +130,7 @@ class GameMaster:
         with self._lock:
             players = list(self.state.current_run.players) if self.state.current_run is not None else []
             self.state.current_run = self._new_run_shell(players)
+            self.state.completed_phase_events.clear()
 
     def _start_run_timer(self) -> None:
         with self._lock:
@@ -199,6 +146,7 @@ class GameMaster:
             run.hints.clear()
             run.events.clear()
             run.riddle_timings.clear()
+            self.state.completed_phase_events.clear()
             for node in config.RIDDLES:
                 source = "manual" if node in config.MANUAL_RIDDLES else "node"
                 run.riddle_timings[node] = RiddleTiming(node=node, source=source)
@@ -208,14 +156,10 @@ class GameMaster:
             run = self.state.current_run
         if run is None:
             return
-
         run.ended_at = iso_now()
         run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
         self.db.save_completed_run(run)
         self._write_run_json(run)
-
-        with self._lock:
-            self.state.current_run = None
 
     def _write_run_json(self, run: CurrentRun) -> None:
         payload = {
@@ -250,7 +194,7 @@ class GameMaster:
                 return
             run.events.append({"ts": iso_now(), "event": event, **payload})
 
-    def _mark_activations(self, nodes: list[str]) -> None:
+    def _mark_activations(self, nodes: tuple[str, ...]) -> None:
         with self._lock:
             run = self.state.current_run
             if run is None:
@@ -262,6 +206,28 @@ class GameMaster:
                     timing.activated_at = now
                     run.events.append({"ts": now, "event": "activated", "node": node})
 
+    def _mark_solved(self, node: str, source: str) -> None:
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                return
+            timing = run.riddle_timings.get(node)
+            if timing is None or timing.solved:
+                return
+            now_iso = iso_now()
+            timing.solved = True
+            timing.solved_at = now_iso
+            timing.source = source
+            timing.solve_time_from_run_start_s = round(time.monotonic() - run.started_monotonic, 3)
+            if timing.activated_at:
+                try:
+                    activated_dt = datetime.fromisoformat(timing.activated_at)
+                    solved_dt = datetime.fromisoformat(now_iso)
+                    timing.solve_time_from_activation_s = round((solved_dt - activated_dt).total_seconds(), 3)
+                except Exception:
+                    timing.solve_time_from_activation_s = None
+        self._record_event("solved", {"node": node, "source": source})
+
     def handle_heartbeat(self, node_id: str) -> None:
         with self._lock:
             self.state.mark_hb(node_id)
@@ -272,23 +238,31 @@ class GameMaster:
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
         node = str(payload.get("node", "")).strip()
-        event = str(payload.get("event", "")).strip()
+        event = str(payload.get("event", "")).strip().lower()
         if not node or not event:
             raise ValueError("game/event requires node and event")
         self._record_event("game_event", payload)
         if event == "solved":
-            self.mark_solved(node, source="node")
+            self.handle_solve(node, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
-        cmd = str(payload.get("cmd", "")).strip()
+        cmd = str(payload.get("cmd", "")).strip().lower()
         if not cmd:
             raise ValueError("game/cmd requires cmd")
-
-        if cmd == "set_mode":
-            self.set_mode(GameMode(str(payload["mode"])))
+        if cmd in {"set_phase", "phase"}:
+            self._enter_phase(int(payload["phase"]), "admin_set_phase")
             return
-        if cmd == "start_game":
-            self.set_mode(GameMode.MODE_INGAME)
+        if cmd in {"set_mode", "mode"}:
+            target = str(payload["mode"]).strip().lower()
+            if target not in ADMIN_TARGET_PHASE:
+                raise ValueError(f"Unknown admin target: {target}")
+            self._enter_phase(ADMIN_TARGET_PHASE[target], f"admin_{target}")
+            return
+        if cmd in {"start", "start_game"}:
+            if self.state.phase != 2:
+                self.publish_debug("START_IGNORED_NOT_PREPARE", {"phase": self.state.phase})
+                return
+            self._enter_phase(3, "admin_start")
             return
         if cmd == "set_players":
             players = payload.get("players", [])
@@ -300,7 +274,8 @@ class GameMaster:
             self.add_hint(str(payload.get("riddle", "")).strip(), str(payload.get("hint_text", "")).strip())
             return
         if cmd == "solve":
-            self.mark_solved(str(payload.get("node", "")).strip(), source="manual")
+            riddle = str(payload.get("node", payload.get("riddle", ""))).strip()
+            self.handle_solve(riddle, source="manual")
             return
         if cmd == "open_lock":
             self.publish_maglock_cmd({"cmd": "open", "lock": str(payload.get("lock", "")).strip()})
@@ -350,97 +325,31 @@ class GameMaster:
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
         self.publish_game_state()
 
-    def mark_solved(self, node: str, source: str) -> None:
-        if node not in config.RIDDLES:
-            raise ValueError(f"Unknown riddle node: {node}")
+    def handle_solve(self, riddle: str, source: str) -> None:
+        if riddle not in config.RIDDLES:
+            raise ValueError(f"Unknown riddle node: {riddle}")
+        spec = PHASES[self.state.phase]
+        if riddle not in spec.active_riddles:
+            self.publish_debug("SOLVE_IGNORED_NOT_ACTIVE", {"phase": self.state.phase, "riddle": riddle, "source": source})
+            return
+        if self.state.phase == 10 and riddle == "candles":
+            self.publish_debug("SOLVE_BLOCKED_CANDLES_NOT_YET_ALLOWED", {"phase": self.state.phase})
+            return
 
+        event_name = RIDDLE_SOLVE_EVENTS[riddle]
+        self._mark_solved(riddle, source)
         with self._lock:
-            if self.state.mode != GameMode.MODE_INGAME:
-                self.publish_debug("SOLVE_IGNORED_NOT_INGAME", {"node": node, "source": source, "mode": self.state.mode.value})
-                return
-            if node in self.state.solved:
-                self.publish_debug("SOLVE_DUPLICATE_IGNORED", {"node": node, "source": source})
-                return
+            self.state.completed_phase_events.add(event_name)
+            completed = set(self.state.completed_phase_events)
 
-            self.state.solved.append(node)
-            if node in self.state.active:
-                self.state.active.remove(node)
-
-            self._update_riddle_timing_on_solve(node, source)
-
-            newly_active = self._compute_newly_active(node)
-            for next_node in newly_active:
-                if next_node not in self.state.active and next_node not in self.state.solved:
-                    self.state.active.append(next_node)
-            self._mark_activations(newly_active)
-
-        self._record_event("solved", {"node": node, "source": source})
-        self._apply_progression_side_effects(node)
-        self.publish_game_state()
-
-    def _compute_newly_active(self, solved_node: str) -> list[str]:
-        candidates = list(config.UNLOCKS.get(solved_node, []))
-        newly_active = [node for node in candidates if node not in self.state.solved]
-
-        solved_set = set(self.state.solved)
-        for gate in config.GATED_UNLOCKS:
-            required = set(gate.get("requires_all", []))
-            unlock = [str(x) for x in gate.get("unlock", [])]
-            if solved_node in required and required.issubset(solved_set):
-                for node in unlock:
-                    if node not in newly_active and node not in self.state.solved:
-                        newly_active.append(node)
-
-        return newly_active
-
-    def _update_riddle_timing_on_solve(self, node: str, source: str) -> None:
-        run = self.state.current_run
-        if run is None:
-            return
-        timing = run.riddle_timings.get(node)
-        if timing is None:
-            return
-        now_iso = iso_now()
-        timing.solved = True
-        timing.solved_at = now_iso
-        timing.source = source
-        timing.solve_time_from_run_start_s = round(time.monotonic() - run.started_monotonic, 3)
-        if timing.activated_at:
-            activated_dt = datetime.fromisoformat(timing.activated_at)
-            solved_dt = datetime.fromisoformat(now_iso)
-            timing.solve_time_from_activation_s = round((solved_dt - activated_dt).total_seconds(), 3)
-
-    def _apply_progression_side_effects(self, solved_node: str) -> None:
-        if solved_node == "images":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "images"})
-        elif solved_node == "piano":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "r2"})
-            self.schedule_in(10.0, "lighting_batch", {
-                "commands": [
-                    {"cmd": "turn_on", "light": "torch_r2"},
-                    {"cmd": "fade_in", "lights": ["r2_chess", "r2_schronk"], "duration_ms": 10000},
-                ]
-            })
-        elif solved_node == "chess":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "r3"})
-            self.schedule_in(5.0, "lighting_batch", {
-                "commands": [
-                    {"cmd": "turn_on", "light": "torch_r2r3"},
-                    {"cmd": "fade_in", "lights": ["r3_slider", "r3_cage"], "duration_ms": 10000},
-                ]
-            })
-        elif solved_node == "knocking":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "knocking"})
-        elif solved_node == "candles":
-            self.publish_lighting_cmd({"cmd": "turn_on", "light": "r3_uv"})
-            self.publish_lighting_cmd({
-                "cmd": "fade_to",
-                "lights": ["r3_slider", "r3_cage"],
-                "pct": 25,
-                "duration_ms": 7000,
-            })
-        elif solved_node == "star_slider":
-            self.publish_maglock_cmd({"cmd": "open", "lock": "slider"})
+        required = set(spec.required_events)
+        if required and required.issubset(completed):
+            if spec.next_phase is not None:
+                self._enter_phase(spec.next_phase, event_name)
+            else:
+                self.publish_game_state()
+        else:
+            self.publish_game_state()
 
     def schedule_in(self, delay_s: float, kind: str, payload: dict[str, Any]) -> None:
         with self._lock:
@@ -454,9 +363,9 @@ class GameMaster:
 
     def _run_due_actions(self) -> None:
         now = time.monotonic()
-        due = []
+        due: list[ScheduledAction] = []
         with self._lock:
-            keep = []
+            keep: list[ScheduledAction] = []
             for action in self.state.pending:
                 if action.due_monotonic <= now:
                     due.append(action)
@@ -475,4 +384,104 @@ class GameMaster:
                     if isinstance(command, dict):
                         self.publish_lighting_cmd(command)
             return
+        if action.kind == "maintenance_unsolve":
+            return
         raise ValueError(f"Unknown scheduled action kind: {action.kind}")
+
+    def _apply_phase_stable_scene(self, phase: int) -> None:
+        spec = PHASES[phase]
+
+        # phase notifications for future phase-based firmware
+        self.publish_maglock_cmd({"cmd": "set_phase", "phase": phase})
+        self.publish_lighting_cmd({"cmd": "set_phase", "phase": phase})
+
+        # persistent locks only
+        for lock_id, state in spec.persistent_locks.items():
+            self.publish_maglock_cmd({"cmd": "open" if state == "open" else "close", "lock": lock_id})
+
+        # explicit stable light scene
+        if all(v == 0 for v in spec.lights.values()):
+            self.publish_lighting_cmd({"cmd": "all_off"})
+            return
+
+        if all(v == 100 for v in spec.lights.values()):
+            self.publish_lighting_cmd({"cmd": "all_on"})
+            return
+
+        self.publish_lighting_cmd({"cmd": "all_off"})
+        on_lights = [light for light, pct in spec.lights.items() if pct == 100]
+        if on_lights:
+            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": on_lights})
+        dim_lights = [(light, pct) for light, pct in spec.lights.items() if 0 < pct < 100]
+        for light, pct in dim_lights:
+            self.publish_lighting_cmd({"cmd": "set", "light": light, "pct": pct})
+
+    def _run_transition_action(self, action) -> None:
+        kind = action.kind
+        payload = action.payload
+        if kind == "set_persistent_locks":
+            for lock_id, state in payload.items():
+                self.publish_maglock_cmd({"cmd": "open" if state == "open" else "close", "lock": lock_id})
+            return
+        if kind == "set_all_lights":
+            self.publish_lighting_cmd({"cmd": "all_on" if int(payload["pct"]) > 0 else "all_off"})
+            return
+        if kind == "set_lights_scene_prepare":
+            self.publish_lighting_cmd({"cmd": "all_off"})
+            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": ["torch_stiege", "r1_bild", "r1_stuen", "r2_chess", "r2_schronk", "r3_cage", "r3_slider"]})
+            return
+        if kind == "set_lights_scene_ingame_start":
+            self.publish_lighting_cmd({"cmd": "all_off"})
+            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": ["torch_stiege", "r1_bild", "r1_stuen"]})
+            return
+        if kind == "new_game_init":
+            self._prepare_new_run()
+            return
+        if kind == "timer_start":
+            self._start_run_timer()
+            return
+        if kind == "timer_stop":
+            self._finalize_current_run()
+            return
+        if kind == "pulse_open":
+            self.publish_maglock_cmd({"cmd": "open", "lock": payload["lock"]})
+            return
+        if kind == "log_solve_time":
+            self._mark_solved(payload["riddle"], source="phase")
+            return
+        if kind == "lighting_turn_on":
+            self.publish_lighting_cmd({"cmd": "turn_on", "light": payload["light"]})
+            return
+        if kind == "lighting_fade_to":
+            self.publish_lighting_cmd({"cmd": "fade_to", **payload})
+            return
+        if kind == "delay":
+            self.schedule_in(float(payload["seconds"]), "lighting_batch", {"commands": payload["then"]})
+            return
+        if kind == "star_sky_on":
+            self.publish_lighting_cmd({"cmd": "turn_on", "light": "r3_uv"})
+            self._publish_json("star_sky/cmd", {"cmd": "on"})
+            return
+        if kind == "candles_solve_enabled":
+            self.publish_debug("candles_solve_enabled", payload)
+            return
+        if kind == "save_game_to_db":
+            return
+        self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
+
+    def _enter_phase(self, new_phase: int, reason: str) -> None:
+        with self._lock:
+            old_phase = self.state.phase
+            self.state.last_phase = old_phase
+            self.state.phase = new_phase
+            self.state.completed_phase_events.clear()
+
+        self._record_event("phase_changed", {"from": old_phase, "to": new_phase, "reason": reason})
+        self._apply_phase_stable_scene(new_phase)
+
+        spec = PHASES[new_phase]
+        self._mark_activations(spec.active_riddles)
+        for action in spec.on_enter:
+            self._run_transition_action(action)
+
+        self.publish_game_state()
