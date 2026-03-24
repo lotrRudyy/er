@@ -37,8 +37,8 @@ struct PhaseCfg {
 };
 
 static constexpr PhaseCfg kPhaseCfg[15] = {
-  {true }, // 0
-  {false}, // 1
+  {false}, // 0 standby
+  {true }, // 1 maintenance
   {false}, // 2
   {false}, // 3
   {false}, // 4

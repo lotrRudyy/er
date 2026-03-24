@@ -209,6 +209,10 @@ class DashboardStore:
                 except Exception:
                     current_riddle_elapsed_s = 0
             break
+        current_riddle_started_at = None
+        if current_riddle_name:
+            timing = riddle_timings.get(current_riddle_name) or {}
+            current_riddle_started_at = timing.get("activated_at")
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
@@ -218,8 +222,10 @@ class DashboardStore:
             "players": list(run.get("players") or []),
             "timer_running": bool(run.get("timer_running", False)),
             "elapsed_s": int(run.get("elapsed_s", 0) or 0),
+            "started_at": run.get("started_at"),
             "current_riddle_elapsed_s": current_riddle_elapsed_s,
             "current_riddle_name": current_riddle_name,
+            "current_riddle_started_at": current_riddle_started_at,
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

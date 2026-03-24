@@ -11,6 +11,7 @@ public:
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
   void setGameMode(bool inGame);
+  void setManualOverride(bool enabled);
 
   uint32_t errorCount() const { return errorCount_; }
 
@@ -46,4 +47,5 @@ private:
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
+  bool manualOverride_ = false;
 };

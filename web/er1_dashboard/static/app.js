@@ -47,38 +47,40 @@ function sectionChanged(nextData, key) {
   return stableStringify(lastSnapshot[key]) !== stableStringify(nextData[key]);
 }
 
+function parseIsoToMs(value) {
+  if (!value) return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 function syncLocalTimers(game) {
-  const nextElapsed = parseInt(game.elapsed_s || 0, 10) || 0;
-  if (game.timer_running) {
-    if (!state.game.timer_running || Math.abs(nextElapsed - readLocalTimer()) > 1) {
-      localTimerBaseElapsed = nextElapsed;
-      localTimerStartedAt = Date.now();
-    }
+  const startedAtMs = parseIsoToMs(game.started_at);
+  if (game.timer_running && startedAtMs) {
+    localTimerStartedAt = startedAtMs;
+    localTimerBaseElapsed = 0;
   } else {
-    localTimerBaseElapsed = nextElapsed;
     localTimerStartedAt = 0;
+    localTimerBaseElapsed = parseInt(game.elapsed_s || 0, 10) || 0;
   }
 
-  const nextRiddleElapsed = parseInt(game.current_riddle_elapsed_s || 0, 10) || 0;
-  if (game.timer_running && game.current_riddle_name) {
-    if (!state.game.timer_running || state.game.current_riddle_name !== game.current_riddle_name || Math.abs(nextRiddleElapsed - readLocalRiddleTimer()) > 1) {
-      localRiddleTimerBaseElapsed = nextRiddleElapsed;
-      localRiddleTimerStartedAt = Date.now();
-    }
+  const riddleStartedAtMs = parseIsoToMs(game.current_riddle_started_at);
+  if (game.timer_running && game.current_riddle_name && riddleStartedAtMs) {
+    localRiddleTimerStartedAt = riddleStartedAtMs;
+    localRiddleTimerBaseElapsed = 0;
   } else {
-    localRiddleTimerBaseElapsed = nextRiddleElapsed;
     localRiddleTimerStartedAt = 0;
+    localRiddleTimerBaseElapsed = parseInt(game.current_riddle_elapsed_s || 0, 10) || 0;
   }
 }
 
 function readLocalTimer() {
   if (!state.game.timer_running || !localTimerStartedAt) return parseInt(localTimerBaseElapsed || 0, 10);
-  return parseInt(localTimerBaseElapsed || 0, 10) + Math.floor((Date.now() - localTimerStartedAt) / 1000);
+  return Math.max(0, Math.floor((Date.now() - localTimerStartedAt) / 1000));
 }
 
 function readLocalRiddleTimer() {
   if (!state.game.timer_running || !state.game.current_riddle_name || !localRiddleTimerStartedAt) return parseInt(localRiddleTimerBaseElapsed || 0, 10);
-  return parseInt(localRiddleTimerBaseElapsed || 0, 10) + Math.floor((Date.now() - localRiddleTimerStartedAt) / 1000);
+  return Math.max(0, Math.floor((Date.now() - localRiddleTimerStartedAt) / 1000));
 }
 
 function renderPlayersInput() {
