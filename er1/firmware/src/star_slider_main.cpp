@@ -32,29 +32,48 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static StarSliderRiddle starSlider;
 static bool s_gameEnabled = false;
+static bool s_gameSolved = false;
 
-static bool jsonArrayContains(const String& payload, const char* key, const char* value) {
-  String marker = String("\"") + key + "\":[";
-  int start = payload.indexOf(marker);
-  if (start < 0) return false;
-  start += marker.length();
-  int end = payload.indexOf(']', start);
-  if (end < 0) return false;
-  String match = String("\"") + value + "\"";
-  return payload.substring(start, end).indexOf(match) >= 0;
-}
+struct PhaseCfg {
+  bool enabled;
+  bool solved;
+};
 
-static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
-  if (payload.indexOf("\"mode\":\"MODE_MAINTENANCE\"") >= 0) return true;
-  if (payload.indexOf("\"mode\":\"MODE_INGAME\"") < 0) return false;
-  return jsonArrayContains(payload, "active", nodeName) || jsonArrayContains(payload, "solved", nodeName);
-}
+static constexpr PhaseCfg kPhaseCfg[15] = {
+  {true,  false}, // 0
+  {false, false}, // 1
+  {false, false}, // 2
+  {false, false}, // 3
+  {false, false}, // 4
+  {false, false}, // 5
+  {false, false}, // 6
+  {false, false}, // 7
+  {false, false}, // 8
+  {false, false}, // 9
+  {false, false}, // 10
+  {false, false}, // 11
+  {true,  false}, // 12
+  {false, true }, // 13
+  {false, true }  // 14
+};
 
-static void applyEnabled(StarSliderRiddle* module, bool enabled) {
+static void applyTarget(StarSliderRiddle* module, bool enabled, bool solved) {
   if (!module) return;
-  if (enabled == s_gameEnabled) return;
-  s_gameEnabled = enabled;
-  module->setGameMode(enabled);
+
+  if (enabled != s_gameEnabled) {
+    s_gameEnabled = enabled;
+    module->setGameMode(enabled);
+    s_gameSolved = false;  // setGameMode() resets state
+  }
+
+  if (solved != s_gameSolved) {
+    if (solved) {
+      module->onCmd("SOLVE", "");
+    } else {
+      module->onCmd("RESET", "");
+    }
+    s_gameSolved = solved;
+  }
 }
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* userData) {
@@ -71,7 +90,15 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
   (void)ctx;
-  applyEnabled(static_cast<StarSliderRiddle*>(userData), computeEnabledFromGameState(payload, NODE_ID));
+
+  StaticJsonDocument<128> doc;
+  if (deserializeJson(doc, payload)) return;
+
+  int phase = doc["phase"] | -1;
+  if (phase < 0 || phase >= 15) return;
+
+  const PhaseCfg& cfg = kPhaseCfg[phase];
+  applyTarget(static_cast<StarSliderRiddle*>(userData), cfg.enabled, cfg.solved);
 }
 
 void setup() {

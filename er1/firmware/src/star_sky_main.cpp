@@ -32,23 +32,27 @@ static NodeCore nodeCore;
 static StarSkyRiddle starSky;
 static bool s_gameEnabled = false;
 
-static bool jsonArrayContains(JsonVariantConst arr, const char* value) {
-  if (arr.isNull()) return false;
-  for (JsonVariantConst v : arr.as<JsonArrayConst>()) {
-    const char* s = v.as<const char*>();
-    if (s && strcmp(s, value) == 0) return true;
-  }
-  return false;
-}
+struct PhaseCfg {
+  bool enabled;
+};
 
-static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
-  JsonDocument doc;
-  if (deserializeJson(doc, payload)) return false;
-  const char* mode = doc["mode"] | "";
-  if (strcmp(mode, "MODE_MAINTENANCE") == 0) return true;
-  if (strcmp(mode, "MODE_INGAME") != 0) return false;
-  return jsonArrayContains(doc["active"], nodeName) || jsonArrayContains(doc["solved"], nodeName);
-}
+static constexpr PhaseCfg kPhaseCfg[15] = {
+  {true }, // 0
+  {false}, // 1
+  {false}, // 2
+  {false}, // 3
+  {false}, // 4
+  {false}, // 5
+  {false}, // 6
+  {false}, // 7
+  {false}, // 8
+  {false}, // 9
+  {false}, // 10
+  {false}, // 11
+  {true }, // 12
+  {true }, // 13
+  {true }  // 14
+};
 
 static void applyEnabled(StarSkyRiddle* module, bool enabled) {
   if (!module) return;
@@ -79,7 +83,15 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
-  applyEnabled(static_cast<StarSkyRiddle*>(user), computeEnabledFromGameState(payload, NODE_ID));
+
+  StaticJsonDocument<128> doc;
+  if (deserializeJson(doc, payload)) return;
+
+  int phase = doc["phase"] | -1;
+  if (phase < 0 || phase >= 15) return;
+
+  const PhaseCfg& cfg = kPhaseCfg[phase];
+  applyEnabled(static_cast<StarSkyRiddle*>(user), cfg.enabled);
 }
 
 void setup() {
