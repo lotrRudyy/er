@@ -114,6 +114,14 @@ def save_hint_store(data: dict[str, list[dict[str, Any]]]) -> None:
     HINTS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def pretty_phase_name(name: str) -> str:
+    text = str(name or "").replace("_", " ").strip()
+    if not text:
+        return ""
+    parts = text.split()
+    return " ".join(p.capitalize() for p in parts)
+
+
 @dataclass
 class DashboardStore:
     lock: threading.RLock = field(default_factory=threading.RLock)
@@ -185,6 +193,8 @@ class DashboardStore:
         last_name = ""
         if last_phase is not None:
             last_name = PHASE_META.get(int(last_phase), {"name": f"phase_{last_phase}"}).get("name", "")
+        phase_name_pretty = pretty_phase_name(phase_meta["name"])
+        last_name_pretty = pretty_phase_name(last_name)
         run = game.get("run") or {}
         riddle_timings = run.get("riddle_timings") or {}
         current_riddle_elapsed_s = 0
@@ -212,13 +222,15 @@ class DashboardStore:
         current_riddle_started_at = None
         if current_riddle_name:
             timing = riddle_timings.get(current_riddle_name) or {}
-            current_riddle_started_at = timing.get("activated_at")
+            current_riddle_started_at = timing.get("activated_at") or run.get("started_at")
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
-            "phase_display": f"{phase} {phase_meta['name']}",
+            "phase_name_pretty": phase_name_pretty,
+            "phase_display": f"{phase}: {phase_name_pretty}",
             "last_phase": last_phase,
             "last_phase_name": last_name,
+            "last_phase_name_pretty": last_name_pretty,
             "players": list(run.get("players") or []),
             "timer_running": bool(run.get("timer_running", False)),
             "elapsed_s": int(run.get("elapsed_s", 0) or 0),

@@ -112,10 +112,10 @@ function renderPlayersList() {
 }
 
 function renderTop() {
-  document.getElementById('phaseValue').textContent = state.game.phase_display || `${state.game.phase} ${state.game.phase_name}`;
+  document.getElementById('phaseValue').textContent = state.game.phase_display || `Phase ${state.game.phase}: ${state.game.phase_name_pretty || state.game.phase_name}`;
   document.getElementById('lastPhaseValue').textContent = state.game.last_phase == null
     ? '—'
-    : `${state.game.last_phase} ${state.game.last_phase_name || ''}`.trim();
+    : `${state.game.last_phase}: ${state.game.last_phase_name_pretty || state.game.last_phase_name || ''}`.trim();
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
   document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
   renderPlayersInput();
