@@ -40,6 +40,13 @@ const char* MaglockController::modeName(GameMode mode) {
   }
 }
 
+MaglockController::GameMode MaglockController::phaseToMode(int phase) {
+  if (phase == 0) return GameMode::Maint;
+  if (phase == 1) return GameMode::Standby;
+  if (phase == 2) return GameMode::Prepare;
+  return GameMode::InGame;
+}
+
 void MaglockController::begin(Core::NodeContext& ctx) {
   ctx_ = &ctx;
   prefs_ = &ctx.prefs();
@@ -63,8 +70,8 @@ void MaglockController::begin(Core::NodeContext& ctx) {
     if (lk.mode == LockMode::FailSecure) {
       lk.coilOn = false;
       lk.pulsing = false;
-      lk.cooldown = true;
-      lk.bootGuard = true;
+      lk.cooldown = false;
+      lk.bootGuard = false;
       lk.cooldownStartMs = bootMs_;
     }
     applyLockOutput(lk);
@@ -94,45 +101,61 @@ bool MaglockController::onCmd(const char* cmd, const char* payload) {
   return true;
 }
 
-void MaglockController::applyMode(GameMode newMode, const char* reason) {
+void MaglockController::applyPhase(int newPhase, const char* reason) {
   if (!ctx_) return;
 
-  GameMode old = gameMode_;
-  const bool changed = (old != newMode);
+  int oldPhase = currentPhase_;
+  const bool changed = (oldPhase != newPhase);
+  currentPhase_ = newPhase;
+
+  GameMode newMode = phaseToMode(newPhase);
+  GameMode oldMode = gameMode_;
   gameMode_ = newMode;
 
   if (changed) {
-    String data = String("{\"from\":\"") + modeName(old) +
-                  "\",\"to\":\"" + modeName(gameMode_) + "\"}";
-    log("INF", reason && reason[0] ? reason : "gameMode changed", data);
+    String data = String("{\"from_phase\":") + String(oldPhase) +
+                  ",\"to_phase\":" + String(currentPhase_) +
+                  ",\"from_mode\":\"" + modeName(oldMode) +
+                  "\",\"to_mode\":\"" + modeName(gameMode_) + "\"}";
+    log("INF", reason && reason[0] ? reason : "phase changed", data);
     applyHeartbeatInterval();
     persistGameMode();
 
-    if (gameMode_ == GameMode::InGame || gameMode_ == GameMode::Prepare) {
-      if (LockState* r2 = findLockById("r2")) {
-        setFailSafe(*r2, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
-      }
-      if (LockState* r3 = findLockById("r3")) {
-        setFailSafe(*r3, true, gameMode_ == GameMode::Prepare ? "prepare_lock" : "game_start");
-      }
-    } else {
-      forceAllFailSecureOff("mode_safe");
-
-      if (gameMode_ == GameMode::Maint) {
-        for (auto& lk : locks_) {
-          if (lk.mode != LockMode::FailSecure) continue;
-          lk.cooldown = false;
-          lk.bootGuard = false;
-        }
-      }
-
-      if (LockState* r2 = findLockById("r2")) {
-        setFailSafe(*r2, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
-      }
-      if (LockState* r3 = findLockById("r3")) {
-        setFailSafe(*r3, false, gameMode_ == GameMode::Maint ? "maint_open" : "standby_open");
-      }
+    bool r2Locked = false;
+    bool r3Locked = false;
+    switch (currentPhase_) {
+      case 0: // maintenance
+      case 1: // standby
+      case 14: // solved
+        r2Locked = false;
+        r3Locked = false;
+        break;
+      case 2: // prepare
+      case 3: // images
+      case 4: // piano
+        r2Locked = true;
+        r3Locked = true;
+        break;
+      case 5: // open_prison
+      case 6: // mount_wheel
+      case 7: // rope_paths
+      case 8: // tangram+magnet
+      case 9: // chess
+        r2Locked = false;
+        r3Locked = true;
+        break;
+      case 10: // knocking + candles pre
+      case 11: // candles
+      case 12: // star_slider
+      case 13: // sissi
+      default:
+        r2Locked = false;
+        r3Locked = false;
+        break;
     }
+
+    if (LockState* r2 = findLockById("r2")) setFailSafe(*r2, r2Locked, "phase_apply");
+    if (LockState* r3 = findLockById("r3")) setFailSafe(*r3, r3Locked, "phase_apply");
   }
 
   publishStateSnapshot();
@@ -147,28 +170,33 @@ void MaglockController::onGameModeMessage(const String& msg) {
     String trimmed = msg;
     trimmed.trim();
     trimmed.toUpperCase();
-    if (trimmed == "MODE_INGAME" || trimmed == "INGAME") {
-      applyMode(GameMode::InGame, "game_state_fallback");
+    if (trimmed == "MODE_MAINTENANCE" || trimmed == "MAINT" || trimmed == "MAINTENANCE") {
+      applyPhase(0, "game_state_fallback_mode");
     } else if (trimmed == "MODE_PREPARE" || trimmed == "PREPARE") {
-      applyMode(GameMode::Prepare, "game_state_fallback");
-    } else if (trimmed == "MODE_MAINTENANCE" || trimmed == "MAINT" || trimmed == "MAINTENANCE") {
-      applyMode(GameMode::Maint, "game_state_fallback");
+      applyPhase(2, "game_state_fallback_mode");
+    } else if (trimmed == "MODE_INGAME" || trimmed == "INGAME") {
+      applyPhase(3, "game_state_fallback_mode");
     } else {
-      applyMode(GameMode::Standby, "game_state_fallback");
+      applyPhase(1, "game_state_fallback_mode");
     }
+    return;
+  }
+
+  if (doc["phase"].is<int>()) {
+    applyPhase(doc["phase"].as<int>(), "game_state_phase");
     return;
   }
 
   String mode = String((const char*)(doc["mode"] | ""));
   mode.trim();
-  if (mode == "MODE_INGAME") {
-    applyMode(GameMode::InGame, "game_state_json");
+  if (mode == "MODE_MAINTENANCE") {
+    applyPhase(0, "game_state_mode");
   } else if (mode == "MODE_PREPARE") {
-    applyMode(GameMode::Prepare, "game_state_json");
-  } else if (mode == "MODE_MAINTENANCE") {
-    applyMode(GameMode::Maint, "game_state_json");
+    applyPhase(2, "game_state_mode");
+  } else if (mode == "MODE_INGAME") {
+    applyPhase(3, "game_state_mode");
   } else {
-    applyMode(GameMode::Standby, "game_state_json");
+    applyPhase(1, "game_state_mode");
   }
 }
 
@@ -192,14 +220,23 @@ void MaglockController::onMaglockCommandTopic(const String& payload) {
     return;
   }
 
+  if (cmd == "SET_PHASE") {
+    if (!doc["phase"].is<int>()) {
+      log("WRN", "set_phase requires integer phase");
+      return;
+    }
+    applyPhase(doc["phase"].as<int>(), "maglock_cmd_set_phase");
+    return;
+  }
+
   if (cmd == "SET_MODE") {
     String mode = String((const char*)(doc["mode"] | ""));
     mode.trim();
     mode.toUpperCase();
-    if (mode == "MODE_INGAME" || mode == "INGAME") applyMode(GameMode::InGame, "maglock_cmd_set_mode");
-    else if (mode == "MODE_PREPARE" || mode == "PREPARE") applyMode(GameMode::Prepare, "maglock_cmd_set_mode");
-    else if (mode == "MODE_MAINTENANCE" || mode == "MAINTENANCE" || mode == "MAINT") applyMode(GameMode::Maint, "maglock_cmd_set_mode");
-    else applyMode(GameMode::Standby, "maglock_cmd_set_mode");
+    if (mode == "MODE_MAINTENANCE" || mode == "MAINTENANCE" || mode == "MAINT") applyPhase(0, "maglock_cmd_set_mode");
+    else if (mode == "MODE_PREPARE" || mode == "PREPARE") applyPhase(2, "maglock_cmd_set_mode");
+    else if (mode == "MODE_INGAME" || mode == "INGAME") applyPhase(3, "maglock_cmd_set_mode");
+    else applyPhase(1, "maglock_cmd_set_mode");
     return;
   }
 
@@ -354,13 +391,8 @@ void MaglockController::startPulse(LockState& lk, const char* reason) {
     return;
   }
 
-  if (gameMode_ == GameMode::Standby) {
-    log("WRN", String("OPEN ignored while STANDBY for ") + lk.id);
-    return;
-  }
-
-  if (lk.pulsing || lk.cooldown || lk.bootGuard) {
-    log("WRN", String("OPEN ignored (pulse/cooldown/bootguard active) for ") + lk.id);
+  if (lk.pulsing || lk.coilOn) {
+    log("WRN", String("OPEN ignored (already pulsing) for ") + lk.id);
     return;
   }
 
@@ -394,7 +426,7 @@ void MaglockController::updatePulseTimers(uint32_t nowMs) {
     if (lk.coilOn && (nowMs - lk.pulseStartMs >= kHardCutoffMs)) {
       lk.coilOn = false;
       lk.pulsing = false;
-      lk.cooldown = true;
+      lk.cooldown = false;
       lk.bootGuard = false;
       lk.cooldownStartMs = nowMs;
       applyLockOutput(lk);
@@ -405,20 +437,11 @@ void MaglockController::updatePulseTimers(uint32_t nowMs) {
     if (lk.pulsing && (nowMs - lk.pulseStartMs >= kPulseMs)) {
       lk.pulsing = false;
       lk.coilOn = false;
-      applyLockOutput(lk);
-      publishLockState(lk, "pulse_done");
-      lk.cooldown = true;
+      lk.cooldown = false;
       lk.bootGuard = false;
       lk.cooldownStartMs = nowMs;
-    }
-
-    if (lk.bootGuard && (nowMs - lk.cooldownStartMs >= kBootGuardMs)) {
-      lk.bootGuard = false;
-      lk.cooldown = false;
-      publishLockState(lk, "boot_guard_done");
-    } else if (lk.cooldown && !lk.bootGuard && (nowMs - lk.cooldownStartMs >= kCooldownMs)) {
-      lk.cooldown = false;
-      publishLockState(lk, "cooldown_done");
+      applyLockOutput(lk);
+      publishLockState(lk, "pulse_done");
     }
   }
 }

@@ -85,10 +85,6 @@ private:
   void clearAllPendingChannels();
   void runPendingChannelStep(uint32_t nowMs);
 
-  void markStatePersistDirty(uint32_t nowMs);
-  void persistSnapshot();
-  bool restoreSnapshot();
-
 private:
   Core::NodeContext* ctx_ = nullptr;
   LightingDriver driver_{};
@@ -97,12 +93,9 @@ private:
 
   const char* dirtyReasons_[kChannelCount]{};
   bool dirty_[kChannelCount]{};
-  enum class GameMode : uint8_t { Unknown = 0, Standby, Prepare, InGame, Maint };
-  GameMode lastGameMode_ = GameMode::Unknown;
+  int currentPhase_ = -1;
+  void applyPhaseScene(int phase, const char* reason);
   bool bootStatePublished_ = false;
-  bool persistPending_ = false;
-  bool restoredSnapshot_ = false;
-  uint32_t lastStateChangeMs_ = 0;
 
   BulkCommand queuedBulkCommand_ = BulkCommand::None;
   BulkCommand activeBulkCommand_ = BulkCommand::None;

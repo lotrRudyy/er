@@ -10,7 +10,7 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "stop_timer";
-static const char* FW_VERSION = "1";
+static const char* FW_VERSION = "1.7";
 static const char* FW_DESC = "stop_timer 1.7 - OTA JSON command, PSK removed";
 
 // ======================= NETWORK CONFIG ======================

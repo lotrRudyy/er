@@ -62,8 +62,9 @@ private:
       {"knocking", 25, LockMode::FailSecure},
   };
 
-  void applyMode(GameMode newMode, const char* reason);
+  void applyPhase(int newPhase, const char* reason);
   static const char* modeName(GameMode mode);
+  static GameMode phaseToMode(int phase);
   void applyLockOutput(LockState& lk);
   const char* lockStateName(const LockState& lk) const;
   void publishLockState(const LockState& lk, const char* reason);
@@ -92,6 +93,7 @@ private:
   MaglockDriver driver_;
   Preferences* prefs_ = nullptr;
   GameMode gameMode_ = GameMode::Standby;
+  int currentPhase_ = 1;
   uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
   uint32_t errorCount_ = 0;
