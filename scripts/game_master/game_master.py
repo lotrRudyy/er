@@ -254,6 +254,12 @@ class GameMaster:
             return
         if cmd in {"set_mode", "mode"}:
             target = str(payload["mode"]).strip().lower()
+            if target == "start":
+                if self.state.phase != 2:
+                    self.publish_debug("START_IGNORED_NOT_PREPARE", {"phase": self.state.phase})
+                    return
+                self._enter_phase(3, "admin_start")
+                return
             if target not in ADMIN_TARGET_PHASE:
                 raise ValueError(f"Unknown admin target: {target}")
             self._enter_phase(ADMIN_TARGET_PHASE[target], f"admin_{target}")

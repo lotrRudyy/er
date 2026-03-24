@@ -25,35 +25,35 @@ TOPIC_MAGLOCK_CMD = "maglock/cmd"
 TOPIC_STAR_SKY_CMD = "star_sky/sys/cmd"
 
 PHASE_META: dict[int, dict[str, Any]] = {
-    0: {"name": "maintenance", "active": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi"), "solved": ()},
-    1: {"name": "standby", "active": (), "solved": ()},
+    0: {"name": "standby", "active": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi"), "solved": ()},
+    1: {"name": "maintenance", "active": (), "solved": ()},
     2: {"name": "prepare", "active": (), "solved": ()},
-    3: {"name": "images", "active": ("images",), "solved": ()},
+    3: {"name": "start", "active": ("images",), "solved": ()},
     4: {"name": "piano", "active": ("piano",), "solved": ("images",)},
-    5: {"name": "open_prison", "active": ("open_prison",), "solved": ("images", "piano")},
-    6: {"name": "mount_wheel", "active": ("mount_wheel",), "solved": ("images", "piano", "open_prison")},
-    7: {"name": "rope_paths", "active": ("rope_paths",), "solved": ("images", "piano", "open_prison", "mount_wheel")},
+    5: {"name": "prison", "active": ("open_prison",), "solved": ("images", "piano")},
+    6: {"name": "wheel", "active": ("mount_wheel",), "solved": ("images", "piano", "open_prison")},
+    7: {"name": "rope", "active": ("rope_paths",), "solved": ("images", "piano", "open_prison", "mount_wheel")},
     8: {"name": "tangram_magnet", "active": ("tangram", "magnet"), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths")},
     9: {"name": "chess", "active": ("chess",), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet")},
-    10: {"name": "knocking_candles_pre", "active": ("knocking", "candles"), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess")},
+    10: {"name": "knocking", "active": ("knocking", "candles"), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess")},
     11: {"name": "candles", "active": ("candles",), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking")},
-    12: {"name": "star_slider", "active": ("star_slider",), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles")},
+    12: {"name": "stars", "active": ("star_slider",), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles")},
     13: {"name": "sissi", "active": ("sissi",), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider")},
-    14: {"name": "solved", "active": (), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi")},
+    14: {"name": "finished", "active": (), "solved": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi")},
 }
 
 RIDDLES = [
     {"id": "images", "label": "Images", "node_id": "images_piano", "manual": False},
     {"id": "piano", "label": "Piano", "node_id": "images_piano", "manual": False},
-    {"id": "open_prison", "label": "Open Prison", "node_id": None, "manual": True},
-    {"id": "mount_wheel", "label": "Mount Wheel", "node_id": None, "manual": True},
-    {"id": "rope_paths", "label": "Rope Paths", "node_id": None, "manual": True},
+    {"id": "open_prison", "label": "Prison", "node_id": None, "manual": True},
+    {"id": "mount_wheel", "label": "Wheel", "node_id": None, "manual": True},
+    {"id": "rope_paths", "label": "Rope", "node_id": None, "manual": True},
     {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
     {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
     {"id": "chess", "label": "Chess", "node_id": "chess", "manual": False},
     {"id": "knocking", "label": "Knocking", "node_id": "knocking", "manual": False},
     {"id": "candles", "label": "Candles", "node_id": "candles", "manual": False},
-    {"id": "star_slider", "label": "Star Slider", "node_id": "star_slider", "manual": False},
+    {"id": "star_slider", "label": "Stars", "node_id": "star_slider", "manual": False},
     {"id": "sissi", "label": "Sissi", "node_id": None, "manual": True},
 ]
 
@@ -117,7 +117,7 @@ def save_hint_store(data: dict[str, list[dict[str, Any]]]) -> None:
 @dataclass
 class DashboardStore:
     lock: threading.RLock = field(default_factory=threading.RLock)
-    game_state: dict[str, Any] = field(default_factory=lambda: {"phase": 1})
+    game_state: dict[str, Any] = field(default_factory=lambda: {"phase": 0})
     node_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     node_last_hb: dict[str, float] = field(default_factory=dict)
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)

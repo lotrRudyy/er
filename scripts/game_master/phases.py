@@ -97,22 +97,6 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     0: PhaseSpec(
         phase=0,
         name="standby",
-        active_riddles=ALL_RIDDLES,
-        solved_riddles=(),
-        persistent_locks={"r2": "open", "r3": "open"},
-        lights=scene(**{light: 100 for light in ALL_LIGHTS}),
-        required_events=(),
-        next_phase=None,
-        on_enter=(
-            TransitionAction("set_persistent_locks", {"r2": "open", "r3": "open"}),
-            TransitionAction("set_all_lights", {"pct": 100}),
-        ),
-        timer_action="unchanged",
-        game_data_action="maintenance solves auto-unsolve after 10s",
-    ),
-    1: PhaseSpec(
-        phase=1,
-        name="maintenance",
         active_riddles=(),
         solved_riddles=(),
         persistent_locks={"r2": "open", "r3": "open"},
@@ -126,6 +110,22 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         timer_action="stopped",
         game_data_action="admin only transition target",
     ),
+    1: PhaseSpec(
+        phase=1,
+        name="maintenance",
+        active_riddles=ALL_RIDDLES,
+        solved_riddles=(),
+        persistent_locks={"r2": "open", "r3": "open"},
+        lights=scene(**{light: 100 for light in ALL_LIGHTS}),
+        required_events=(),
+        next_phase=None,
+        on_enter=(
+            TransitionAction("set_persistent_locks", {"r2": "open", "r3": "open"}),
+            TransitionAction("set_all_lights", {"pct": 100}),
+        ),
+        timer_action="unchanged",
+        game_data_action="maintenance solves auto-unsolve after 10s",
+    ),
     2: PhaseSpec(
         phase=2,
         name="prepare",
@@ -136,8 +136,6 @@ PHASES: dict[PhaseId, PhaseSpec] = {
             torch_stiege=100,
             r1_bild=100,
             r1_stuen=100,
-            r2_chess=100,
-            r2_schronk=100,
             r3_cage=100,
             r3_slider=100,
         ),
@@ -153,7 +151,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     3: PhaseSpec(
         phase=3,
-        name="images",
+        name="start",
         active_riddles=("images",),
         solved_riddles=(),
         persistent_locks={"r2": "closed", "r3": "closed"},
@@ -426,6 +424,7 @@ ADMIN_TARGET_PHASE = {
     "standby": 0,
     "maintenance": 1,
     "prepare": 2,
+    "start": 3,
 }
 
 RIDDLE_SOLVE_EVENTS = {
