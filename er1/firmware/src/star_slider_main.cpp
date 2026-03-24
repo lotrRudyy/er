@@ -91,7 +91,7 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* userData) {
   (void)ctx;
 
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   if (deserializeJson(doc, payload)) return;
 
   int phase = doc["phase"] | -1;

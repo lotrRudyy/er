@@ -12,7 +12,7 @@ using namespace Core;
 static const char* NODE_ID = "images_piano";
 static const char* NODE_IMAGES = "images";
 static const char* NODE_PIANO = "piano";
-static const char* FW_VERSION = "22";
+static const char* FW_VERSION = "23";
 static const char* FW_DESC = "images_piano with new ota changed piano password";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x59};
@@ -112,7 +112,7 @@ static void applyPianoTarget(bool enabled, bool solved) {
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* /*userData*/) {
   (void)ctx;
 
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   if (deserializeJson(doc, payload)) return;
 
   int phase = doc["phase"] | -1;

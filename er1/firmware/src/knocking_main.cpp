@@ -9,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "26";
+static const char* FW_VERSION = "27";
 static const char* FW_DESC = "embedded knock samples only";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x51};
@@ -95,7 +95,7 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
 
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   if (deserializeJson(doc, payload)) return;
 
   int phase = doc["phase"] | -1;
