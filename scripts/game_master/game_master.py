@@ -434,7 +434,7 @@ class GameMaster:
             return
         if kind == "set_lights_scene_prepare":
             self.publish_lighting_cmd({"cmd": "all_off"})
-            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": ["torch_stiege", "r1_bild", "r1_stuen", "r2_chess", "r2_schronk", "r3_cage", "r3_slider"]})
+            self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": ["torch_stiege", "r1_bild", "r1_stuen", "r3_cage", "r3_slider"]})
             return
         if kind == "set_lights_scene_ingame_start":
             self.publish_lighting_cmd({"cmd": "all_off"})

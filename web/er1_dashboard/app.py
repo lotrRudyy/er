@@ -22,11 +22,11 @@ TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"
 TOPIC_MAGLOCK_CMD = "maglock/cmd"
-TOPIC_STAR_SKY_CMD = "star_sky/sys/cmd"
+TOPIC_STAR_SKY_CMD = "star_sky/cmd"
 
 PHASE_META: dict[int, dict[str, Any]] = {
-    0: {"name": "standby", "active": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi"), "solved": ()},
-    1: {"name": "maintenance", "active": (), "solved": ()},
+    0: {"name": "standby", "active": (), "solved": ()},
+    1: {"name": "maintenance", "active": ("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles", "star_slider", "sissi"), "solved": ()},
     2: {"name": "prepare", "active": (), "solved": ()},
     3: {"name": "start", "active": ("images",), "solved": ()},
     4: {"name": "piano", "active": ("piano",), "solved": ("images",)},
@@ -186,6 +186,29 @@ class DashboardStore:
         if last_phase is not None:
             last_name = PHASE_META.get(int(last_phase), {"name": f"phase_{last_phase}"}).get("name", "")
         run = game.get("run") or {}
+        riddle_timings = run.get("riddle_timings") or {}
+        current_riddle_elapsed_s = 0
+        current_riddle_name = ""
+        for riddle_id in phase_meta.get("active", ()):
+            timing = riddle_timings.get(riddle_id) or {}
+            if bool(timing.get("solved")):
+                continue
+            current_riddle_name = riddle_id
+            solve_from_activation = timing.get("solve_time_from_activation_s")
+            if solve_from_activation is not None:
+                try:
+                    current_riddle_elapsed_s = int(round(float(solve_from_activation)))
+                except Exception:
+                    current_riddle_elapsed_s = 0
+            elif timing.get("activated_at") and bool(run.get("timer_running", False)):
+                try:
+                    from datetime import datetime, timezone
+                    activated = datetime.fromisoformat(str(timing.get("activated_at")).replace("Z", "+00:00"))
+                    now = datetime.now(timezone.utc)
+                    current_riddle_elapsed_s = max(0, int((now - activated).total_seconds()))
+                except Exception:
+                    current_riddle_elapsed_s = 0
+            break
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
@@ -195,6 +218,8 @@ class DashboardStore:
             "players": list(run.get("players") or []),
             "timer_running": bool(run.get("timer_running", False)),
             "elapsed_s": int(run.get("elapsed_s", 0) or 0),
+            "current_riddle_elapsed_s": current_riddle_elapsed_s,
+            "current_riddle_name": current_riddle_name,
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -272,6 +297,8 @@ class DashboardStore:
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = set(meta.get("active", ()))
         solved = set(meta.get("solved", ()))
+        run = game.get("run") or {}
+        riddle_timings = run.get("riddle_timings") or {}
         now_mono = time.monotonic()
         out = []
         for row in RIDDLES:
@@ -279,7 +306,12 @@ class DashboardStore:
             node_id = row["node_id"]
             state_payload = node_states.get(node_id, {}) if node_id else {}
 
+            timing = riddle_timings.get(riddle_id) or {}
             if riddle_id in solved:
+                phase_state = "solved"
+            elif riddle_id in active and bool(timing.get("solved")):
+                phase_state = "solved_pending"
+            elif bool(timing.get("solved")):
                 phase_state = "solved"
             elif riddle_id in active:
                 phase_state = "active"
@@ -298,11 +330,13 @@ class DashboardStore:
                 if online and isinstance(uptime, (int, float)):
                     node_status = f"online ({int(uptime)}s)"
 
+            phase_state_label = "solved" if phase_state == "solved_pending" else phase_state
             out.append({
                 "id": riddle_id,
                 "label": row["label"],
                 "manual": row["manual"],
                 "phase_state": phase_state,
+                "phase_state_label": phase_state_label,
                 "phase_state_class": f"phase-{phase_state}",
                 "node_status": node_status,
                 "node_status_class": "node-manual" if row["manual"] else ("node-online" if online else "node-offline"),
@@ -509,7 +543,8 @@ def api_light() -> Any:
     if group_id == "star_sky":
         if action not in {"on", "off"}:
             return jsonify({"ok": False, "error": "star sky supports only on/off"}), 400
-        mqtt_publish(TOPIC_STAR_SKY_CMD, "SOLVE" if action == "on" else "DISABLE")
+        mqtt_publish(TOPIC_STAR_SKY_CMD, {"cmd": "on" if action == "on" else "off"})
+        mqtt_publish("star_sky/sys/cmd", "SOLVE" if action == "on" else "DISABLE")
         mqtt_publish(TOPIC_LIGHTING_CMD, {"cmd": "turn_on" if action == "on" else "turn_off", "light": "r3_uv"})
         return jsonify({"ok": True})
 

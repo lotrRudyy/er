@@ -14,28 +14,33 @@
           <div class="label">Phase</div>
           <div id="phaseValue" class="value big">0 standby</div>
           <div class="subline">Last: <span id="lastPhaseValue">—</span></div>
-          <div class="label timer-label">Timer</div>
-          <div id="timerValue" class="value timer compact-timer">00:00:00</div>
-          <div class="mode-buttons">
-            <button data-phase-action="standby">Standby</button>
-            <button data-phase-action="maintenance">Maintenance</button>
-            <button data-phase-action="prepare">Prepare</button>
-            <button data-phase-action="start">Start</button>
+          <div class="phase-actions-row">
+            <div class="mode-buttons">
+              <button data-phase-action="standby">Standby</button>
+              <button data-phase-action="maintenance">Maintenance</button>
+              <button data-phase-action="prepare">Prepare</button>
+              <button data-phase-action="start">Start</button>
+            </div>
+            <div class="players-inline">
+              <div class="label small-label">Players</div>
+              <input id="playerInput" class="player-input" type="text" placeholder="Add player + Enter" />
+            </div>
           </div>
         </div>
 
-        <div class="players-panel">
-          <div class="label">Players</div>
-          <input id="playerInput" class="player-input" type="text" placeholder="Type player name and press Enter" />
-          <div id="playersList" class="players-list"></div>
+        <div class="timer-panel">
+          <div class="label">Timer</div>
+          <div id="timerValue" class="value timer compact-timer">00:00:00</div>
+          <div class="label small-label">Current riddle</div>
+          <div id="riddleTimerValue" class="value sub-timer">00:00:00</div>
         </div>
 
         <div class="stacked-controls">
-          <section class="subpanel compact-panel">
+          <section class="subpanel compact-panel controls-borderless">
             <h2>Lights</h2>
             <div id="lightsGrid" class="controls-grid"></div>
           </section>
-          <section class="subpanel compact-panel">
+          <section class="subpanel compact-panel controls-borderless">
             <h2>Locks</h2>
             <div id="locksGrid" class="controls-grid"></div>
           </section>
@@ -44,6 +49,10 @@
         <div class="nodes-panel">
           <div class="label">Controllers / Nodes</div>
           <div id="nodesList" class="nodes-list"></div>
+        </div>
+
+        <div class="players-list-panel">
+          <div id="playersList" class="players-list"></div>
         </div>
       </div>
     </section>

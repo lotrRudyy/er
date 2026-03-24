@@ -1,6 +1,6 @@
 
 const state = {
-  game: { phase: 0, last_phase: null, phase_name: 'standby', phase_display: '0 standby', last_phase_name: '', elapsed_s: 0, timer_running: false, players: [] },
+  game: { phase: 0, last_phase: null, phase_name: 'standby', phase_display: '0 standby', last_phase_name: '', elapsed_s: 0, current_riddle_elapsed_s: 0, current_riddle_name: '', timer_running: false, players: [] },
   nodes: [],
   locks: [],
   lights: [],
@@ -10,6 +10,8 @@ const state = {
 let lastSnapshot = null;
 let localTimerBaseElapsed = 0;
 let localTimerStartedAt = 0;
+let localRiddleTimerBaseElapsed = 0;
+let localRiddleTimerStartedAt = 0;
 
 const dimDrafts = {};
 const dimEditing = {};
@@ -45,7 +47,7 @@ function sectionChanged(nextData, key) {
   return stableStringify(lastSnapshot[key]) !== stableStringify(nextData[key]);
 }
 
-function syncLocalTimer(game) {
+function syncLocalTimers(game) {
   const nextElapsed = parseInt(game.elapsed_s || 0, 10) || 0;
   if (game.timer_running) {
     if (!state.game.timer_running || Math.abs(nextElapsed - readLocalTimer()) > 1) {
@@ -56,6 +58,17 @@ function syncLocalTimer(game) {
     localTimerBaseElapsed = nextElapsed;
     localTimerStartedAt = 0;
   }
+
+  const nextRiddleElapsed = parseInt(game.current_riddle_elapsed_s || 0, 10) || 0;
+  if (game.timer_running && game.current_riddle_name) {
+    if (!state.game.timer_running || state.game.current_riddle_name !== game.current_riddle_name || Math.abs(nextRiddleElapsed - readLocalRiddleTimer()) > 1) {
+      localRiddleTimerBaseElapsed = nextRiddleElapsed;
+      localRiddleTimerStartedAt = Date.now();
+    }
+  } else {
+    localRiddleTimerBaseElapsed = nextRiddleElapsed;
+    localRiddleTimerStartedAt = 0;
+  }
 }
 
 function readLocalTimer() {
@@ -63,14 +76,20 @@ function readLocalTimer() {
   return parseInt(localTimerBaseElapsed || 0, 10) + Math.floor((Date.now() - localTimerStartedAt) / 1000);
 }
 
-function renderPlayers() {
-  const input = document.getElementById('playerInput');
-  const wrap = document.getElementById('playersList');
+function readLocalRiddleTimer() {
+  if (!state.game.timer_running || !state.game.current_riddle_name || !localRiddleTimerStartedAt) return parseInt(localRiddleTimerBaseElapsed || 0, 10);
+  return parseInt(localRiddleTimerBaseElapsed || 0, 10) + Math.floor((Date.now() - localRiddleTimerStartedAt) / 1000);
+}
 
+function renderPlayersInput() {
+  const input = document.getElementById('playerInput');
   if (!playerEditing && document.activeElement !== input) {
     input.value = '';
   }
+}
 
+function renderPlayersList() {
+  const wrap = document.getElementById('playersList');
   wrap.innerHTML = '';
   (state.game.players || []).forEach((name, idx) => {
     const chip = document.createElement('div');
@@ -83,7 +102,7 @@ function renderPlayers() {
       const next = state.game.players.filter((_, i) => i !== idx);
       await api('/api/players', { method: 'POST', body: JSON.stringify({ players: next }) });
       state.game.players = next;
-      renderPlayers();
+      renderPlayersList();
     });
     chip.appendChild(btn);
     wrap.appendChild(chip);
@@ -96,7 +115,9 @@ function renderTop() {
     ? '—'
     : `${state.game.last_phase} ${state.game.last_phase_name || ''}`.trim();
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
-  renderPlayers();
+  document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
+  renderPlayersInput();
+  renderPlayersList();
 }
 
 function renderNodes() {
@@ -117,7 +138,6 @@ function renderLocks() {
     const card = document.createElement('div');
     card.className = 'control-card';
     const open = lock.is_open === true;
-    const closed = lock.is_open === false;
     card.innerHTML = `
       <div class="control-stack">
         <button class="control-button ${open ? 'is-open' : 'is-closed'}">
@@ -252,18 +272,18 @@ function renderRiddles() {
     const infoHtml = riddle.id === 'images'
       ? renderImagesButtons(riddle.images_buttons)
       : (riddle.info || '');
-    const isActive = riddle.phase_state === 'active';
+    const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending';
     const tr = document.createElement('tr');
     tr.dataset.riddleId = riddle.id;
     tr.innerHTML = `
       <td>${riddle.label}</td>
-      <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state}</span></td>
-      <td><button class="solve-btn ${isActive ? 'active' : 'inactive'}" ${isActive ? '' : 'disabled'}>Solve</button></td>
+      <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state_label || riddle.phase_state}</span></td>
+      <td><button class="solve-btn ${canSolve ? 'active' : 'inactive'}" ${canSolve ? '' : 'disabled'}>Solve</button></td>
       <td>${infoHtml}</td>
       <td>${hintCellHtml(riddle, activeHintValues[riddle.id] || '')}</td>
     `;
     const solveBtn = tr.querySelector('.solve-btn');
-    if (isActive) {
+    if (canSolve && riddle.phase_state !== 'solved') {
       solveBtn.addEventListener('click', async () => {
         await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
         await fetchAndPatch();
@@ -300,13 +320,13 @@ function patchState(data) {
   const rerenderLights = sectionChanged(data, 'lights');
   const rerenderRiddles = sectionChanged(data, 'riddles');
 
+  syncLocalTimers(data.game || state.game);
+
   state.game = data.game || state.game;
   state.nodes = data.nodes || [];
   state.locks = data.locks || [];
   state.lights = data.lights || [];
   state.riddles = data.riddles || [];
-
-  syncLocalTimer(state.game);
 
   for (const light of state.lights) {
     if (!dimEditing[light.id] && light.dimmable && dimDrafts[light.id] == null) {
@@ -362,6 +382,7 @@ function wireTopControls() {
 
 setInterval(() => {
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
+  document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
 }, 250);
 
 setInterval(() => {

@@ -66,6 +66,16 @@ class RuntimeState:
                 "duration_s": run.duration_s,
                 "elapsed_s": elapsed_s,
                 "timer_running": timer_running,
+                "riddle_timings": {
+                    node: {
+                        "activated_at": timing.activated_at,
+                        "solved_at": timing.solved_at,
+                        "solve_time_from_run_start_s": timing.solve_time_from_run_start_s,
+                        "solve_time_from_activation_s": timing.solve_time_from_activation_s,
+                        "solved": timing.solved,
+                    }
+                    for node, timing in run.riddle_timings.items()
+                },
             }
         else:
             payload["run"] = {
@@ -75,6 +85,7 @@ class RuntimeState:
                 "duration_s": None,
                 "elapsed_s": 0,
                 "timer_running": False,
+                "riddle_timings": {},
             }
         return payload
 
