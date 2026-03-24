@@ -576,11 +576,21 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   }
 
   if (cmd == "ALL_ON") {
-    queueBulkCommand(BulkCommand::AllOn);
+    stopAllFades();
+    cancelBulkCommand();
+    clearAllPendingChannels();
+    for (size_t i = 0; i < kChannelCount; ++i) {
+      queueChannelTarget(i, true, driver_.maxDuty(), "cmd_all_on", false);
+    }
     return;
   }
   if (cmd == "ALL_OFF") {
-    queueBulkCommand(BulkCommand::AllOff);
+    stopAllFades();
+    cancelBulkCommand();
+    clearAllPendingChannels();
+    for (size_t i = 0; i < kChannelCount; ++i) {
+      queueChannelTarget(i, false, 0, "cmd_all_off", false);
+    }
     return;
   }
 

@@ -8,7 +8,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "maglock";
-static const char* FW_VERSION = "32";
+static const char* FW_VERSION = "33";
 static const char* FW_DESC = "maglock with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x50};

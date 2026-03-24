@@ -314,7 +314,7 @@ function Invoke-OtaSingleTarget {
         }
         Write-Host "== HTTP firmware matches uploaded file =="
 
-        $otaCmdNode = if ($cmdNode -in @("maglock", "lighting")) { "$cmdNode/sys" } else { $cmdNode }
+        $otaCmdNode = "$cmdNode/sys"
         Write-Host ("== Triggering OTA on {0}/cmd ==" -f $otaCmdNode)
 
         $remotePublisher = "/home/$piUser/er1/scripts/ota_publish.py"
