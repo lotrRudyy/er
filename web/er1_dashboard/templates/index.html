@@ -8,12 +8,14 @@
 </head>
 <body>
   <div class="page">
-    <section class="panel top-panel">
-      <div class="top-grid">
-        <div class="phase-box">
+    <section class="panel unified-row">
+      <div class="unified-grid">
+        <div class="phase-panel">
           <div class="label">Phase</div>
           <div id="phaseValue" class="value big">0 standby</div>
           <div class="subline">Last: <span id="lastPhaseValue">—</span></div>
+          <div class="label timer-label">Timer</div>
+          <div id="timerValue" class="value timer compact-timer">00:00:00</div>
           <div class="mode-buttons">
             <button data-phase-action="standby">Standby</button>
             <button data-phase-action="maintenance">Maintenance</button>
@@ -22,42 +24,28 @@
           </div>
         </div>
 
-        <div class="timer-box">
-          <div class="label">Timer</div>
-          <div id="timerValue" class="value timer">00:00:00</div>
-        </div>
-
-        <div class="players-box">
+        <div class="players-panel">
           <div class="label">Players</div>
           <input id="playerInput" class="player-input" type="text" placeholder="Type player name and press Enter" />
           <div id="playersList" class="players-list"></div>
         </div>
+
+        <div class="stacked-controls">
+          <section class="subpanel compact-panel">
+            <h2>Lights</h2>
+            <div id="lightsGrid" class="controls-grid"></div>
+          </section>
+          <section class="subpanel compact-panel">
+            <h2>Locks</h2>
+            <div id="locksGrid" class="controls-grid"></div>
+          </section>
+        </div>
+
+        <div class="nodes-panel">
+          <div class="label">Controllers / Nodes</div>
+          <div id="nodesList" class="nodes-list"></div>
+        </div>
       </div>
-    </section>
-
-    <section class="controls-row">
-      <section class="panel compact-panel">
-        <h2>Locks</h2>
-        <div id="locksGrid" class="controls-grid"></div>
-      </section>
-
-      <section class="panel compact-panel">
-        <h2>Lights</h2>
-        <div id="lightsGrid" class="controls-grid"></div>
-      </section>
-
-      <section class="panel nodes-panel">
-        <h2>Nodes</h2>
-        <table class="simple-table nodes-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="nodesBody"></tbody>
-        </table>
-      </section>
     </section>
 
     <section class="panel riddles-panel">

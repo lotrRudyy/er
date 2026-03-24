@@ -1,3 +1,4 @@
+
 :root {
   --bg: #f4f4f4;
   --panel: #ffffff;
@@ -38,21 +39,35 @@ body { padding: 12px; }
   width: 1896px;
   min-height: 1056px;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   gap: 12px;
 }
 
-.panel {
+.panel, .subpanel {
   background: var(--panel);
   border: 1px solid var(--line);
   padding: 10px 12px;
 }
 
-.top-grid {
+.unified-row {
+  padding: 8px;
+}
+
+.unified-grid {
   display: grid;
-  grid-template-columns: 520px 240px 1fr;
-  gap: 16px;
+  grid-template-columns: 290px 190px 980px 1fr;
+  gap: 10px;
   align-items: start;
+}
+
+.phase-panel, .players-panel, .nodes-panel {
+  min-height: 100%;
+}
+
+.stacked-controls {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 10px;
 }
 
 .label {
@@ -62,34 +77,42 @@ body { padding: 12px; }
 }
 
 .value.big {
-  font-size: 30px;
+  font-size: 24px;
   font-weight: 700;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .value.timer {
-  font-size: 40px;
+  font-size: 32px;
   font-weight: 700;
   letter-spacing: 1px;
 }
 
+.compact-timer {
+  margin-bottom: 8px;
+}
+
+.timer-label {
+  margin-top: 6px;
+}
+
 .subline {
   color: var(--muted);
-  margin-bottom: 10px;
-  font-size: 15px;
+  margin-bottom: 8px;
+  font-size: 14px;
 }
 
 .mode-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 
 button,
 .player-input,
 .hint-input,
 .dim-input {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 button {
@@ -121,7 +144,7 @@ button:disabled {
 .players-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-content: flex-start;
 }
 
@@ -133,7 +156,7 @@ button:disabled {
   border: 1px solid #999;
   padding: 6px 8px;
   background: #fafafa;
-  margin: 0 6px 6px 0;
+  margin: 0 4px 4px 0;
 }
 
 .player-remove,
@@ -144,18 +167,10 @@ button:disabled {
   line-height: 20px;
 }
 
-.controls-row {
-  display: grid;
-  grid-template-columns: 580px 760px 370px;
-  gap: 12px;
-  align-items: start;
-}
-
 .compact-panel h2,
-.nodes-panel h2,
 .riddles-panel h2 {
-  margin: 0 0 10px 0;
-  font-size: 18px;
+  margin: 0 0 8px 0;
+  font-size: 17px;
 }
 
 .controls-grid {
@@ -173,8 +188,8 @@ button:disabled {
   padding: 8px;
 }
 
-#locksGrid .control-card { width: 102px; }
-#lightsGrid .control-card { width: 96px; }
+#locksGrid .control-card { width: 92px; }
+#lightsGrid .control-card { width: 92px; }
 
 .control-stack {
   display: grid;
@@ -183,9 +198,9 @@ button:disabled {
 
 .control-button {
   width: 100%;
-  min-height: 70px;
+  min-height: 62px;
   border-width: 2px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
   text-align: center;
@@ -194,7 +209,7 @@ button:disabled {
 .control-button .state-line {
   display: block;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -219,16 +234,41 @@ button:disabled {
 }
 
 .dim-row .control-button {
-  min-height: 40px;
+  min-height: 38px;
   font-size: 12px;
 }
 
 .dim-input {
   width: 42px;
   padding: 5px 4px;
-  min-height: 40px;
+  min-height: 38px;
   margin: 0;
   font-size: 12px;
+}
+
+.nodes-list {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.node-line {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.node-on {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-text);
+}
+
+.node-off {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-text);
 }
 
 .simple-table {
@@ -250,15 +290,6 @@ button:disabled {
   background: #f0f0f0;
 }
 
-.nodes-table th:nth-child(1) { width: 190px; }
-.nodes-table th:nth-child(2) { width: 140px; }
-
-.nodes-panel .simple-table th,
-.nodes-panel .simple-table td {
-  font-size: 14px;
-  padding: 7px 9px;
-}
-
 .riddles-table th:nth-child(1) { width: 140px; }
 .riddles-table th:nth-child(2) { width: 90px; }
 .riddles-table th:nth-child(3) { width: 80px; }
@@ -275,20 +306,9 @@ button:disabled {
   width: fit-content;
 }
 
-.nodes-panel .status-badge {
-  font-size: 12px;
-  padding: 3px 7px;
-}
-
-.status-online,
 .phase-solved {
   border-color: var(--green-line);
   background: var(--green-bg);
-}
-
-.status-offline {
-  border-color: var(--red-line);
-  background: var(--red-bg);
 }
 
 .phase-active {
@@ -296,8 +316,7 @@ button:disabled {
   background: var(--blue-bg);
 }
 
-.phase-pending,
-.node-manual {
+.phase-pending {
   border-color: var(--yellow-line);
   background: var(--yellow-bg);
 }
