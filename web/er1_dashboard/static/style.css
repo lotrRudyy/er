@@ -1,4 +1,3 @@
-
 :root {
   --bg: #f4f4f4;
   --panel: #ffffff;
@@ -7,10 +6,12 @@
   --muted: #666666;
   --accent: #1f4de3;
   --btn: #f8f8f8;
-  --green-bg: #eef9f0;
-  --green-line: #2c8a3d;
-  --red-bg: #fff1f1;
-  --red-line: #c24b4b;
+  --green-bg: #ddf6e2;
+  --green-line: #198f3d;
+  --green-text: #0f5b26;
+  --red-bg: #ffe0e0;
+  --red-line: #d63a3a;
+  --red-text: #8f1c1c;
   --blue-bg: #edf3ff;
   --blue-line: #3564e8;
   --yellow-bg: #fff7e6;
@@ -84,16 +85,27 @@ body { padding: 12px; }
   gap: 8px;
 }
 
+button,
+.player-input,
+.hint-input,
+.dim-input {
+  font-size: 15px;
+}
+
 button {
   appearance: none;
   border: 1px solid #999;
   background: var(--btn);
   padding: 8px 10px;
   cursor: pointer;
-  font-size: 15px;
 }
 
 button:hover { border-color: var(--accent); }
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 
 .player-input,
 .hint-input,
@@ -101,7 +113,6 @@ button:hover { border-color: var(--accent); }
   width: 100%;
   padding: 8px 10px;
   border: 1px solid #999;
-  font-size: 15px;
 }
 
 .player-input,
@@ -135,7 +146,7 @@ button:hover { border-color: var(--accent); }
 
 .controls-row {
   display: grid;
-  grid-template-columns: 590px 780px 400px;
+  grid-template-columns: 580px 760px 370px;
   gap: 12px;
   align-items: start;
 }
@@ -150,8 +161,9 @@ button:hover { border-color: var(--accent); }
 .controls-grid {
   display: flex;
   flex-direction: row;
-  align-items: stretch;
+  flex-wrap: nowrap;
   gap: 8px;
+  width: 100%;
 }
 
 .control-card {
@@ -159,52 +171,64 @@ button:hover { border-color: var(--accent); }
   border: 1px solid var(--line);
   background: #fafafa;
   padding: 8px;
-  min-width: 0;
 }
 
-#locksGrid .control-card {
-  width: 84px;
-}
+#locksGrid .control-card { width: 102px; }
+#lightsGrid .control-card { width: 96px; }
 
-#lightsGrid .control-card {
-  width: 84px;
-}
-
-.control-head {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
-.control-label {
-  font-weight: 700;
-  font-size: 13px;
-  line-height: 1.2;
-  min-height: 32px;
-  word-break: break-word;
-}
-
-.light-actions {
+.control-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 48px;
   gap: 6px;
-  align-items: center;
 }
 
-.control-card button {
+.control-button {
   width: 100%;
+  min-height: 70px;
+  border-width: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.control-button .state-line {
+  display: block;
+  margin-top: 6px;
   font-size: 12px;
-  padding: 5px 6px;
-  min-height: 30px;
+  font-weight: 700;
+}
+
+.control-button.is-open,
+.control-button.is-on {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-text);
+}
+
+.control-button.is-closed,
+.control-button.is-off {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-text);
+}
+
+.dim-row {
+  display: grid;
+  grid-template-columns: 1fr 42px;
+  gap: 6px;
+}
+
+.dim-row .control-button {
+  min-height: 40px;
+  font-size: 12px;
 }
 
 .dim-input {
-  width: 48px;
-  font-size: 12px;
-  padding: 5px 6px;
+  width: 42px;
+  padding: 5px 4px;
+  min-height: 40px;
   margin: 0;
-  min-height: 30px;
+  font-size: 12px;
 }
 
 .simple-table {
@@ -226,8 +250,8 @@ button:hover { border-color: var(--accent); }
   background: #f0f0f0;
 }
 
-.nodes-table th:nth-child(1) { width: 210px; }
-.nodes-table th:nth-child(2) { width: 160px; }
+.nodes-table th:nth-child(1) { width: 190px; }
+.nodes-table th:nth-child(2) { width: 140px; }
 
 .nodes-panel .simple-table th,
 .nodes-panel .simple-table td {
@@ -235,12 +259,10 @@ button:hover { border-color: var(--accent); }
   padding: 7px 9px;
 }
 
-.riddles-table th:nth-child(1) { width: 130px; }
-.riddles-table th:nth-child(2) { width: 100px; }
-.riddles-table th:nth-child(3) { width: 120px; }
-.riddles-table th:nth-child(4) { width: 80px; }
-.riddles-table th:nth-child(5) { width: 70px; }
-.riddles-table th:nth-child(7) { width: 320px; }
+.riddles-table th:nth-child(1) { width: 140px; }
+.riddles-table th:nth-child(2) { width: 90px; }
+.riddles-table th:nth-child(3) { width: 80px; }
+.riddles-table th:nth-child(5) { width: 300px; }
 
 .status-badge {
   display: inline-block;
@@ -259,38 +281,55 @@ button:hover { border-color: var(--accent); }
 }
 
 .status-online,
-.is-open,
-.is-on,
 .phase-solved {
   border-color: var(--green-line);
   background: var(--green-bg);
 }
 
-.status-offline,
-.is-closed,
-.is-off,
-.node-offline {
+.status-offline {
   border-color: var(--red-line);
   background: var(--red-bg);
 }
 
-.phase-active,
-.node-online {
+.phase-active {
   border-color: var(--blue-line);
   background: var(--blue-bg);
 }
 
-.node-manual,
-.is-unknown,
-.phase-pending {
+.phase-pending,
+.node-manual {
   border-color: var(--yellow-line);
   background: var(--yellow-bg);
+}
+
+.solve-btn.active {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  font-weight: 700;
+}
+
+.solve-btn.inactive {
+  border-color: var(--gray-line);
+  background: #f2f2f2;
+  color: #777;
 }
 
 .images-buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.images-buttons .pill-true {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-text);
+}
+
+.images-buttons .pill-false {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-text);
 }
 
 .hint-list { margin-top: 4px; }

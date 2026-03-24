@@ -1,4 +1,3 @@
-
 const state = {
   game: { phase: 1, phase_name: 'standby', phase_display: '1 standby', last_phase: null, last_phase_name: '', elapsed_s: 0, timer_running: false, players: [] },
   nodes: [],
@@ -9,6 +8,8 @@ const state = {
 
 const dimDrafts = {};
 const dimEditing = {};
+let playerEditing = false;
+const hintEditing = new Set();
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -31,6 +32,13 @@ function fmtTime(total) {
 }
 
 function renderPlayers() {
+  const input = document.getElementById('playerInput');
+  if (!playerEditing) {
+    const currentFocused = document.activeElement === input;
+    input.value = '';
+    if (currentFocused) input.focus();
+  }
+
   const wrap = document.getElementById('playersList');
   wrap.innerHTML = '';
   (state.game.players || []).forEach((name, idx) => {
@@ -80,11 +88,12 @@ function renderLocks() {
     const card = document.createElement('div');
     card.className = 'control-card';
     card.innerHTML = `
-      <div class="control-head">
-        <div class="control-label">${lock.label}</div>
-        <span class="status-badge ${lock.state_class}">${lock.state_label}</span>
+      <div class="control-stack">
+        <button class="control-button ${lock.is_open ? 'is-open' : 'is-closed'}">
+          ${lock.label}
+          <span class="state-line">${(lock.state_label || '').toUpperCase()}</span>
+        </button>
       </div>
-      <button>${lock.button}</button>
     `;
     card.querySelector('button').addEventListener('click', async () => {
       const action = (lock.kind === 'toggle' && lock.is_open) ? 'close' : 'open';
@@ -96,12 +105,8 @@ function renderLocks() {
 }
 
 function resolveDimValue(light) {
-  if (dimEditing[light.id]) {
-    return dimDrafts[light.id] ?? light.pct;
-  }
-  if (dimDrafts[light.id] != null && !Number.isNaN(parseInt(dimDrafts[light.id], 10))) {
-    return dimDrafts[light.id];
-  }
+  if (dimEditing[light.id]) return dimDrafts[light.id] ?? light.pct;
+  if (dimDrafts[light.id] != null) return dimDrafts[light.id];
   return light.pct;
 }
 
@@ -111,48 +116,46 @@ function renderLights() {
   for (const light of state.lights || []) {
     const card = document.createElement('div');
     card.className = 'control-card';
-    const dimValue = resolveDimValue(light);
-    const dimInput = light.dimmable
-      ? `<input class="dim-input" type="number" min="0" max="100" value="${dimValue}" />`
-      : '';
-    card.innerHTML = `
-      <div class="control-head">
-        <div class="control-label">${light.label}</div>
-        <span class="status-badge ${light.state_class}">${light.state_label}</span>
-      </div>
-      <div class="light-actions">
-        <button>${light.button}</button>
-        ${dimInput}
-      </div>
-    `;
+    const buttonClass = light.on ? 'is-on' : 'is-off';
 
-    const btn = card.querySelector('button');
-    btn.addEventListener('click', async () => {
-      if (light.dimmable) {
+    if (light.dimmable) {
+      const dimValue = resolveDimValue(light);
+      card.innerHTML = `
+        <div class="control-stack">
+          <button class="control-button ${buttonClass}">
+            ${light.label}
+            <span class="state-line">${light.on ? `ON (${light.pct}%)` : `OFF (${light.pct}%)`}</span>
+          </button>
+          <div class="dim-row">
+            <button class="control-button ${buttonClass}">${light.on ? 'Off' : 'On'}</button>
+            <input class="dim-input" type="number" min="0" max="100" value="${dimValue}" />
+          </div>
+        </div>
+      `;
+      const buttons = card.querySelectorAll('button');
+      buttons[0].addEventListener('click', async () => {
         const input = card.querySelector('.dim-input');
         let pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
-        if (!light.on && pct <= 0) pct = 100;
         const action = light.on ? 'off' : 'on';
+        if (!light.on && pct <= 0) pct = 100;
         dimDrafts[light.id] = action === 'off' ? 0 : pct;
         await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action, pct }) });
-      } else {
+        await refreshState();
+      });
+      buttons[1].addEventListener('click', async () => {
+        const input = card.querySelector('.dim-input');
+        let pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
         const action = light.on ? 'off' : 'on';
-        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action }) });
-      }
-      await refreshState();
-    });
+        if (!light.on && pct <= 0) pct = 100;
+        dimDrafts[light.id] = action === 'off' ? 0 : pct;
+        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action, pct }) });
+        await refreshState();
+      });
 
-    const input = card.querySelector('.dim-input');
-    if (input) {
-      input.addEventListener('focus', () => {
-        dimEditing[light.id] = true;
-      });
-      input.addEventListener('blur', () => {
-        dimEditing[light.id] = false;
-      });
-      input.addEventListener('input', () => {
-        dimDrafts[light.id] = input.value;
-      });
+      const input = card.querySelector('.dim-input');
+      input.addEventListener('focus', () => { dimEditing[light.id] = true; });
+      input.addEventListener('blur', () => { dimEditing[light.id] = false; });
+      input.addEventListener('input', () => { dimDrafts[light.id] = input.value; });
       input.addEventListener('keydown', async (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
@@ -162,24 +165,32 @@ function renderLights() {
         await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action: 'set_pct', pct }) });
         await refreshState();
       });
+    } else {
+      card.innerHTML = `
+        <div class="control-stack">
+          <button class="control-button ${buttonClass}">
+            ${light.label}
+            <span class="state-line">${light.on ? 'ON' : 'OFF'}</span>
+          </button>
+        </div>
+      `;
+      card.querySelector('button').addEventListener('click', async () => {
+        const action = light.on ? 'off' : 'on';
+        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action }) });
+        await refreshState();
+      });
     }
-
     wrap.appendChild(card);
   }
 }
 
 function renderImagesButtons(buttons) {
   if (!buttons) return '';
-  const order = [
-    ['jesus', 'Jesus'],
-    ['blumen', 'Blumen'],
-    ['natur', 'Natur'],
-    ['puppe', 'Puppe']
-  ];
+  const order = [['jesus', 'Jesus'], ['blumen', 'Blumen'], ['natur', 'Natur'], ['puppe', 'Puppe']];
   return `
     <div class="images-buttons">
       ${order.map(([key, label]) => `
-        <span class="status-badge ${buttons[key] ? 'is-on' : 'is-off'}">${label}</span>
+        <span class="status-badge ${buttons[key] ? 'pill-true' : 'pill-false'}">${label}</span>
       `).join('')}
     </div>
   `;
@@ -192,9 +203,12 @@ function hintCellHtml(riddle) {
       <button class="hint-remove" data-hint-id="${h.id}">x</button>
     </div>
   `).join('');
+  const inputValue = hintEditing.has(riddle.id)
+    ? (document.querySelector(`tr[data-riddle-id="${riddle.id}"] .hint-input`)?.value || '')
+    : '';
   return `
     <div class="hint-wrap">
-      <input class="hint-input" type="text" placeholder="Type hint and press Enter" />
+      <input class="hint-input" type="text" placeholder="Type hint and press Enter" value="${inputValue}" />
       <div class="hint-list">${items}</div>
     </div>
   `;
@@ -202,26 +216,43 @@ function hintCellHtml(riddle) {
 
 function renderRiddles() {
   const body = document.getElementById('riddlesBody');
+  const activeHintValues = {};
+  document.querySelectorAll('#riddlesBody tr[data-riddle-id]').forEach(row => {
+    const rid = row.dataset.riddleId;
+    const input = row.querySelector('.hint-input');
+    if (input && document.activeElement === input) {
+      activeHintValues[rid] = input.value;
+      hintEditing.add(rid);
+    }
+  });
+
   body.innerHTML = '';
   for (const riddle of state.riddles || []) {
     const infoHtml = riddle.id === 'images'
       ? renderImagesButtons(riddle.images_buttons)
       : (riddle.info || '');
+    const isActive = riddle.phase_state === 'active';
     const tr = document.createElement('tr');
+    tr.dataset.riddleId = riddle.id;
     tr.innerHTML = `
       <td>${riddle.label}</td>
       <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state}</span></td>
-      <td><span class="status-badge ${riddle.node_status_class}">${riddle.node_status}</span></td>
-      <td><button class="solve-btn">Solve</button></td>
-      <td>${riddle.tries || ''}</td>
+      <td><button class="solve-btn ${isActive ? 'active' : 'inactive'}" ${isActive ? '' : 'disabled'}>Solve</button></td>
       <td>${infoHtml}</td>
       <td>${hintCellHtml(riddle)}</td>
     `;
-    tr.querySelector('.solve-btn').addEventListener('click', async () => {
-      await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
-      await refreshState();
-    });
+    const solveBtn = tr.querySelector('.solve-btn');
+    if (isActive) {
+      solveBtn.addEventListener('click', async () => {
+        await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
+        await refreshState();
+      });
+    }
+
     const hintInput = tr.querySelector('.hint-input');
+    if (activeHintValues[riddle.id] != null) hintInput.value = activeHintValues[riddle.id];
+    hintInput.addEventListener('focus', () => hintEditing.add(riddle.id));
+    hintInput.addEventListener('blur', () => hintEditing.delete(riddle.id));
     hintInput.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
@@ -229,6 +260,7 @@ function renderRiddles() {
       if (!text) return;
       await api('/api/hints', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, text }) });
       hintInput.value = '';
+      hintEditing.delete(riddle.id);
       await refreshState();
     });
     tr.querySelectorAll('.hint-remove').forEach(btn => {
@@ -273,6 +305,8 @@ function wireTopControls() {
   });
 
   const input = document.getElementById('playerInput');
+  input.addEventListener('focus', () => { playerEditing = true; });
+  input.addEventListener('blur', () => { playerEditing = false; });
   input.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
@@ -281,6 +315,7 @@ function wireTopControls() {
     const next = [...(state.game.players || []), name];
     await api('/api/players', { method: 'POST', body: JSON.stringify({ players: next }) });
     input.value = '';
+    playerEditing = false;
     await refreshState();
   });
 }
@@ -294,7 +329,7 @@ setInterval(() => {
 
 setInterval(() => {
   refreshState().catch(console.error);
-}, 750);
+}, 1000);
 
 wireTopControls();
 refreshState().catch(console.error);
