@@ -96,7 +96,7 @@ PULSE_LOCKS = {
 PHASES: dict[PhaseId, PhaseSpec] = {
     0: PhaseSpec(
         phase=0,
-        name="maintenance",
+        name="standby",
         active_riddles=ALL_RIDDLES,
         solved_riddles=(),
         persistent_locks={"r2": "open", "r3": "open"},
@@ -112,7 +112,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     1: PhaseSpec(
         phase=1,
-        name="standby",
+        name="maintenance",
         active_riddles=(),
         solved_riddles=(),
         persistent_locks={"r2": "open", "r3": "open"},
@@ -182,7 +182,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     5: PhaseSpec(
         phase=5,
-        name="open_prison",
+        name="prison",
         active_riddles=("open_prison",),
         solved_riddles=("images", "piano"),
         persistent_locks={"r2": "open", "r3": "closed"},
@@ -210,7 +210,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     6: PhaseSpec(
         phase=6,
-        name="mount_wheel",
+        name="wheel",
         active_riddles=("mount_wheel",),
         solved_riddles=("images", "piano", "open_prison"),
         persistent_locks={"r2": "open", "r3": "closed"},
@@ -230,7 +230,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     7: PhaseSpec(
         phase=7,
-        name="rope_paths",
+        name="rope",
         active_riddles=("rope_paths",),
         solved_riddles=("images", "piano", "open_prison", "mount_wheel"),
         persistent_locks={"r2": "open", "r3": "closed"},
@@ -291,7 +291,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     10: PhaseSpec(
         phase=10,
-        name="knocking_candles_pre",
+        name="knocking",
         active_riddles=("knocking", "candles"),
         solved_riddles=("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess"),
         persistent_locks={"r2": "open", "r3": "open"},
@@ -348,7 +348,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     12: PhaseSpec(
         phase=12,
-        name="star_slider",
+        name="stars",
         active_riddles=("star_slider",),
         solved_riddles=("images", "piano", "open_prison", "mount_wheel", "rope_paths", "tangram", "magnet", "chess", "knocking", "candles"),
         persistent_locks={"r2": "open", "r3": "open"},
@@ -403,7 +403,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
     ),
     14: PhaseSpec(
         phase=14,
-        name="solved",
+        name="finished",
         active_riddles=(),
         solved_riddles=ALL_RIDDLES,
         persistent_locks={"r2": "open", "r3": "open"},
@@ -423,8 +423,8 @@ PHASES: dict[PhaseId, PhaseSpec] = {
 }
 
 ADMIN_TARGET_PHASE = {
-    "maintenance": 0,
-    "standby": 1,
+    "standby": 0,
+    "maintenance": 1,
     "prepare": 2,
 }
 
