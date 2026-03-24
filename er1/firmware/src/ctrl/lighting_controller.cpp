@@ -13,6 +13,42 @@ constexpr uint8_t kBulkOrder[LightingController::kChannelCount] = {0, 1, 2, 3, 4
 constexpr uint32_t kBulkStepGapMs = 30;
 constexpr uint32_t kPendingStepGapMs = 15;
 
+enum LightIndex : size_t {
+  kR2Chess = 0,
+  kR2Schronk = 1,
+  kR1Bild = 2,
+  kR1Stuen = 3,
+  kR3Slider = 4,
+  kR3Cage = 5,
+  kTorchStiege = 6,
+  kTorchR2R3 = 7,
+  kTorchR2 = 8,
+  kR3Uv = 9,
+};
+
+struct PhaseScene {
+  int phase;
+  uint8_t pct[LightingController::kChannelCount];
+};
+
+constexpr PhaseScene kPhaseScenes[] = {
+  {0,  {100,100,100,100,100,100,100,100,100,100}}, // maintenance
+  {1,  {  0,  0,  0,  0,  0,  0,  0,  0,  0,  0}}, // standby
+  {2,  {100,100,100,100,100,100,100,  0,  0,  0}}, // prepare
+  {3,  {  0,  0,100,100,  0,  0,100,  0,  0,  0}}, // images
+  {4,  {  0,  0,100,100,  0,  0,100,  0,  0,  0}}, // piano
+  {5,  {100,100,100,100,  0,  0,100,  0,100,  0}}, // open_prison
+  {6,  {100,100,100,100,  0,  0,100,  0,100,  0}}, // mount_wheel
+  {7,  {100,100,100,100,  0,  0,100,  0,100,  0}}, // rope_paths
+  {8,  {100,100,100,100,  0,  0,100,  0,100,  0}}, // tangram_magnet
+  {9,  {100,100,100,100,  0,  0,100,  0,100,  0}}, // chess
+  {10, {100,100,100,100,100,100,100,100,100,  0}}, // knocking_candles_pre
+  {11, {100,100,100,100,100,100,100,100,100,  0}}, // candles
+  {12, {100,100,100,100, 25, 25,100,100,100,100}}, // star_slider
+  {13, {100,100,100,100,100,100,100,100,100,100}}, // sissi
+  {14, {100,100,100,100,100,100,100,100,100,100}}, // solved
+};
+
 String makeStateTopic(const char* id) {
   String t = "lighting/mosfet/";
   t += id;
@@ -44,6 +80,13 @@ bool parseIntLoose(const String& s, int32_t& out) {
   if (endp == t.c_str()) return false;
   out = (int32_t)v;
   return true;
+}
+
+const PhaseScene* findPhaseScene(int phase) {
+  for (const auto& scene : kPhaseScenes) {
+    if (scene.phase == phase) return &scene;
+  }
+  return nullptr;
 }
 
 } // namespace
@@ -298,16 +341,6 @@ void LightingController::startBulkCommand(BulkCommand cmd) {
       bulkTargetOn_ = false;
       bulkTargetDuty_ = 0;
       break;
-    case BulkCommand::NonIngameAllOn:
-      bulkReason_ = "game_state_non_ingame";
-      bulkTargetOn_ = true;
-      bulkTargetDuty_ = driver_.maxDuty();
-      break;
-    case BulkCommand::SceneInitial:
-      bulkReason_ = "game_state_ingame";
-      bulkTargetOn_ = false;
-      bulkTargetDuty_ = 0;
-      break;
     case BulkCommand::None:
     default:
       bulkReason_ = nullptr;
@@ -333,14 +366,7 @@ void LightingController::runBulkCommandStep(uint32_t nowMs) {
   size_t steps = bulkApplyCountForTick();
   while (steps-- && bulkIndex_ < kChannelCount) {
     const size_t idx = kBulkOrder[bulkIndex_++];
-
-    if (activeBulkCommand_ == BulkCommand::SceneInitial) {
-      const bool on = (idx == 2 || idx == 3 || idx == 6);
-      const uint32_t duty = on ? driver_.maxDuty() : 0;
-      queueChannelTarget(idx, on, duty, bulkReason_ ? bulkReason_ : "bulk", false);
-    } else {
-      queueChannelTarget(idx, bulkTargetOn_, bulkTargetDuty_, bulkReason_ ? bulkReason_ : "bulk", false);
-    }
+    queueChannelTarget(idx, bulkTargetOn_, bulkTargetDuty_, bulkReason_ ? bulkReason_ : "bulk", false);
   }
 
   if (bulkIndex_ >= kChannelCount) {
@@ -476,87 +502,24 @@ bool LightingController::onCmd(const char* cmd, const char* payload) {
   return true;
 }
 
-
 void LightingController::applyPhaseScene(int phase, const char* reason) {
-  if (currentPhase_ == phase) {
+  if (currentPhase_ == phase) return;
+
+  const PhaseScene* scene = findPhaseScene(phase);
+  if (!scene) {
+    log("WRN", String("lighting has no scene for phase ") + phase);
     return;
   }
-  currentPhase_ = phase;
 
+  currentPhase_ = phase;
   stopAllFades();
   cancelBulkCommand();
   clearAllPendingChannels();
 
-  uint8_t pct[kChannelCount] = {0,0,0,0,0,0,0,0,0,0};
-  auto setPct = [&](size_t idx, uint8_t value) { if (idx < kChannelCount) pct[idx] = value; };
-
-  switch (phase) {
-    case 0: // maintenance
-    case 14: // solved
-      for (size_t i = 0; i < kChannelCount; ++i) pct[i] = 100;
-      break;
-    case 1: // standby
-      break;
-    case 2: // prepare
-      setPct(0, 100); // r2_chess
-      setPct(1, 100); // r2_schronk
-      setPct(2, 100); // r1_bild
-      setPct(3, 100); // r1_stuen
-      setPct(4, 100); // r3_slider
-      setPct(5, 100); // r3_cage
-      setPct(6, 100); // torch_stiege
-      break;
-    case 3: // images
-    case 4: // piano
-      setPct(2, 100);
-      setPct(3, 100);
-      setPct(6, 100);
-      break;
-    case 5: // open_prison
-    case 6: // mount_wheel
-    case 7: // rope_paths
-    case 8: // tangram+magnet
-    case 9: // chess
-      setPct(0, 100);
-      setPct(1, 100);
-      setPct(2, 100);
-      setPct(3, 100);
-      setPct(6, 100);
-      setPct(8, 100); // torch_r2
-      break;
-    case 10: // knocking + candles pre
-    case 11: // candles
-      setPct(0, 100);
-      setPct(1, 100);
-      setPct(2, 100);
-      setPct(3, 100);
-      setPct(4, 100);
-      setPct(5, 100);
-      setPct(6, 100);
-      setPct(7, 100); // torch_r2r3
-      setPct(8, 100);
-      break;
-    case 12: // star_slider
-      setPct(0, 100);
-      setPct(1, 100);
-      setPct(2, 100);
-      setPct(3, 100);
-      setPct(4, 25);
-      setPct(5, 25);
-      setPct(6, 100);
-      setPct(7, 100);
-      setPct(8, 100);
-      setPct(9, 100); // r3_uv
-      break;
-    case 13: // sissi
-    default:
-      for (size_t i = 0; i < kChannelCount; ++i) pct[i] = 100;
-      break;
-  }
-
   for (size_t i = 0; i < kChannelCount; ++i) {
-    const bool on = pct[i] > 0;
-    const uint32_t duty = percentToDuty(pct[i]);
+    const uint8_t pct = scene->pct[i];
+    const bool on = pct > 0;
+    const uint32_t duty = percentToDuty(pct);
     queueChannelTarget(i, on, duty, reason ? reason : "phase_scene", false);
   }
 }
@@ -569,25 +532,12 @@ void LightingController::onGameStateMessage(const String& payload) {
     return;
   }
 
-  if (doc["phase"].is<int>()) {
-    applyPhaseScene(doc["phase"].as<int>(), "game_state_phase");
+  if (!doc["phase"].is<int>()) {
+    log("WRN", String("lighting game/state missing integer phase: ") + payload);
     return;
   }
 
-  String modeS = String((const char*)(doc["mode"] | ""));
-  modeS.trim();
-
-  if (modeS == "MODE_MAINTENANCE") {
-    applyPhaseScene(0, "game_state_mode");
-  } else if (modeS == "MODE_STANDBY") {
-    applyPhaseScene(1, "game_state_mode");
-  } else if (modeS == "MODE_PREPARE") {
-    applyPhaseScene(2, "game_state_mode");
-  } else if (modeS == "MODE_INGAME") {
-    applyPhaseScene(3, "game_state_mode");
-  } else {
-    log("WRN", String("lighting unknown game/state payload: ") + payload);
-  }
+  applyPhaseScene(doc["phase"].as<int>(), "game_state_phase");
 }
 
 void LightingController::onLightingCommandTopic(const String& payload) {
@@ -631,23 +581,6 @@ void LightingController::onLightingCommandTopic(const String& payload) {
   }
   if (cmd == "ALL_OFF") {
     queueBulkCommand(BulkCommand::AllOff);
-    return;
-  }
-  if (cmd == "SCENE") {
-    String scene = upperTrim(pickString("scene", "SCENE"));
-    if (scene == "INITIAL_INGAME") {
-      queueBulkCommand(BulkCommand::SceneInitial);
-      return;
-    }
-    if (scene == "ALL_ON") {
-      queueBulkCommand(BulkCommand::AllOn);
-      return;
-    }
-    if (scene == "ALL_OFF") {
-      queueBulkCommand(BulkCommand::AllOff);
-      return;
-    }
-    log("WRN", String("unknown lighting scene: ") + scene);
     return;
   }
 

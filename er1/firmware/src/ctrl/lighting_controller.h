@@ -31,8 +31,6 @@ public:
     None = 0,
     AllOn,
     AllOff,
-    SceneInitial,
-    NonIngameAllOn,
   };
 
   LightingController();
@@ -85,6 +83,8 @@ private:
   void clearAllPendingChannels();
   void runPendingChannelStep(uint32_t nowMs);
 
+  void applyPhaseScene(int phase, const char* reason);
+
 private:
   Core::NodeContext* ctx_ = nullptr;
   LightingDriver driver_{};
@@ -94,7 +94,6 @@ private:
   const char* dirtyReasons_[kChannelCount]{};
   bool dirty_[kChannelCount]{};
   int currentPhase_ = -1;
-  void applyPhaseScene(int phase, const char* reason);
   bool bootStatePublished_ = false;
 
   BulkCommand queuedBulkCommand_ = BulkCommand::None;
