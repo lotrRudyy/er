@@ -1,13 +1,18 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Preferences.h>
 
 #include "core_node.h"
 #include "maglock_driver.h"
 
 class MaglockController {
 public:
+  struct PhaseFailSafeSpec {
+    int phase;
+    bool r2Closed;
+    bool r3Closed;
+  };
+
   void begin(Core::NodeContext& ctx);
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
@@ -21,13 +26,6 @@ public:
   bool shouldAllowLog(const char* level);
 
 private:
-  enum class GameMode : uint8_t {
-    Standby = 0,
-    Prepare,
-    InGame,
-    Maint
-  };
-
   enum class LockMode : uint8_t {
     FailSecure = 0,
     FailSafe
@@ -47,8 +45,9 @@ private:
     uint32_t pulseCount = 0;
   };
 
+
   static constexpr uint32_t kPulseMs = 1000;
-  static constexpr uint32_t kHardCutoffMs = 1200;
+  static constexpr uint32_t kHardCutoffMs = 1000;
   static constexpr uint32_t kCooldownMs = 10000;
   static constexpr uint32_t kBootGuardMs = 10000;
   static constexpr uint32_t kMetricIntervalMs = 10000;
@@ -63,26 +62,22 @@ private:
   };
 
   void applyPhase(int newPhase, const char* reason);
-  static const char* modeName(GameMode mode);
-  static GameMode phaseToMode(int phase);
+  void applyFailSafePhaseState(int phase, const char* reason);
+  static const PhaseFailSafeSpec* findPhaseSpec(int phase);
   void applyLockOutput(LockState& lk);
   const char* lockStateName(const LockState& lk) const;
   void publishLockState(const LockState& lk, const char* reason);
   void publishStateSnapshot();
   LockState* findLockById(const String& id);
   void startPulse(LockState& lk, const char* reason);
-  void setFailSafe(LockState& lk, bool locked, const char* reason);
+  void setFailSafe(LockState& lk, bool closed, const char* reason);
   void updatePulseTimers(uint32_t nowMs);
+  void updateProtectionWindows(uint32_t nowMs);
   void publishMetricsIfDue(uint32_t nowMs);
   void handleLockCommand(LockState& lk, const String& cmd);
   void handleLockCommandTopicInternal(const String& topic, const String& payload);
 
   void forceAllFailSecureOff(const char* reason);
-  void persistGameMode();
-  void loadGameMode();
-
-  uint32_t hbIntervalForMode(GameMode mode) const;
-  void applyHeartbeatInterval();
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
@@ -91,8 +86,6 @@ private:
 
   Core::NodeContext* ctx_ = nullptr;
   MaglockDriver driver_;
-  Preferences* prefs_ = nullptr;
-  GameMode gameMode_ = GameMode::Standby;
   int currentPhase_ = 1;
   uint32_t bootMs_ = 0;
   uint32_t lastMetricMs_ = 0;
