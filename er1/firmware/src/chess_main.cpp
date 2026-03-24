@@ -9,8 +9,8 @@
 using namespace Core;
 
 static const char* NODE_ID = "chess";
-static const char* FW_VERSION = "19";
-static const char* FW_DESC = "chess with new ota";
+static const char* FW_VERSION = "20";
+static const char* FW_DESC = "chess phase-driven state sync and full reader updates";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
 static const IPAddress NET_IP(192, 168, 0, 14);
@@ -32,33 +32,53 @@ static NodeCore nodeCore;
 static ChessRiddle chess;
 static bool s_gameEnabled = false;
 
-static bool jsonArrayContains(JsonVariantConst arr, const char* value) {
-  if (arr.isNull()) return false;
-  for (JsonVariantConst v : arr.as<JsonArrayConst>()) {
-    const char* item = v.as<const char*>();
-    if (item && strcmp(item, value) == 0) return true;
+struct ChessPhaseState {
+  bool enabled;
+  bool solved;
+};
+
+static ChessPhaseState stateForPhase(int phase) {
+  switch (phase) {
+    case 0: return {true,  false}; // maintenance
+    case 1: return {false, false}; // standby
+    case 2: return {false, false}; // prepare
+    case 3: return {false, false};
+    case 4: return {false, false};
+    case 5: return {false, false};
+    case 6: return {false, false};
+    case 7: return {false, false};
+    case 8: return {false, false};
+    case 9: return {true,  false}; // chess
+    case 10: return {false, true };
+    case 11: return {false, true };
+    case 12: return {false, true };
+    case 13: return {false, true };
+    case 14: return {false, true };
+    default: return {false, false};
   }
-  return false;
 }
 
-static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
+static int parsePhaseFromGameState(const String& payload) {
   JsonDocument doc;
-  if (deserializeJson(doc, payload)) {
-    return false;
-  }
-
-  const char* mode = doc["mode"] | "";
-  if (strcmp(mode, "MODE_MAINTENANCE") == 0) return true;
-  if (strcmp(mode, "MODE_INGAME") != 0) return false;
-
-  return jsonArrayContains(doc["active"], nodeName) || jsonArrayContains(doc["solved"], nodeName);
+  if (deserializeJson(doc, payload)) return -1;
+  if (!doc["phase"].is<int>()) return -1;
+  return doc["phase"].as<int>();
 }
 
-static void applyEnabled(ChessRiddle* module, bool enabled) {
+static bool s_gameSolved = false;
+
+static void applyPhaseState(ChessRiddle* module, bool enabled, bool solved) {
   if (!module) return;
-  if (enabled == s_gameEnabled) return;
-  s_gameEnabled = enabled;
-  module->setGameMode(enabled);
+  if (enabled != s_gameEnabled) {
+    s_gameEnabled = enabled;
+    module->setGameMode(enabled);
+  }
+  if (solved != s_gameSolved) {
+    s_gameSolved = solved;
+    if (solved) {
+      module->onCmd("SOLVE", "");
+    }
+  }
 }
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
@@ -75,7 +95,10 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
-  applyEnabled(static_cast<ChessRiddle*>(user), computeEnabledFromGameState(payload, NODE_ID));
+  const int phase = parsePhaseFromGameState(payload);
+  if (phase < 0) return;
+  const ChessPhaseState next = stateForPhase(phase);
+  applyPhaseState(static_cast<ChessRiddle*>(user), next.enabled, next.solved);
 }
 
 void setup() {
