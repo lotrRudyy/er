@@ -34,23 +34,68 @@ static NodeCore nodeCore;
 static ImagesRiddle imagesModule;
 static PianoRiddle pianoRiddle;
 static bool s_imagesEnabled = false;
+static bool s_imagesSolved = false;
 static bool s_pianoEnabled = false;
+static bool s_pianoSolved = false;
 
-static bool jsonArrayContains(const String& payload, const char* key, const char* value) {
-  String marker = String("\"") + key + "\":[";
-  int start = payload.indexOf(marker);
+struct PhaseState {
+  bool imagesActive;
+  bool imagesSolved;
+  bool pianoActive;
+  bool pianoSolved;
+};
+
+static constexpr PhaseState kPhaseStates[] = {
+    {true,  false, true,  false}, // 0 maintenance
+    {false, false, false, false}, // 1 standby
+    {false, false, false, false}, // 2 prepare
+    {true,  false, false, false}, // 3 images
+    {false, true,  true,  false}, // 4 piano
+    {false, true,  false, true }, // 5 open_prison
+    {false, true,  false, true }, // 6 mount_wheel
+    {false, true,  false, true }, // 7 rope_paths
+    {false, true,  false, true }, // 8 tangram_magnet
+    {false, true,  false, true }, // 9 chess
+    {false, true,  false, true }, // 10 knocking_candles_pre
+    {false, true,  false, true }, // 11 candles
+    {false, true,  false, true }, // 12 star_slider
+    {false, true,  false, true }, // 13 sissi
+    {false, true,  false, true }, // 14 solved
+};
+
+static bool extractPhase(const String& payload, int& outPhase) {
+  const String key = "\"phase\":";
+  int start = payload.indexOf(key);
   if (start < 0) return false;
-  start += marker.length();
-  int end = payload.indexOf(']', start);
-  if (end < 0) return false;
-  String match = String("\"") + value + "\"";
-  return payload.substring(start, end).indexOf(match) >= 0;
+  start += key.length();
+
+  while (start < payload.length() && (payload[start] == ' ' || payload[start] == '\t' || payload[start] == '\n' || payload[start] == '\r')) {
+    ++start;
+  }
+  if (start >= payload.length()) return false;
+
+  bool neg = false;
+  if (payload[start] == '-') {
+    neg = true;
+    ++start;
+  }
+  if (start >= payload.length() || !isDigit(payload[start])) return false;
+
+  int value = 0;
+  while (start < payload.length() && isDigit(payload[start])) {
+    value = value * 10 + (payload[start] - '0');
+    ++start;
+  }
+
+  outPhase = neg ? -value : value;
+  return true;
 }
 
-static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
-  if (payload.indexOf("\"mode\":\"MODE_MAINTENANCE\"") >= 0) return true;
-  if (payload.indexOf("\"mode\":\"MODE_INGAME\"") < 0) return false;
-  return jsonArrayContains(payload, "active", nodeName) || jsonArrayContains(payload, "solved", nodeName);
+static PhaseState getPhaseState(int phase) {
+  if (phase < 0 || phase >= static_cast<int>(sizeof(kPhaseStates) / sizeof(kPhaseStates[0]))) {
+    return {false, false, false, false};
+  }
+  return kPhaseStates[phase];
 }
 
 static void heartbeatBuilder(String& out, const NodeContext& ctx, void* /*userData*/) {
@@ -66,18 +111,56 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
   return handled;
 }
 
+static void applyImagesPhaseState(const PhaseState& state) {
+  if (state.imagesActive != s_imagesEnabled) {
+    s_imagesEnabled = state.imagesActive;
+    imagesModule.setGameMode(state.imagesActive);
+    if (state.imagesActive) {
+      s_imagesSolved = false;
+    }
+  }
+
+  if (!state.imagesSolved && s_imagesSolved) {
+    imagesModule.onCmd("RESET", "");
+    s_imagesSolved = false;
+  }
+
+  if (state.imagesSolved && !s_imagesSolved) {
+    imagesModule.onCmd("SOLVE", "");
+    s_imagesSolved = true;
+  }
+}
+
+static void applyPianoPhaseState(const PhaseState& state) {
+  if (state.pianoActive != s_pianoEnabled) {
+    s_pianoEnabled = state.pianoActive;
+    pianoRiddle.setGameMode(state.pianoActive);
+    if (state.pianoActive) {
+      s_pianoSolved = false;
+    }
+  }
+
+  if (!state.pianoSolved && s_pianoSolved) {
+    pianoRiddle.onCmd("RESET", "");
+    s_pianoSolved = false;
+  }
+
+  if (state.pianoSolved && !s_pianoSolved) {
+    pianoRiddle.onCmd("SOLVE", "");
+    s_pianoSolved = true;
+  }
+}
+
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* /*userData*/) {
-  (void)ctx;
-  bool imagesEnabled = computeEnabledFromGameState(payload, NODE_IMAGES);
-  bool pianoEnabled = computeEnabledFromGameState(payload, NODE_PIANO);
-  if (imagesEnabled != s_imagesEnabled) {
-    s_imagesEnabled = imagesEnabled;
-    imagesModule.setGameMode(imagesEnabled);
+  int phase = -1;
+  if (!extractPhase(payload, phase)) {
+    ctx.log("WRN", "GAME_STATE missing phase", String("{\"payload\":") + payload + "}");
+    return;
   }
-  if (pianoEnabled != s_pianoEnabled) {
-    s_pianoEnabled = pianoEnabled;
-    pianoRiddle.setGameMode(pianoEnabled);
-  }
+
+  const PhaseState state = getPhaseState(phase);
+  applyImagesPhaseState(state);
+  applyPianoPhaseState(state);
 }
 
 void setup() {

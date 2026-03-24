@@ -35,7 +35,7 @@ body { padding: 12px; }
   width: 1896px;
   min-height: 1056px;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   gap: 12px;
 }
 
@@ -47,7 +47,7 @@ body { padding: 12px; }
 
 .top-grid {
   display: grid;
-  grid-template-columns: 520px 1fr;
+  grid-template-columns: 520px 240px 1fr;
   gap: 16px;
   align-items: start;
 }
@@ -62,6 +62,12 @@ body { padding: 12px; }
   font-size: 30px;
   font-weight: 700;
   margin-bottom: 8px;
+}
+
+.value.timer {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 1px;
 }
 
 .subline {
@@ -125,17 +131,11 @@ button:hover { border-color: var(--accent); }
   line-height: 20px;
 }
 
-.workspace {
+.controls-row {
   display: grid;
-  grid-template-columns: 430px 1fr;
+  grid-template-columns: 340px 520px 1fr;
   gap: 12px;
   align-items: start;
-}
-
-.left-stack,
-.right-stack {
-  display: grid;
-  gap: 12px;
 }
 
 .controls-grid {
@@ -234,6 +234,12 @@ button:hover { border-color: var(--accent); }
 .phase-pending {
   border-color: var(--yellow-line);
   background: var(--yellow-bg);
+}
+
+.images-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .hint-list { margin-top: 4px; }

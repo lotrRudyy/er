@@ -185,13 +185,16 @@ class DashboardStore:
         last_name = ""
         if last_phase is not None:
             last_name = PHASE_META.get(int(last_phase), {"name": f"phase_{last_phase}"}).get("name", "")
+        run = game.get("run") or {}
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
             "phase_display": f"{phase} {phase_meta['name']}",
             "last_phase": last_phase,
             "last_phase_name": last_name,
-            "players": [],
+            "players": list(run.get("players") or []),
+            "timer_running": bool(run.get("timer_running", False)),
+            "elapsed_s": int(run.get("elapsed_s", 0) or 0),
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -205,12 +208,7 @@ class DashboardStore:
             status = "online" if online else "offline"
             if online and isinstance(uptime, (int, float)):
                 status = f"online ({int(uptime)}s)"
-            out.append({
-                "id": node_id,
-                "label": label,
-                "online": online,
-                "status": status,
-            })
+            out.append({"id": node_id, "label": label, "online": online, "status": status})
         return out
 
     def _build_lock_summary(self, locks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -247,7 +245,12 @@ class DashboardStore:
             entries = [lights.get(name, {}) for name in cfg["lights"]]
             known = [x for x in entries if x]
             any_on = any(bool(x.get("on", False)) for x in known)
-            pct_values = [int(x.get("pct", 0)) for x in known if str(x.get("pct", "")).isdigit()]
+            pct_values = []
+            for x in known:
+                try:
+                    pct_values.append(int(x.get("pct", 0)))
+                except Exception:
+                    pass
             pct = max(pct_values) if pct_values else (100 if any_on else 0)
             if key == "star_sky":
                 any_on = any_on or star_enabled
@@ -305,6 +308,7 @@ class DashboardStore:
                 "node_status_class": "node-manual" if row["manual"] else ("node-online" if online else "node-offline"),
                 "tries": self._extract_tries(state_payload),
                 "info": self._extract_info(riddle_id, state_payload),
+                "images_buttons": self._extract_images_buttons(riddle_id, state_payload),
                 "hints": list(local_hints.get(riddle_id, [])),
             })
         return out
@@ -319,12 +323,31 @@ class DashboardStore:
         return ""
 
     @staticmethod
+    def _extract_images_buttons(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, bool] | None:
+        if riddle_id != "images" or not state_payload:
+            return None
+        buttons = state_payload.get("buttons")
+        if isinstance(buttons, dict):
+            return {
+                "jesus": bool(buttons.get("jesus", False)),
+                "blumen": bool(buttons.get("blumen", buttons.get("flowers", False))),
+                "natur": bool(buttons.get("natur", buttons.get("nature", False))),
+                "puppe": bool(buttons.get("puppe", buttons.get("doll", False))),
+            }
+        return {
+            "jesus": bool(state_payload.get("jesus", False)),
+            "blumen": bool(state_payload.get("blumen", state_payload.get("flowers", False))),
+            "natur": bool(state_payload.get("natur", state_payload.get("nature", False))),
+            "puppe": bool(state_payload.get("puppe", state_payload.get("doll", False))),
+        }
+
+    @staticmethod
     def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
         if not state_payload:
             return ""
         if riddle_id == "images":
-            keys = ["jesus", "flowers", "nature", "doll"]
-        elif riddle_id == "piano":
+            return ""
+        if riddle_id == "piano":
             keys = ["seq", "sequence", "decoded", "top_predictions", "decoded_predictions"]
         elif riddle_id == "chess":
             keys = ["king", "queen", "rook", "knight"]
@@ -342,7 +365,7 @@ class DashboardStore:
 
         generic = []
         for key, value in state_payload.items():
-            if key in {"id", "fw", "up", "ts", "time_valid"}:
+            if key in {"id", "fw", "up", "ts", "time_valid", "buttons"}:
                 continue
             if isinstance(value, (dict, list)):
                 value = json.dumps(value, ensure_ascii=False)
@@ -354,7 +377,6 @@ class DashboardStore:
 
 store = DashboardStore()
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"), static_folder=str(BASE_DIR / "static"))
-
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
 
 

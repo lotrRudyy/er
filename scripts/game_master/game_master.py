@@ -132,6 +132,17 @@ class GameMaster:
             self.state.current_run = self._new_run_shell(players)
             self.state.completed_phase_events.clear()
 
+
+    def _reset_run_shell(self) -> None:
+        with self._lock:
+            players = list(self.state.current_run.players) if self.state.current_run is not None else []
+            self.state.current_run = self._new_run_shell(players)
+            self.state.current_run.started_at = ""
+            self.state.current_run.started_monotonic = 0.0
+            self.state.current_run.ended_at = None
+            self.state.current_run.duration_s = None
+            self.state.completed_phase_events.clear()
+
     def _start_run_timer(self) -> None:
         with self._lock:
             if self.state.current_run is None:
@@ -256,6 +267,7 @@ class GameMaster:
             target = str(payload["mode"]).strip().lower()
             if target not in ADMIN_TARGET_PHASE:
                 raise ValueError(f"Unknown admin target: {target}")
+            self._reset_run_shell()
             self._enter_phase(ADMIN_TARGET_PHASE[target], f"admin_{target}")
             return
         if cmd in {"start", "start_game"}:

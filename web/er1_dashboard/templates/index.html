@@ -22,6 +22,11 @@
           </div>
         </div>
 
+        <div class="timer-box">
+          <div class="label">Timer</div>
+          <div id="timerValue" class="value timer">00:00:00</div>
+        </div>
+
         <div class="players-box">
           <div class="label">Players</div>
           <input id="playerInput" class="player-input" type="text" placeholder="Type player name and press Enter" />
@@ -30,51 +35,47 @@
       </div>
     </section>
 
-    <section class="workspace">
-      <div class="left-stack">
-        <section class="panel compact-panel">
-          <h2>Locks</h2>
-          <div id="locksGrid" class="controls-grid"></div>
-        </section>
+    <section class="controls-row">
+      <section class="panel compact-panel">
+        <h2>Locks</h2>
+        <div id="locksGrid" class="controls-grid"></div>
+      </section>
 
-        <section class="panel compact-panel">
-          <h2>Lights</h2>
-          <div id="lightsGrid" class="controls-grid"></div>
-        </section>
-      </div>
+      <section class="panel compact-panel">
+        <h2>Lights</h2>
+        <div id="lightsGrid" class="controls-grid"></div>
+      </section>
 
-      <div class="right-stack">
-        <section class="panel nodes-panel">
-          <h2>Nodes</h2>
-          <table class="simple-table nodes-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="nodesBody"></tbody>
-          </table>
-        </section>
+      <section class="panel nodes-panel">
+        <h2>Nodes</h2>
+        <table class="simple-table nodes-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="nodesBody"></tbody>
+        </table>
+      </section>
+    </section>
 
-        <section class="panel riddles-panel">
-          <h2>Riddles</h2>
-          <table class="simple-table riddles-table">
-            <thead>
-              <tr>
-                <th>Riddle</th>
-                <th>Phase</th>
-                <th>Node</th>
-                <th>Solve</th>
-                <th>Tries</th>
-                <th>Info</th>
-                <th>Hints</th>
-              </tr>
-            </thead>
-            <tbody id="riddlesBody"></tbody>
-          </table>
-        </section>
-      </div>
+    <section class="panel riddles-panel">
+      <h2>Riddles</h2>
+      <table class="simple-table riddles-table">
+        <thead>
+          <tr>
+            <th>Riddle</th>
+            <th>Phase</th>
+            <th>Node</th>
+            <th>Solve</th>
+            <th>Tries</th>
+            <th>Info</th>
+            <th>Hints</th>
+          </tr>
+        </thead>
+        <tbody id="riddlesBody"></tbody>
+      </table>
     </section>
   </div>
 

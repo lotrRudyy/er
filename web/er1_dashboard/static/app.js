@@ -1,11 +1,14 @@
 
 const state = {
-  game: { phase: 1, phase_name: 'standby', phase_display: '1 standby', last_phase: null, last_phase_name: '' },
+  game: { phase: 1, phase_name: 'standby', phase_display: '1 standby', last_phase: null, last_phase_name: '', elapsed_s: 0, timer_running: false, players: [] },
   nodes: [],
   locks: [],
   lights: [],
   riddles: []
 };
+
+const dimDrafts = {};
+const dimEditing = {};
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -17,6 +20,14 @@ async function api(path, options = {}) {
     throw new Error(text || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+function fmtTime(total) {
+  total = Math.max(0, parseInt(total || 0, 10));
+  const h = String(Math.floor(total / 3600)).padStart(2, '0');
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const s = String(total % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
 }
 
 function renderPlayers() {
@@ -45,6 +56,7 @@ function renderTop() {
   document.getElementById('lastPhaseValue').textContent = state.game.last_phase == null
     ? '—'
     : `${state.game.last_phase} ${state.game.last_phase_name || ''}`.trim();
+  document.getElementById('timerValue').textContent = fmtTime(state.game.elapsed_s || 0);
   renderPlayers();
 }
 
@@ -83,14 +95,25 @@ function renderLocks() {
   }
 }
 
+function resolveDimValue(light) {
+  if (dimEditing[light.id]) {
+    return dimDrafts[light.id] ?? light.pct;
+  }
+  if (dimDrafts[light.id] != null && !Number.isNaN(parseInt(dimDrafts[light.id], 10))) {
+    return dimDrafts[light.id];
+  }
+  return light.pct;
+}
+
 function renderLights() {
   const wrap = document.getElementById('lightsGrid');
   wrap.innerHTML = '';
   for (const light of state.lights || []) {
     const card = document.createElement('div');
     card.className = 'control-card';
+    const dimValue = resolveDimValue(light);
     const dimInput = light.dimmable
-      ? `<input class="dim-input" type="number" min="0" max="100" value="${light.pct}" />`
+      ? `<input class="dim-input" type="number" min="0" max="100" value="${dimValue}" />`
       : '';
     card.innerHTML = `
       <div class="control-head">
@@ -107,8 +130,10 @@ function renderLights() {
     btn.addEventListener('click', async () => {
       if (light.dimmable) {
         const input = card.querySelector('.dim-input');
-        const pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
+        let pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
+        if (!light.on && pct <= 0) pct = 100;
         const action = light.on ? 'off' : 'on';
+        dimDrafts[light.id] = action === 'off' ? 0 : pct;
         await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action, pct }) });
       } else {
         const action = light.on ? 'off' : 'on';
@@ -119,10 +144,21 @@ function renderLights() {
 
     const input = card.querySelector('.dim-input');
     if (input) {
+      input.addEventListener('focus', () => {
+        dimEditing[light.id] = true;
+      });
+      input.addEventListener('blur', () => {
+        dimEditing[light.id] = false;
+      });
+      input.addEventListener('input', () => {
+        dimDrafts[light.id] = input.value;
+      });
       input.addEventListener('keydown', async (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
         const pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
+        dimDrafts[light.id] = pct;
+        dimEditing[light.id] = false;
         await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action: 'set_pct', pct }) });
         await refreshState();
       });
@@ -130,6 +166,23 @@ function renderLights() {
 
     wrap.appendChild(card);
   }
+}
+
+function renderImagesButtons(buttons) {
+  if (!buttons) return '';
+  const order = [
+    ['jesus', 'Jesus'],
+    ['blumen', 'Blumen'],
+    ['natur', 'Natur'],
+    ['puppe', 'Puppe']
+  ];
+  return `
+    <div class="images-buttons">
+      ${order.map(([key, label]) => `
+        <span class="status-badge ${buttons[key] ? 'is-on' : 'is-off'}">${label}</span>
+      `).join('')}
+    </div>
+  `;
 }
 
 function hintCellHtml(riddle) {
@@ -151,6 +204,9 @@ function renderRiddles() {
   const body = document.getElementById('riddlesBody');
   body.innerHTML = '';
   for (const riddle of state.riddles || []) {
+    const infoHtml = riddle.id === 'images'
+      ? renderImagesButtons(riddle.images_buttons)
+      : (riddle.info || '');
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${riddle.label}</td>
@@ -158,7 +214,7 @@ function renderRiddles() {
       <td><span class="status-badge ${riddle.node_status_class}">${riddle.node_status}</span></td>
       <td><button class="solve-btn">Solve</button></td>
       <td>${riddle.tries || ''}</td>
-      <td>${riddle.info || ''}</td>
+      <td>${infoHtml}</td>
       <td>${hintCellHtml(riddle)}</td>
     `;
     tr.querySelector('.solve-btn').addEventListener('click', async () => {
@@ -200,6 +256,11 @@ async function refreshState() {
   state.locks = data.locks || [];
   state.lights = data.lights || [];
   state.riddles = data.riddles || [];
+  for (const light of state.lights) {
+    if (!dimEditing[light.id] && light.dimmable && dimDrafts[light.id] == null) {
+      dimDrafts[light.id] = light.pct;
+    }
+  }
   renderAll();
 }
 
@@ -223,6 +284,13 @@ function wireTopControls() {
     await refreshState();
   });
 }
+
+setInterval(() => {
+  if (state.game.timer_running) {
+    state.game.elapsed_s = (state.game.elapsed_s || 0) + 1;
+    document.getElementById('timerValue').textContent = fmtTime(state.game.elapsed_s);
+  }
+}, 1000);
 
 setInterval(() => {
   refreshState().catch(console.error);
