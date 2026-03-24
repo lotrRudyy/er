@@ -133,7 +133,7 @@ button:hover { border-color: var(--accent); }
 
 .controls-row {
   display: grid;
-  grid-template-columns: 340px 520px 1fr;
+  grid-template-columns: 260px 500px 420px;
   gap: 12px;
   align-items: start;
 }
@@ -141,6 +141,14 @@ button:hover { border-color: var(--accent); }
 .controls-grid {
   display: grid;
   gap: 8px;
+}
+
+#locksGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+#lightsGrid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
 .control-card {
@@ -164,7 +172,7 @@ button:hover { border-color: var(--accent); }
 
 .light-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 90px;
+  grid-template-columns: minmax(0, 1fr) 74px;
   gap: 8px;
 }
 
@@ -187,8 +195,8 @@ button:hover { border-color: var(--accent); }
   background: #f0f0f0;
 }
 
-.nodes-table th:nth-child(1) { width: 240px; }
-.nodes-table th:nth-child(2) { width: 220px; }
+.nodes-table th:nth-child(1) { width: 210px; }
+.nodes-table th:nth-child(2) { width: 160px; }
 
 .riddles-table th:nth-child(1) { width: 130px; }
 .riddles-table th:nth-child(2) { width: 100px; }
@@ -243,3 +251,23 @@ button:hover { border-color: var(--accent); }
 }
 
 .hint-list { margin-top: 4px; }
+
+
+.control-card {
+  min-width: 0;
+}
+
+.control-card button {
+  width: 100%;
+}
+
+.nodes-panel .simple-table th,
+.nodes-panel .simple-table td {
+  font-size: 14px;
+  padding: 7px 9px;
+}
+
+.nodes-panel .status-badge {
+  font-size: 12px;
+  padding: 3px 7px;
+}

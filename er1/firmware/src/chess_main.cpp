@@ -9,8 +9,8 @@
 using namespace Core;
 
 static const char* NODE_ID = "chess";
-static const char* FW_VERSION = "20";
-static const char* FW_DESC = "chess phase-driven state sync and full reader updates";
+static const char* FW_VERSION = "19";
+static const char* FW_DESC = "chess with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x57};
 static const IPAddress NET_IP(192, 168, 0, 14);
@@ -31,53 +31,47 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static ChessRiddle chess;
 static bool s_gameEnabled = false;
+static bool s_gameSolved = false;
 
-struct ChessPhaseState {
+struct PhaseCfg {
   bool enabled;
   bool solved;
 };
 
-static ChessPhaseState stateForPhase(int phase) {
-  switch (phase) {
-    case 0: return {true,  false}; // maintenance
-    case 1: return {false, false}; // standby
-    case 2: return {false, false}; // prepare
-    case 3: return {false, false};
-    case 4: return {false, false};
-    case 5: return {false, false};
-    case 6: return {false, false};
-    case 7: return {false, false};
-    case 8: return {false, false};
-    case 9: return {true,  false}; // chess
-    case 10: return {false, true };
-    case 11: return {false, true };
-    case 12: return {false, true };
-    case 13: return {false, true };
-    case 14: return {false, true };
-    default: return {false, false};
-  }
-}
+static constexpr PhaseCfg kPhaseCfg[15] = {
+  {true,  false}, // 0
+  {false, false}, // 1
+  {false, false}, // 2
+  {false, false}, // 3
+  {false, false}, // 4
+  {false, false}, // 5
+  {false, false}, // 6
+  {false, false}, // 7
+  {false, false}, // 8
+  {true,  false}, // 9
+  {false, true }, // 10
+  {false, true }, // 11
+  {false, true }, // 12
+  {false, true }, // 13
+  {false, true }  // 14
+};
 
-static int parsePhaseFromGameState(const String& payload) {
-  JsonDocument doc;
-  if (deserializeJson(doc, payload)) return -1;
-  if (!doc["phase"].is<int>()) return -1;
-  return doc["phase"].as<int>();
-}
-
-static bool s_gameSolved = false;
-
-static void applyPhaseState(ChessRiddle* module, bool enabled, bool solved) {
+static void applyTarget(ChessRiddle* module, bool enabled, bool solved) {
   if (!module) return;
+
   if (enabled != s_gameEnabled) {
     s_gameEnabled = enabled;
     module->setGameMode(enabled);
+    s_gameSolved = false;  // setGameMode() resets state
   }
+
   if (solved != s_gameSolved) {
-    s_gameSolved = solved;
     if (solved) {
       module->onCmd("SOLVE", "");
+    } else {
+      module->onCmd("RESET", "");
     }
+    s_gameSolved = solved;
   }
 }
 
@@ -95,10 +89,15 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
-  const int phase = parsePhaseFromGameState(payload);
-  if (phase < 0) return;
-  const ChessPhaseState next = stateForPhase(phase);
-  applyPhaseState(static_cast<ChessRiddle*>(user), next.enabled, next.solved);
+
+  StaticJsonDocument<128> doc;
+  if (deserializeJson(doc, payload)) return;
+
+  int phase = doc["phase"] | -1;
+  if (phase < 0 || phase >= 15) return;
+
+  const PhaseCfg& cfg = kPhaseCfg[phase];
+  applyTarget(static_cast<ChessRiddle*>(user), cfg.enabled, cfg.solved);
 }
 
 void setup() {

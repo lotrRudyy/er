@@ -31,32 +31,48 @@ static const char* const OTA_ALLOWED_HOST = OTA_HOST;
 static NodeCore nodeCore;
 static KnockingRiddle riddle;
 static bool s_gameEnabled = false;
+static bool s_gameSolved = false;
 
-static bool jsonArrayContains(JsonVariantConst arr, const char* value) {
-  if (arr.isNull() || !value || !value[0]) return false;
-  for (JsonVariantConst v : arr.as<JsonArrayConst>()) {
-    const char* s = v.as<const char*>();
-    if (s && strcmp(s, value) == 0) return true;
-  }
-  return false;
-}
+struct PhaseCfg {
+  bool enabled;
+  bool solved;
+};
 
-static bool computeEnabledFromGameState(const String& payload, const char* nodeName) {
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, payload);
-  if (err) return false;
+static constexpr PhaseCfg kPhaseCfg[15] = {
+  {true,  false}, // 0
+  {false, false}, // 1
+  {false, false}, // 2
+  {false, false}, // 3
+  {false, false}, // 4
+  {false, false}, // 5
+  {false, false}, // 6
+  {false, false}, // 7
+  {false, false}, // 8
+  {false, false}, // 9
+  {true,  false}, // 10
+  {false, true }, // 11
+  {false, true }, // 12
+  {false, true }, // 13
+  {false, true }  // 14
+};
 
-  const char* mode = doc["mode"] | "";
-  if (strcmp(mode, "MODE_MAINTENANCE") == 0) return true;
-  if (strcmp(mode, "MODE_INGAME") != 0) return false;
-  return jsonArrayContains(doc["active"], nodeName) || jsonArrayContains(doc["solved"], nodeName);
-}
-
-static void applyEnabled(KnockingRiddle* module, bool enabled) {
+static void applyTarget(KnockingRiddle* module, bool enabled, bool solved) {
   if (!module) return;
-  if (enabled == s_gameEnabled) return;
-  s_gameEnabled = enabled;
-  module->setGameMode(enabled);
+
+  if (enabled != s_gameEnabled) {
+    s_gameEnabled = enabled;
+    module->setGameMode(enabled);
+    s_gameSolved = false;  // setGameMode() resets state
+  }
+
+  if (solved != s_gameSolved) {
+    if (solved) {
+      module->onCmd("SOLVE", "");
+    } else {
+      module->onCmd("RESET", "");
+    }
+    s_gameSolved = solved;
+  }
 }
 
 static bool logFilter(const char* level, void* user) {
@@ -78,7 +94,15 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
-  applyEnabled(static_cast<KnockingRiddle*>(user), computeEnabledFromGameState(payload, NODE_ID));
+
+  StaticJsonDocument<128> doc;
+  if (deserializeJson(doc, payload)) return;
+
+  int phase = doc["phase"] | -1;
+  if (phase < 0 || phase >= 15) return;
+
+  const PhaseCfg& cfg = kPhaseCfg[phase];
+  applyTarget(static_cast<KnockingRiddle*>(user), cfg.enabled, cfg.solved);
 }
 
 void setup() {
