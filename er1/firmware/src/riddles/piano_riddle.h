@@ -20,34 +20,10 @@ public:
                             const char* t2, float t2s, const char* t3, float t3s);
 
 private:
-  struct DetectionTopEntry {
-    String p;
-    float s = 0.0f;
-  };
-
-  struct DetectionSnapshot {
-    bool valid = false;
-    bool accepted = false;
-    String pred;
-    float s1 = 0.0f;
-    float s2 = 0.0f;
-    float margin = 0.0f;
-    float hps = 0.0f;
-    int harm = 0;
-    DetectionTopEntry top[3];
-    size_t pos_before = 0;
-    size_t pos_after = 0;
-    String expected;
-    String outcome;
-    bool images_ready = false;
-    bool solved = false;
-  };
-
-  bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
-               const char* id = nullptr, bool retained = false) const;
   bool publish(const char* topic, const String& payload, bool retained = false) const;
-
-  void publishState();
+  void publishDetectionEvent(int accepted, const char* pred, float s1, float s2, float margin,
+                             const char* t1, float t1s, const char* t2, float t2s,
+                             const char* t3, float t3s);
   void publishSolvedEvent();
 
   void resetProgress(const char* reason);
@@ -59,12 +35,6 @@ private:
   void setModuleEnabled(bool en);
 
   String encodeWhiteKey(const char* note) const;
-  String joinJsonArray(const String* values, size_t count) const;
-  String buildDetectionJson() const;
-  void appendPlayed(const char* note);
-  void appendPlayedEncoded(const String& encoded);
-  void appendTopPrediction(const char* note);
-  void appendCombinedPrediction(const char* note);
 
   Core::NodeContext* ctx_ = nullptr;
   Preferences* prefs_ = nullptr;
@@ -83,14 +53,6 @@ private:
   static constexpr const char* kPrefsSolvedKey = "piano_solved";
 
   // Sequence (case-insensitive compare)
-  /*
-  // lol
-  static constexpr size_t kSequenceLen = 3;
-  static constexpr const char* const kSequence[kSequenceLen] = {
-      "c4", "f4", "c4"
-  };
-  */
-
   // APERTUS
   static constexpr size_t kSequenceLen = 7;
   static constexpr const char* const kSequence[kSequenceLen] = {
@@ -98,22 +60,7 @@ private:
   };
 
   static constexpr size_t kNoteMaxLen = 8;
-  static constexpr size_t kHistoryMax = 128;
 
   char played_[kSequenceLen][kNoteMaxLen] = {{0}};
   size_t playedLen_ = 0;
-
-  String playedNotes_[kHistoryMax];
-  size_t playedNotesLen_ = 0;
-
-  String playedEncodedNotes_[kHistoryMax];
-  size_t playedEncodedNotesLen_ = 0;
-
-  String topPredictions_[kHistoryMax];
-  size_t topPredictionsLen_ = 0;
-
-  String combinedPredictions_[kHistoryMax];
-  size_t combinedPredictionsLen_ = 0;
-
-  DetectionSnapshot lastDetection_;
 };

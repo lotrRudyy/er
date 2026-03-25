@@ -48,7 +48,10 @@ class RuntimeState:
     completed_phase_events: set[str] = field(default_factory=set)
 
     def to_game_state_payload(self) -> dict[str, Any]:
-        payload = {"phase": self.phase}
+        payload = {
+            "phase": self.phase,
+            "lighting_phase": self.lighting_phase,
+        }
         if self.last_phase is not None:
             payload["last_phase"] = self.last_phase
         return payload

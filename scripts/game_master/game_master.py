@@ -436,6 +436,7 @@ class GameMaster:
             phase = self.state.phase
         self._record_event("lighting_phase_changed", {"phase": phase, "lighting_phase": int(lighting_phase)})
         self._apply_phase_stable_scene(phase, lighting_phase=int(lighting_phase), apply_maglocks=False)
+        self.publish_game_state()
 
     def _run_transition_action(self, action) -> None:
         kind = action.kind
