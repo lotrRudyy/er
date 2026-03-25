@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
 HINTS_PATH = BASE_DIR / "dashboard_hints.json"
+GAME_DB_PATH = Path(os.getenv("ER1_GAME_DB_PATH", str(BASE_DIR.parent / "scripts" / "data" / "game_master.sqlite3"))).resolve()
 
 TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
@@ -726,14 +728,127 @@ def mqtt_publish(topic: str, payload: dict[str, Any] | str) -> None:
     mqtt_client.publish(topic, body, qos=0, retain=False)
 
 
+def _parse_players(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                return [str(x).strip() for x in loaded if str(x).strip()]
+        except Exception:
+            pass
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, (list, tuple)):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [str(raw).strip()] if str(raw).strip() else []
+
+
+def _db_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(GAME_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_game_details(game_id: str) -> dict[str, Any] | None:
+    game_id = str(game_id).strip()
+    if not game_id or not GAME_DB_PATH.exists():
+        return None
+
+    with _db_connect() as conn:
+        game_row = conn.execute(
+            """
+            SELECT id, date, started_at, ended_at, duration_s, player_names_json, hint_count
+            FROM games
+            WHERE id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if game_row is None:
+            return None
+
+        riddles = conn.execute(
+            """
+            SELECT riddle, source, activated_at, solved_at,
+                   solve_time_from_run_start_s, solve_time_from_activation_s, solved
+            FROM game_riddles
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
+            (game_id,),
+        ).fetchall()
+
+        hints = conn.execute(
+            """
+            SELECT id, at, riddle, hint_text
+            FROM game_hints
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
+            (game_id,),
+        ).fetchall()
+
+    return {
+        "game": {
+            "id": game_row["id"],
+            "date": game_row["date"],
+            "started_at": game_row["started_at"],
+            "ended_at": game_row["ended_at"],
+            "duration_s": game_row["duration_s"],
+            "player_names": _parse_players(game_row["player_names_json"]),
+            "hint_count": game_row["hint_count"],
+        },
+        "riddles": [
+            {
+                "riddle": row["riddle"],
+                "source": row["source"],
+                "activated_at": row["activated_at"],
+                "solved_at": row["solved_at"],
+                "solve_time_from_run_start_s": row["solve_time_from_run_start_s"],
+                "solve_time_from_activation_s": row["solve_time_from_activation_s"],
+                "solved": bool(row["solved"]),
+            }
+            for row in riddles
+        ],
+        "hints": [
+            {
+                "id": row["id"],
+                "at": row["at"],
+                "riddle": row["riddle"],
+                "hint_text": row["hint_text"],
+            }
+            for row in hints
+        ],
+        "meta": {
+            "db_path": str(GAME_DB_PATH),
+            "db_exists": GAME_DB_PATH.exists(),
+        },
+    }
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
 
 
+@app.get("/games")
+def games_viewer() -> str:
+    return render_template("game_viewer.html")
+
+
 @app.get("/api/state")
 def api_state() -> Any:
     return jsonify(store.snapshot())
+
+
+@app.get("/api/game/<game_id>")
+def api_game_details(game_id: str) -> Any:
+    details = get_game_details(game_id)
+    if details is None:
+        if not GAME_DB_PATH.exists():
+            return jsonify({"ok": False, "error": f"database not found: {GAME_DB_PATH}"}), 404
+        return jsonify({"ok": False, "error": f"game not found: {game_id}"}), 404
+    return jsonify({"ok": True, **details})
 
 
 @app.post("/api/phase")
