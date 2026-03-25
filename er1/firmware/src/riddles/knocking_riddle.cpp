@@ -272,13 +272,12 @@ void KnockingRiddle::handleKnockWindow(uint32_t nowMs) {
       ",\"m1\":" + windowMax_[1] +
       ",\"m2\":" + windowMax_[2] + "}");
 
-  playKnockSound(bestIdx);
-
   if (nowMs - lastKnockMsGlobal_ < kKnockDebounceMs) {
     return;
   }
   lastKnockMsGlobal_ = nowMs;
 
+  playKnockSound(bestIdx);
   registerKnock(bestIdx, bestVal, nowMs);
 }
 
