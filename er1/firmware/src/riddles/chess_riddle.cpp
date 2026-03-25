@@ -350,42 +350,25 @@ void ChessRiddle::publishState() {
     default: stateName = "idle"; break;
   }
 
-  const bool enabled = (gameActive_ && moduleEnabled_ && ctx_->enabled());
+  const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
   const bool solved = (riddleState_ == RiddleState::Solved);
 
-  String payload;
-  payload.reserve(256);
-
-  payload += "{";
-  payload += "\"id\":\"chess\",";
-  payload += "\"mode\":\"";
-  payload += (gameActive_ ? "ingame" : "standby");
-  payload += "\",";
-  payload += "\"enabled\":";
-  payload += (enabled ? "true" : "false");
-  payload += ",";
-  payload += "\"solved\":";
-  payload += (solved ? "true" : "false");
-  payload += ",";
-  payload += "\"armed_after_unsatisfied\":";
-  payload += (solveArmedAfterUnsatisfied_ ? "true" : "false");
-  payload += ",";
-  payload += "\"raw_state\":\"";
-  payload += stateName;
-  payload += "\",";
-  payload += "\"state\":\"";
-  payload += stateName;
-  payload += "\",";
-  payload += "\"solved_count\":";
-  payload += String(solvedCount_);
-  payload += ",";
-  payload += "\"reader_labels\":";
-  payload += readerLabelsJson();
-  payload += "}";
+  String data;
+  data.reserve(320);
+  data = String("{\"id\":\"chess\"") +
+         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+         ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
+         ",\"solved\":" + String(solved ? "true" : "false") +
+         ",\"armed_after_unsatisfied\":" + String(solveArmedAfterUnsatisfied_ ? "true" : "false") +
+         ",\"raw_state\":\"" + stateName + "\"" +
+         ",\"state\":\"" + stateName + "\"" +
+         ",\"solved_count\":" + String(solvedCount_) +
+         ",\"reader_labels\":" + readerLabelsJson() +
+         "}";
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), payload, true);
+    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
   }
 }
 

@@ -72,8 +72,8 @@ static constexpr float FEAT_FMIN_HZ = 50.0f;
 static constexpr float FEAT_FMAX_HZ = 8000.0f;
 
 // Thresholds (live-tune)
-static float T_ABS = 0.93f;
-static float T_MARGIN = 0.01f;
+static float T_ABS = 0.9f;
+static float T_MARGIN = 0.001f;
 
 // Ring: must cover worst-case (enter + search_post + 200ms post)
 // worst ~ 260ms + 200ms = 460ms, plus headroom -> 520ms
