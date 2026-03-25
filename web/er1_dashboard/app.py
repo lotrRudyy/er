@@ -177,7 +177,7 @@ class DashboardStore:
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-        self.riddle_states["star_slider"] = {"id": "star_slider", "reader_positions": {}}
+        self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
 
     def update_node_hb(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -226,6 +226,12 @@ class DashboardStore:
                     if last_attempt and (not attempts or attempts[-1] != last_attempt):
                         attempts.append(last_attempt)
                     merged["attempted_sequences"] = attempts
+                elif riddle_id == "star_slider":
+                    attempts = list(merged.get("attempted_star_signs") or [])
+                    last_positions = payload.get("last_attempt_positions")
+                    if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
+                        attempts.append(last_positions)
+                    merged["attempted_star_signs"] = attempts
                 self.riddle_states[riddle_id] = merged
 
     @staticmethod
@@ -586,27 +592,33 @@ class DashboardStore:
         return {"tries": tries, "attempts": attempts}
 
     @classmethod
+    def _extract_star_slider_values(cls, value: Any) -> list[str]:
+        order = ["r2", "r1", "r0"]
+        if isinstance(value, dict):
+            return [str(value.get(key, "none") or "none").strip() for key in order]
+        if isinstance(value, (list, tuple)):
+            raw = [str(x).strip() or "none" for x in list(value)[:3]]
+            while len(raw) < 3:
+                raw.append("none")
+            return [raw[2], raw[1], raw[0]]
+        return []
+
+    @classmethod
     def _extract_star_slider_summary(cls, riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
         if riddle_id != "star_slider" or not state_payload:
             return None
-        tries = cls._extract_tries(state_payload)
         positions = state_payload.get("reader_positions") or {}
-        current: list[str] = []
-        if isinstance(positions, dict):
-            for key in ["r0", "r1", "r2"]:
-                current.append(str(positions.get(key, "none") or "none").strip())
-        elif isinstance(state_payload.get("reader_labels"), list):
-            current = [str(x).strip() or "none" for x in state_payload.get("reader_labels", [])[:3]]
+        current = cls._extract_star_slider_values(positions)
+        if not current:
+            current = cls._extract_star_slider_values(state_payload.get("reader_labels"))
         attempts = []
         for item in state_payload.get("attempted_star_signs") or []:
             if not isinstance(item, dict):
                 continue
-            pos = item.get("positions") or {}
-            if not isinstance(pos, dict):
-                continue
-            vals = [str(pos.get(key, "none") or "none").strip() for key in ["r0", "r1", "r2"]]
-            attempts.append(vals)
-        return {"tries": tries, "current": current, "attempts": attempts}
+            vals = cls._extract_star_slider_values(item.get("positions") or item)
+            if vals:
+                attempts.append(vals)
+        return {"current": current, "attempts": attempts}
 
     @staticmethod
     def _extract_piano_summary(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:

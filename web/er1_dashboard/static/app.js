@@ -255,20 +255,17 @@ function renderChessSlots(slots) {
 
 function renderAttemptsSummary(summary) {
   if (!summary) return '';
-  const tries = summary.tries || '0';
   const attempts = (summary.attempts || []).join(' <span class="inline-sep">|</span> ');
-  return `<div class="inline-info">Tries: ${tries}${attempts ? ` <span class="inline-sep">|</span> ${attempts}` : ''}</div>`;
+  if (!attempts) return '';
+  return `<div class="inline-info">${attempts}</div>`;
 }
 
 function renderStarSliderSummary(summary) {
   if (!summary) return '';
-  const tries = summary.tries || '0';
   const current = (summary.current || []).join(' ');
   const attempts = (summary.attempts || []).map(item => `(${item.join(' ')})`).join(' ');
   return `
     <div class="inline-info inline-info-wrap">
-      <span>Tries: ${tries}</span>
-      <span class="inline-sep">|</span>
       <span>Current: ${current || 'none'}</span>
       <span class="inline-sep">|</span>
       <span>Attempts: ${attempts || '—'}</span>
