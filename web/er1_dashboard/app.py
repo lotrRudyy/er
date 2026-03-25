@@ -133,6 +133,7 @@ class DashboardStore:
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hints: dict[str, list[dict[str, Any]]] = field(default_factory=load_hint_store)
+    piano_note_history: list[dict[str, Any]] = field(default_factory=list)
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -146,9 +147,25 @@ class DashboardStore:
     def update_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
             self.node_states[node_id] = payload
+
+            wrapped = payload.get("d") if isinstance(payload.get("d"), dict) else None
+            wrapped_id = str((wrapped or {}).get("id") or (wrapped or {}).get("src") or "").strip()
+            if wrapped_id:
+                self.riddle_states[wrapped_id] = wrapped
+
             riddle_id = str(payload.get("id", "")).strip()
             if riddle_id:
                 self.riddle_states[riddle_id] = payload
+
+            if node_id == "images_piano" and str(payload.get("note", "")).strip():
+                self.riddle_states["piano"] = payload
+                self.piano_note_history.append({
+                    "note": str(payload.get("note", "")).strip(),
+                    "encoded": str(payload.get("encoded", "")).strip(),
+                    "accepted": bool(payload.get("accepted", False)),
+                })
+                if len(self.piano_note_history) > 128:
+                    self.piano_note_history = self.piano_note_history[-128:]
 
     def update_lock_state(self, lock_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -182,13 +199,14 @@ class DashboardStore:
             riddle_states = json.loads(json.dumps(self.riddle_states))
             node_last_hb = dict(self.node_last_hb)
             local_hints = json.loads(json.dumps(self.local_hints))
+            piano_note_history = json.loads(json.dumps(self.piano_note_history))
 
         return {
             "game": self._build_game_summary(game),
             "nodes": self._build_node_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
-            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hints),
+            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hints, piano_note_history),
             "meta": {"broker": BROKER_HOST},
         }
 
@@ -201,34 +219,27 @@ class DashboardStore:
             last_name = PHASE_META.get(int(last_phase), {"name": f"phase_{last_phase}"}).get("name", "")
         phase_name_pretty = pretty_phase_name(phase_meta["name"])
         last_name_pretty = pretty_phase_name(last_name)
-        run = game.get("run") or {}
-        riddle_timings = run.get("riddle_timings") or {}
-        current_riddle_elapsed_s = 0
+        timer_running = bool(game.get("timer_running", False))
+        started_at = game.get("game_started_at") or game.get("started_at")
+        last_riddle_solved_at = game.get("last_riddle_solved_at")
         current_riddle_name = ""
-        for riddle_id in phase_meta.get("active", ()):
-            timing = riddle_timings.get(riddle_id) or {}
-            if bool(timing.get("solved")):
-                continue
-            current_riddle_name = riddle_id
-            solve_from_activation = timing.get("solve_time_from_activation_s")
-            if solve_from_activation is not None:
-                try:
-                    current_riddle_elapsed_s = int(round(float(solve_from_activation)))
-                except Exception:
-                    current_riddle_elapsed_s = 0
-            elif timing.get("activated_at") and bool(run.get("timer_running", False)):
-                try:
-                    from datetime import datetime, timezone
-                    activated = datetime.fromisoformat(str(timing.get("activated_at")).replace("Z", "+00:00"))
-                    now = datetime.now(timezone.utc)
-                    current_riddle_elapsed_s = max(0, int((now - activated).total_seconds()))
-                except Exception:
-                    current_riddle_elapsed_s = 0
-            break
+        active_riddles = tuple(phase_meta.get("active", ()) or ())
+        if timer_running and active_riddles:
+            current_riddle_name = str(active_riddles[0])
         current_riddle_started_at = None
         if current_riddle_name:
-            timing = riddle_timings.get(current_riddle_name) or {}
-            current_riddle_started_at = timing.get("activated_at") or run.get("started_at")
+            current_riddle_started_at = last_riddle_solved_at or started_at
+
+        def _seconds_since(value: Any) -> int:
+            if not value:
+                return 0
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+            except Exception:
+                return 0
+
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
@@ -237,11 +248,12 @@ class DashboardStore:
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
-            "players": list(run.get("players") or []),
-            "timer_running": bool(run.get("timer_running", False)),
-            "elapsed_s": int(run.get("elapsed_s", 0) or 0),
-            "started_at": run.get("started_at"),
-            "current_riddle_elapsed_s": current_riddle_elapsed_s,
+            "players": [],
+            "timer_running": timer_running,
+            "elapsed_s": _seconds_since(started_at) if timer_running else 0,
+            "started_at": started_at,
+            "last_riddle_solved_at": last_riddle_solved_at,
+            "current_riddle_elapsed_s": _seconds_since(current_riddle_started_at) if timer_running else 0,
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
         }
@@ -316,7 +328,7 @@ class DashboardStore:
             })
         return out
 
-    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hints: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hints: dict[str, list[dict[str, Any]]], piano_note_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = set(meta.get("active", ()))
@@ -367,6 +379,7 @@ class DashboardStore:
                 "tries": self._extract_tries(state_payload),
                 "info": self._extract_info(riddle_id, state_payload),
                 "images_buttons": self._extract_images_buttons(riddle_id, state_payload),
+                "piano_notes": self._extract_piano_notes(riddle_id, piano_note_history),
                 "chess_slots": self._extract_chess_slots(riddle_id, state_payload),
                 "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
                 "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
@@ -401,6 +414,20 @@ class DashboardStore:
             "natur": bool(state_payload.get("natur", state_payload.get("nature", False))),
             "puppe": bool(state_payload.get("puppe", state_payload.get("doll", False))),
         }
+
+    @staticmethod
+    def _extract_piano_notes(riddle_id: str, piano_note_history: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        if riddle_id != "piano":
+            return None
+        out: list[dict[str, Any]] = []
+        for item in piano_note_history[-64:]:
+            if not isinstance(item, dict):
+                continue
+            encoded = str(item.get("encoded") or item.get("note") or "").strip()
+            if not encoded:
+                continue
+            out.append({"encoded": encoded, "accepted": bool(item.get("accepted", False))})
+        return out
 
     @staticmethod
     def _stringify_scalar(value: Any) -> str:

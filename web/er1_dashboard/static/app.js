@@ -276,8 +276,22 @@ function renderStarSliderSummary(summary) {
   `;
 }
 
+function renderPianoNotes(notes) {
+  if (!notes || !notes.length) return '<div class="inline-info">Played Notes: —</div>';
+  return `
+    <div class="inline-info inline-info-wrap piano-notes-row">
+      <span>Played Notes:</span>
+      <span class="piano-notes-seq">${notes.map(item => {
+        const cls = item.accepted ? 'piano-note-good' : 'piano-note-bad';
+        return `<span class="piano-note ${cls}">${item.encoded || ''}</span>`;
+      }).join('')}</span>
+    </div>
+  `;
+}
+
 function renderRiddleInfo(riddle) {
   if (riddle.id === 'images') return renderImagesButtons(riddle.images_buttons);
+  if (riddle.id === 'piano') return renderPianoNotes(riddle.piano_notes);
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
   if (riddle.id === 'knocking' || riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
   if (riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);

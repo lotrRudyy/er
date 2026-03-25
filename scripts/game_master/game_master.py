@@ -131,6 +131,8 @@ class GameMaster:
             players = list(self.state.current_run.players) if self.state.current_run is not None else []
             self.state.current_run = self._new_run_shell(players)
             self.state.completed_phase_events.clear()
+            self.state.game_started_at = None
+            self.state.last_riddle_solved_at = None
 
     def _start_run_timer(self) -> None:
         with self._lock:
@@ -138,8 +140,9 @@ class GameMaster:
                 self.state.current_run = self._new_run_shell()
             run = self.state.current_run
             now = utc_now()
+            started_at = now.isoformat(timespec="seconds")
             run.date = now.date().isoformat()
-            run.started_at = now.isoformat(timespec="seconds")
+            run.started_at = started_at
             run.started_monotonic = time.monotonic()
             run.ended_at = None
             run.duration_s = None
@@ -147,9 +150,12 @@ class GameMaster:
             run.events.clear()
             run.riddle_timings.clear()
             self.state.completed_phase_events.clear()
+            self.state.game_started_at = started_at
+            self.state.last_riddle_solved_at = None
             for node in config.RIDDLES:
                 source = "manual" if node in config.MANUAL_RIDDLES else "node"
                 run.riddle_timings[node] = RiddleTiming(node=node, source=source)
+        self.publish_game_state()
 
     def _finalize_current_run(self) -> None:
         with self._lock:
@@ -160,6 +166,7 @@ class GameMaster:
         run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
         self.db.save_completed_run(run)
         self._write_run_json(run)
+        self.publish_game_state()
 
     def _write_run_json(self, run: CurrentRun) -> None:
         payload = {
@@ -207,6 +214,7 @@ class GameMaster:
                     run.events.append({"ts": now, "event": "activated", "node": node})
 
     def _mark_solved(self, node: str, source: str) -> None:
+        changed = False
         with self._lock:
             run = self.state.current_run
             if run is None:
@@ -219,6 +227,8 @@ class GameMaster:
             timing.solved_at = now_iso
             timing.source = source
             timing.solve_time_from_run_start_s = round(time.monotonic() - run.started_monotonic, 3)
+            self.state.last_riddle_solved_at = now_iso
+            changed = True
             if timing.activated_at:
                 try:
                     activated_dt = datetime.fromisoformat(timing.activated_at)
@@ -227,6 +237,8 @@ class GameMaster:
                 except Exception:
                     timing.solve_time_from_activation_s = None
         self._record_event("solved", {"node": node, "source": source})
+        if changed:
+            self.publish_game_state()
 
     def handle_heartbeat(self, node_id: str) -> None:
         with self._lock:
@@ -436,7 +448,6 @@ class GameMaster:
             phase = self.state.phase
         self._record_event("lighting_phase_changed", {"phase": phase, "lighting_phase": int(lighting_phase)})
         self._apply_phase_stable_scene(phase, lighting_phase=int(lighting_phase), apply_maglocks=False)
-        self.publish_game_state()
 
     def _run_transition_action(self, action) -> None:
         kind = action.kind

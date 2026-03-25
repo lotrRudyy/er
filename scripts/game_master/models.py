@@ -41,6 +41,8 @@ class RuntimeState:
     phase: int = 0
     lighting_phase: int = 0
     last_phase: int | None = None
+    game_started_at: str | None = None
+    last_riddle_solved_at: str | None = None
     node_last_hb: dict[str, float] = field(default_factory=dict)
     node_last_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     pending: list[ScheduledAction] = field(default_factory=list)
@@ -48,12 +50,14 @@ class RuntimeState:
     completed_phase_events: set[str] = field(default_factory=set)
 
     def to_game_state_payload(self) -> dict[str, Any]:
-        payload = {
-            "phase": self.phase,
-            "lighting_phase": self.lighting_phase,
-        }
+        payload = {"phase": self.phase, "lighting_phase": self.lighting_phase}
         if self.last_phase is not None:
             payload["last_phase"] = self.last_phase
+        if self.game_started_at:
+            payload["game_started_at"] = self.game_started_at
+        if self.last_riddle_solved_at:
+            payload["last_riddle_solved_at"] = self.last_riddle_solved_at
+        payload["timer_running"] = self.game_started_at is not None and self.phase >= 3 and self.phase < 14
         return payload
 
     def mark_hb(self, node_id: str) -> None:
