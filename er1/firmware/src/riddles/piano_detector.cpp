@@ -38,8 +38,8 @@ static constexpr float RMS_EMA_ALPHA_IDLE = 0.02f;
 static constexpr float RMS_MULT = 4.0f;
 static constexpr float RMS_ADD  = 0.002f;
 
-static constexpr int   CAND_DEBOUNCE_MS = 50;      // debounce candidate triggers
-static constexpr uint32_t NOTE_DEBOUNCE_MS = 100;   // debounce only after ACCEPTED notes
+static constexpr int   CAND_DEBOUNCE_MS = 60;      // debounce candidate triggers
+static constexpr uint32_t NOTE_DEBOUNCE_MS = 120;   // debounce only after ACCEPTED notes
 
 // QC onset (match qc_captures.py defaults)
 static constexpr float QC_ONSET_F_LO = 80.0f;
@@ -72,7 +72,7 @@ static constexpr float FEAT_FMIN_HZ = 50.0f;
 static constexpr float FEAT_FMAX_HZ = 8000.0f;
 
 // Thresholds (live-tune)
-static float T_ABS = 0.93f;
+static float T_ABS = 0.9f;
 static float T_MARGIN = 0.01f;
 
 // Ring: must cover worst-case (enter + search_post + 200ms post)

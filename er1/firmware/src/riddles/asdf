@@ -26,3 +26,86 @@ images_piano/state {"note":"b4","encoded":"R","accepted":false,"margins":{"s1":0
 images_piano/state {"note":"d5","encoded":"T","accepted":false,"margins":{"s1":0.881564,"s2":0.829909,"margin":0.051655},"top3":[{"note":"d5","encoded":"T","score":0.881564},{"note":"a#1","encoded":"a#1","score":0.829909},{"note":"d#5","encoded":"d#5","score":0.826389}]}
 images_piano/state {"note":"e5","encoded":"U","accepted":false,"margins":{"s1":0.891709,"s2":0.821883,"margin":0.069827},"top3":[{"note":"e5","encoded":"U","score":0.891709},{"note":"a#1","encoded":"a#1","score":0.821883},{"note":"c#1","encoded":"c#1","score":0.814305}]}
 images_piano/state {"note":"c5","encoded":"S","accepted":false,"margins":{"s1":0.849782,"s2":0.789820,"margin":0.059962},"top3":[{"note":"c5","encoded":"S","score":0.849782},{"note":"c6","encoded":"Z","score":0.789820},{"note":"c4","encoded":"L","score":0.757762}]}
+
+
+
+
+Chess publishes:
+
+{
+  "id": "chess",
+  "mode": "ingame|standby",
+  "enabled": true|false,
+  "solved": true|false,
+  "armed_after_unsatisfied": true|false,
+  "raw_state": "idle|partial|solved",
+  "state": "idle|partial|solved",
+  "solved_count": <number>,
+  "reader_labels": {
+    "queen": "QUEEN|ROOK|KING|HORSE|EMPTY|UNKNOWN",
+    "knight": "QUEEN|ROOK|KING|HORSE|EMPTY|UNKNOWN",
+    "rook": "QUEEN|ROOK|KING|HORSE|EMPTY|UNKNOWN",
+    "king": "QUEEN|ROOK|KING|HORSE|EMPTY|UNKNOWN"
+  }
+}
+
+Knocking publishes:
+
+{
+  "id": "knocking",
+  "mode": "ingame|standby",
+  "enabled": true|false,
+  "solved": true|false,
+  "raw_state": "idle|progress|solved",
+  "tries": <number>,
+  "sequence_current": ["1","2",...],
+  "attempted_sequences": ["1-2","3-1-2",...]
+}
+
+Candles publishes:
+
+{
+  "id": "candles",
+  "mode": "ingame|standby",
+  "enabled": true|false,
+  "solved": true|false,
+  "raw_state": "idle|progress|solved",
+  "tries": <number>,
+  "sequence_current": ["1","2",...],
+  "attempted_sequences": ["1-2","4-1-3",...],
+  "lit": [0|1,0|1,0|1,0|1],
+  "progressed": <number>
+}
+
+Star slider publishes:
+
+{
+  "id": "star_slider",
+  "mode": "ingame|standby",
+  "enabled": true|false,
+  "solved": true|false,
+  "raw_state": "idle|solved",
+  "tries": <number>,
+  "attempted_star_signs": [
+    {
+      "attempt": <number>,
+      "positions": {
+        "r0": "...",
+        "r1": "...",
+        "r2": "..."
+      }
+    }
+  ],
+  "reader_labels": ["...","...","..."],
+  "reader_positions": {
+    "r0": "...",
+    "r1": "...",
+    "r2": "..."
+  },
+  "last_attempt_positions": {
+    "attempt": <number>,
+    "positions": {...}
+  } | null,
+  "attempts": <number>,
+  "success": <number>
+}
