@@ -13,13 +13,13 @@
         <div class="phase-panel">
           <div class="label">Phase <span id="phaseValue" class="value inline-phase">0: Standby</span></div>
           <div class="subline">Last: <span id="lastPhaseValue">—</span></div>
+          <div class="top-nav-links"><a class="nav-button" href="/games">Open Game Viewer</a></div>
           <div class="mode-buttons">
             <button data-phase-action="standby">Standby</button>
             <button data-phase-action="maintenance">Maintenance</button>
             <button data-phase-action="prepare">Prepare</button>
             <button data-phase-action="start">Start</button>
           </div>
-          <div class="topbar-actions"><a class="nav-button" href="{{ url_for('games_viewer') }}">Open Game Viewer</a></div>
           <div class="players-inline">
             <div class="label small-label">Players</div>
             <input id="playerInput" class="player-input" type="text" placeholder="Add player + Enter" />

@@ -2,72 +2,116 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ER1 Game Viewer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body>
-  <div class="page viewer-page">
-    <section class="panel viewer-topbar">
-      <div>
-        <div class="label">Game Viewer</div>
-        <div class="subline">Enter a game id and load all saved data from the SQLite database.</div>
+<body class="game-viewer-body">
+  <div class="game-viewer-page">
+    <section class="panel game-viewer-panel">
+      <div class="game-viewer-header">
+        <div>
+          <h1>Game Viewer</h1>
+          <div class="subline">DB: {{ db_path }}</div>
+        </div>
+        <div class="top-nav-links">
+          <a class="nav-button" href="/">Back to Dashboard</a>
+        </div>
       </div>
-      <div class="nav-buttons">
-        <a class="nav-button" href="{{ url_for('index') }}">Open Dashboard</a>
-      </div>
+
+      <form class="game-search-row" method="get" action="/games">
+        <input class="player-input game-id-input" type="text" name="game_id" value="{{ game_id }}" placeholder="Enter game ID" />
+        <button type="submit">Load Game</button>
+      </form>
+
+      {% if error %}
+        <div class="viewer-message viewer-error">{{ error }}</div>
+      {% elif not game_id %}
+        <div class="viewer-message">Enter a game ID to view stored DB data.</div>
+      {% endif %}
     </section>
 
-    <section class="panel viewer-search-panel">
-      <div class="viewer-search-row">
-        <label class="viewer-search-label" for="gameIdInput">Game ID</label>
-        <input id="gameIdInput" class="viewer-search-input" type="text" placeholder="Paste game id here" />
-        <button id="loadGameBtn" class="viewer-load-button">Load Game</button>
-      </div>
-      <div id="viewerStatus" class="viewer-status">Waiting for input.</div>
+    {% if game %}
+    <section class="panel game-viewer-panel">
+      <h2>Game Summary</h2>
+      <table class="simple-table viewer-table">
+        <tbody>
+          {% for key, value in game.items() %}
+          <tr>
+            <th>{{ key }}</th>
+            <td>
+              {% if value is mapping or (value is sequence and value is not string) %}
+                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </section>
 
-    <section id="viewerContent" class="viewer-content" hidden>
-      <section class="panel">
-        <h2>Game Summary</h2>
-        <div id="gameSummaryGrid" class="viewer-summary-grid"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Riddles</h2>
-        <table class="simple-table viewer-table">
-          <thead>
-            <tr>
-              <th>Riddle</th>
-              <th>Source</th>
-              <th>Activated</th>
-              <th>Solved At</th>
-              <th>Solved</th>
-              <th>Run Time</th>
-              <th>Activation Time</th>
-            </tr>
-          </thead>
-          <tbody id="viewerRiddlesBody"></tbody>
-        </table>
-      </section>
-
-      <section class="panel">
-        <h2>Hints</h2>
-        <table class="simple-table viewer-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>At</th>
-              <th>Riddle</th>
-              <th>Hint</th>
-            </tr>
-          </thead>
-          <tbody id="viewerHintsBody"></tbody>
-        </table>
-      </section>
+    <section class="panel game-viewer-panel">
+      <h2>Riddles</h2>
+      {% if riddles %}
+      <table class="simple-table viewer-table">
+        <thead>
+          <tr>
+            {% for key in riddles[0].keys() %}<th>{{ key }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in riddles %}
+          <tr>
+            {% for value in row.values() %}
+            <td>
+              {% if value is mapping or (value is sequence and value is not string) %}
+                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="viewer-message">No riddles stored for this game.</div>
+      {% endif %}
     </section>
+
+    <section class="panel game-viewer-panel">
+      <h2>Hints</h2>
+      {% if hints %}
+      <table class="simple-table viewer-table">
+        <thead>
+          <tr>
+            {% for key in hints[0].keys() %}<th>{{ key }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in hints %}
+          <tr>
+            {% for value in row.values() %}
+            <td>
+              {% if value is mapping or (value is sequence and value is not string) %}
+                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="viewer-message">No hints stored for this game.</div>
+      {% endif %}
+    </section>
+    {% endif %}
   </div>
-
-  <script src="{{ url_for('static', filename='game_viewer.js') }}"></script>
 </body>
 </html>
