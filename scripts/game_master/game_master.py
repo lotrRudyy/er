@@ -387,7 +387,17 @@ class GameMaster:
             commands = action.payload.get("commands", [])
             if isinstance(commands, list):
                 for command in commands:
-                    if isinstance(command, dict):
+                    if not isinstance(command, dict):
+                        continue
+                    kind = command.get("kind")
+                    payload = command.get("payload", {})
+                    if isinstance(kind, str) and isinstance(payload, dict):
+                        class _Action:
+                            def __init__(self, kind: str, payload: dict[str, Any]) -> None:
+                                self.kind = kind
+                                self.payload = payload
+                        self._run_transition_action(_Action(kind, payload))
+                    else:
                         self.publish_lighting_cmd(command)
             return
         if action.kind == "maintenance_unsolve":
