@@ -277,29 +277,14 @@ function renderStarSliderSummary(summary) {
 }
 
 function renderPianoSummary(summary) {
-  if (!summary) return '';
-  const note = summary.note || '—';
-  const encoded = summary.encoded || '—';
-  const accepted = summary.accepted === true ? 'accepted' : (summary.accepted === false ? 'rejected' : 'unknown');
-  const top3 = (summary.top3 || [])
-    .map(item => {
-      const noteText = item.note || '—';
-      const encodedText = item.encoded || '—';
-      const scoreText = Number.isFinite(item.score) ? item.score.toFixed(3) : '—';
-      return `${noteText}/${encodedText} (${scoreText})`;
-    })
-    .join(' <span class="inline-sep">|</span> ');
-  const margin = Number.isFinite(summary.margins?.margin) ? summary.margins.margin.toFixed(6) : '—';
+  if (!summary || !summary.played_notes || !summary.played_notes.length) return '';
   return `
     <div class="inline-info inline-info-wrap">
-      <span>Key: ${note}</span>
-      <span class="inline-sep">|</span>
-      <span>Encoded: ${encoded}</span>
-      <span class="inline-sep">|</span>
-      <span>Status: <span class="inline-status ${summary.accepted ? 'inline-status-good' : 'inline-status-bad'}">${accepted}</span></span>
-      <span class="inline-sep">|</span>
-      <span>Margin: ${margin}</span>
-      ${top3 ? `<span class="inline-sep">|</span><span>Top3: ${top3}</span>` : ''}
+      <span><b>Played Notes:</b> ${summary.played_notes.map(n => {
+        const cls = n.accepted ? 'inline-status-good' : 'inline-status-bad';
+        const text = (n.encoded || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<span class="${cls}">${text}</span>`;
+      }).join(' ')}</span>
     </div>
   `;
 }

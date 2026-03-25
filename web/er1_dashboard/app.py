@@ -172,12 +172,12 @@ class DashboardStore:
     def _reset_riddle_display_state_locked(self) -> None:
         for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
             self._clear_node_payload_locked(node_id)
-        self.riddle_states["images"] = {}
-        self.riddle_states["piano"] = {}
+        self.riddle_states["images"] = {"id": "images", "buttons": {}}
+        self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-        self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        self.riddle_states["star_slider"] = {"id": "star_slider", "reader_positions": {}}
 
     def update_node_hb(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -190,6 +190,31 @@ class DashboardStore:
             merged_node = dict(previous_node)
             merged_node.update(payload)
             self.node_states[node_id] = merged_node
+
+            if node_id == "images_piano":
+                if self._is_images_payload(payload):
+                    prev = self.riddle_states.get("images", {}) if isinstance(self.riddle_states.get("images"), dict) else {}
+                    merged = dict(prev)
+                    merged.update(payload)
+                    merged["id"] = "images"
+                    self.riddle_states["images"] = merged
+                    return
+                if self._is_piano_payload(payload):
+                    prev = self.riddle_states.get("piano", {}) if isinstance(self.riddle_states.get("piano"), dict) else {}
+                    merged = dict(prev)
+                    merged.update(payload)
+                    merged["id"] = "piano"
+                    played_notes = list(prev.get("played_notes") or [])
+                    encoded = str(payload.get("encoded") or "").strip()
+                    if encoded:
+                        played_notes.append({
+                            "encoded": encoded,
+                            "accepted": bool(payload.get("accepted", False)),
+                        })
+                    merged["played_notes"] = played_notes[-40:]
+                    self.riddle_states["piano"] = merged
+                    return
+
             riddle_id = str(payload.get("id", "")).strip()
             if riddle_id:
                 prev = self.riddle_states.get(riddle_id, {}) if isinstance(self.riddle_states.get(riddle_id), dict) else {}
@@ -201,13 +226,21 @@ class DashboardStore:
                     if last_attempt and (not attempts or attempts[-1] != last_attempt):
                         attempts.append(last_attempt)
                     merged["attempted_sequences"] = attempts
-                elif riddle_id == "star_slider":
-                    attempts = list(merged.get("attempted_star_signs") or [])
-                    last_positions = payload.get("last_attempt_positions")
-                    if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
-                        attempts.append(last_positions)
-                    merged["attempted_star_signs"] = attempts
                 self.riddle_states[riddle_id] = merged
+
+    @staticmethod
+    def _is_images_payload(payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        if "buttons" in payload and isinstance(payload.get("buttons"), dict):
+            return True
+        return any(key in payload for key in ["jesus", "blumen", "flowers", "natur", "nature", "puppe", "doll"])
+
+    @staticmethod
+    def _is_piano_payload(payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        return any(key in payload for key in ["encoded", "note", "accepted", "top3", "margins"])
 
     def update_lock_state(self, lock_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -579,39 +612,18 @@ class DashboardStore:
     def _extract_piano_summary(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
         if riddle_id != "piano" or not state_payload:
             return None
-        top3_raw = state_payload.get("top3") or []
-        top3 = []
-        if isinstance(top3_raw, list):
-            for item in top3_raw[:3]:
-                if not isinstance(item, dict):
-                    continue
-                score = item.get("score")
-                try:
-                    score_val = float(score)
-                except Exception:
-                    score_val = None
-                top3.append({
-                    "note": str(item.get("note") or "").strip(),
-                    "encoded": str(item.get("encoded") or "").strip(),
-                    "score": score_val,
-                })
-        margins_raw = state_payload.get("margins") or {}
-        margins = None
-        if isinstance(margins_raw, dict):
-            margins = {}
-            for key in ["s1", "s2", "margin"]:
-                val = margins_raw.get(key)
-                try:
-                    margins[key] = float(val)
-                except Exception:
-                    margins[key] = None
-        return {
-            "note": str(state_payload.get("note") or "").strip(),
-            "encoded": str(state_payload.get("encoded") or "").strip(),
-            "accepted": state_payload.get("accepted"),
-            "margins": margins,
-            "top3": top3,
-        }
+        played_notes = []
+        for item in state_payload.get("played_notes") or []:
+            if not isinstance(item, dict):
+                continue
+            encoded = str(item.get("encoded") or "").strip()
+            if not encoded:
+                continue
+            played_notes.append({
+                "encoded": encoded,
+                "accepted": bool(item.get("accepted", False)),
+            })
+        return {"played_notes": played_notes}
 
     @staticmethod
     def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
