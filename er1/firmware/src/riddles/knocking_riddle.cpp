@@ -475,6 +475,7 @@ void KnockingRiddle::evaluateSequence(bool timeoutAttempt) {
         ",\"timeout\":" + (timeoutAttempt ? "1" : "0") + "}");
     enqueueSound(4, -1);
     resetSequence();
+    publishState();
   }
 }
 

@@ -9,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "knocking";
-static const char* FW_VERSION = "29";
+static const char* FW_VERSION = "30";
 static const char* FW_DESC = "embedded knock samples only";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x51};

@@ -369,6 +369,7 @@ void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
     solved_ = true;
     log("INF", "SEQUENCE OK -> SOLVED");
     publishSolvedEvent();
+    publishState();
   } else {
     tries_++;
     lastAttempt_ = currentSequenceHyphen();
@@ -376,9 +377,11 @@ void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
       resetArmed_ = true;
       resetArmMs_ = nowMs;
       log("INF", String("SEQUENCE FAIL (full) -> reset pending seq=") + currentSequenceHyphen());
+      publishState();
     } else {
       log("INF", String("SEQUENCE FAIL -> reset seq=") + currentSequenceHyphen());
       resetAll();
+      publishState();
     }
   }
 }
@@ -425,6 +428,7 @@ void CandlesRiddle::resetAll() {
   flickerRelight();
   resetPuzzleState();
   log("INF", "Reset (relight all)");
+  publishState();
 }
 
 void CandlesRiddle::publishSolvedEvent() {
