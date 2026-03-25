@@ -172,8 +172,6 @@ class DashboardStore:
     def _reset_riddle_display_state_locked(self) -> None:
         for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
             self._clear_node_payload_locked(node_id)
-        self.riddle_states["images"] = {}
-        self.riddle_states["piano"] = {}
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
@@ -423,7 +421,6 @@ class DashboardStore:
                 "chess_slots": self._extract_chess_slots(riddle_id, state_payload),
                 "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
                 "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
-                "piano_summary": self._extract_piano_summary(riddle_id, state_payload),
                 "hints": list(local_hints.get(riddle_id, [])),
             })
         return out
@@ -574,44 +571,6 @@ class DashboardStore:
             vals = [str(pos.get(key, "none") or "none").strip() for key in ["r0", "r1", "r2"]]
             attempts.append(vals)
         return {"tries": tries, "current": current, "attempts": attempts}
-
-    @staticmethod
-    def _extract_piano_summary(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
-        if riddle_id != "piano" or not state_payload:
-            return None
-        top3_raw = state_payload.get("top3") or []
-        top3 = []
-        if isinstance(top3_raw, list):
-            for item in top3_raw[:3]:
-                if not isinstance(item, dict):
-                    continue
-                score = item.get("score")
-                try:
-                    score_val = float(score)
-                except Exception:
-                    score_val = None
-                top3.append({
-                    "note": str(item.get("note") or "").strip(),
-                    "encoded": str(item.get("encoded") or "").strip(),
-                    "score": score_val,
-                })
-        margins_raw = state_payload.get("margins") or {}
-        margins = None
-        if isinstance(margins_raw, dict):
-            margins = {}
-            for key in ["s1", "s2", "margin"]:
-                val = margins_raw.get(key)
-                try:
-                    margins[key] = float(val)
-                except Exception:
-                    margins[key] = None
-        return {
-            "note": str(state_payload.get("note") or "").strip(),
-            "encoded": str(state_payload.get("encoded") or "").strip(),
-            "accepted": state_payload.get("accepted"),
-            "margins": margins,
-            "top3": top3,
-        }
 
     @staticmethod
     def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
