@@ -242,6 +242,48 @@ function renderImagesButtons(buttons) {
   `;
 }
 
+function renderChessSlots(slots) {
+  if (!slots || !slots.length) return '';
+  return `
+    <div class="inline-info inline-info-wrap">
+      ${slots.map(slot => `
+        <span>${slot.slot}: <span class="inline-status ${slot.correct ? 'inline-status-good' : 'inline-status-bad'}">${slot.value}</span></span>
+      `).join('<span class="inline-sep">|</span>')}
+    </div>
+  `;
+}
+
+function renderAttemptsSummary(summary) {
+  if (!summary) return '';
+  const tries = summary.tries || '0';
+  const attempts = (summary.attempts || []).join(' ');
+  return `<div class="inline-info">Tries: ${tries}${attempts ? ` <span class="inline-sep">|</span> ${attempts}` : ''}</div>`;
+}
+
+function renderStarSliderSummary(summary) {
+  if (!summary) return '';
+  const tries = summary.tries || '0';
+  const current = (summary.current || []).join(' ');
+  const attempts = (summary.attempts || []).map(item => `(${item.join(' ')})`).join(' ');
+  return `
+    <div class="inline-info inline-info-wrap">
+      <span>Tries: ${tries}</span>
+      <span class="inline-sep">|</span>
+      <span>Current: ${current || 'none'}</span>
+      <span class="inline-sep">|</span>
+      <span>Attempts: ${attempts || '—'}</span>
+    </div>
+  `;
+}
+
+function renderRiddleInfo(riddle) {
+  if (riddle.id === 'images') return renderImagesButtons(riddle.images_buttons);
+  if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
+  if (riddle.id === 'knocking' || riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
+  if (riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
+  return riddle.info || '';
+}
+
 function hintCellHtml(riddle, inputValue='') {
   const items = (riddle.hints || []).map(h => `
     <div class="hint-item">
@@ -271,9 +313,7 @@ function renderRiddles() {
 
   body.innerHTML = '';
   for (const riddle of state.riddles || []) {
-    const infoHtml = riddle.id === 'images'
-      ? renderImagesButtons(riddle.images_buttons)
-      : (riddle.info || '');
+    const infoHtml = renderRiddleInfo(riddle);
     const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending';
     const tr = document.createElement('tr');
     tr.dataset.riddleId = riddle.id;

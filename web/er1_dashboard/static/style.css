@@ -248,3 +248,39 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 }
 
 .hint-list { margin-top: 4px; }
+
+
+.inline-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.inline-info-wrap {
+  flex-wrap: wrap;
+}
+
+.inline-sep {
+  color: var(--muted);
+}
+
+.inline-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--gray-line);
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.inline-status-good {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-text);
+}
+
+.inline-status-bad {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-text);
+}

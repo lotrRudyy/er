@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -127,6 +128,7 @@ class DashboardStore:
     lock: threading.RLock = field(default_factory=threading.RLock)
     game_state: dict[str, Any] = field(default_factory=lambda: {"phase": 0})
     node_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    riddle_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     node_last_hb: dict[str, float] = field(default_factory=dict)
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -144,6 +146,9 @@ class DashboardStore:
     def update_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
             self.node_states[node_id] = payload
+            riddle_id = str(payload.get("id", "")).strip()
+            if riddle_id:
+                self.riddle_states[riddle_id] = payload
 
     def update_lock_state(self, lock_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -174,6 +179,7 @@ class DashboardStore:
             node_states = json.loads(json.dumps(self.node_states))
             locks = json.loads(json.dumps(self.locks))
             lights = json.loads(json.dumps(self.lights))
+            riddle_states = json.loads(json.dumps(self.riddle_states))
             node_last_hb = dict(self.node_last_hb)
             local_hints = json.loads(json.dumps(self.local_hints))
 
@@ -182,7 +188,7 @@ class DashboardStore:
             "nodes": self._build_node_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
-            "riddles": self._build_riddle_summary(game, node_states, node_last_hb, local_hints),
+            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hints),
             "meta": {"broker": BROKER_HOST},
         }
 
@@ -310,7 +316,7 @@ class DashboardStore:
             })
         return out
 
-    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hints: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hints: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = set(meta.get("active", ()))
@@ -322,7 +328,7 @@ class DashboardStore:
         for row in RIDDLES:
             riddle_id = row["id"]
             node_id = row["node_id"]
-            state_payload = node_states.get(node_id, {}) if node_id else {}
+            state_payload = riddle_states.get(riddle_id) or (node_states.get(node_id, {}) if node_id else {})
 
             timing = riddle_timings.get(riddle_id) or {}
             if riddle_id in solved:
@@ -361,6 +367,9 @@ class DashboardStore:
                 "tries": self._extract_tries(state_payload),
                 "info": self._extract_info(riddle_id, state_payload),
                 "images_buttons": self._extract_images_buttons(riddle_id, state_payload),
+                "chess_slots": self._extract_chess_slots(riddle_id, state_payload),
+                "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
+                "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
                 "hints": list(local_hints.get(riddle_id, [])),
             })
         return out
@@ -394,27 +403,141 @@ class DashboardStore:
         }
 
     @staticmethod
-    def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
-        if not state_payload:
+    def _stringify_scalar(value: Any) -> str:
+        if value is None:
             return ""
-        if riddle_id == "images":
-            return ""
-        if riddle_id == "piano":
-            keys = ["seq", "sequence", "decoded", "top_predictions", "decoded_predictions"]
-        elif riddle_id == "chess":
-            keys = ["king", "queen", "rook", "knight"]
-        elif riddle_id == "star_slider":
-            keys = ["left", "middle", "right", "attempted_star_signs"]
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value).strip()
+
+    @classmethod
+    def _string_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [cls._stringify_scalar(x) for x in value if cls._stringify_scalar(x)]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    loaded = json.loads(text)
+                    if isinstance(loaded, list):
+                        return [cls._stringify_scalar(x) for x in loaded if cls._stringify_scalar(x)]
+                except Exception:
+                    pass
+            if any(sep in text for sep in [",", " "]):
+                return [part for part in re.split(r"[\s,]+", text) if part]
+            return [text]
+        return [cls._stringify_scalar(value)]
+
+    @classmethod
+    def _normalize_knocking_attempt(cls, value: Any) -> str:
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return ""
+            if raw.isdigit() and len(raw) <= 3:
+                return raw
+            tokens = [part for part in re.split(r"[\s,]+", raw) if part]
         else:
-            keys = []
+            tokens = cls._string_list(value)
+        if not tokens:
+            return ""
+        if len(tokens) <= 3 and all(token.isdigit() for token in tokens):
+            return "".join(tokens)
+        counts: list[str] = []
+        prev = None
+        run_len = 0
+        for token in tokens:
+            if token == prev:
+                run_len += 1
+            else:
+                if prev is not None:
+                    counts.append(str(run_len))
+                prev = token
+                run_len = 1
+        if prev is not None:
+            counts.append(str(run_len))
+        return "".join(counts) if counts else "".join(tokens)
 
-        parts = []
-        for key in keys:
-            if key in state_payload:
-                parts.append(f"{key}: {state_payload.get(key)}")
-        if parts:
-            return "   ".join(parts)
+    @classmethod
+    def _normalize_flat_attempt(cls, value: Any) -> str:
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return ""
+            if raw.isdigit():
+                return raw
+            tokens = [part for part in re.split(r"[\s,]+", raw) if part]
+            return "".join(tokens)
+        return "".join(cls._string_list(value))
 
+    @staticmethod
+    def _extract_chess_slots(riddle_id: str, state_payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        if riddle_id != "chess" or not state_payload:
+            return None
+        expected = {
+            "queen": "QUEEN",
+            "knight": "HORSE",
+            "rook": "ROOK",
+            "king": "KING",
+        }
+        labels = state_payload.get("reader_labels")
+        if not isinstance(labels, dict):
+            labels = state_payload
+        out: list[dict[str, Any]] = []
+        for slot, target in expected.items():
+            value = str(labels.get(slot, "EMPTY") if isinstance(labels, dict) else "EMPTY").strip().upper() or "EMPTY"
+            out.append({
+                "slot": slot.capitalize(),
+                "value": value,
+                "correct": value == target,
+            })
+        return out
+
+    @classmethod
+    def _extract_attempts_summary(cls, riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
+        if riddle_id not in {"knocking", "candles"} or not state_payload:
+            return None
+        tries = cls._extract_tries(state_payload)
+        attempts_raw = state_payload.get("attempted_sequences")
+        attempts: list[str] = []
+        items = attempts_raw if isinstance(attempts_raw, list) else ([attempts_raw] if attempts_raw is not None else [])
+        for item in items:
+            text = cls._normalize_knocking_attempt(item) if riddle_id == "knocking" else cls._normalize_flat_attempt(item)
+            if text:
+                attempts.append(text)
+        return {"tries": tries, "attempts": attempts}
+
+    @classmethod
+    def _extract_star_slider_summary(cls, riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
+        if riddle_id != "star_slider" or not state_payload:
+            return None
+        tries = cls._extract_tries(state_payload)
+        positions = state_payload.get("reader_positions") or {}
+        current: list[str] = []
+        if isinstance(positions, dict):
+            for key in ["r0", "r1", "r2"]:
+                current.append(str(positions.get(key, "none") or "none").strip())
+        elif isinstance(state_payload.get("reader_labels"), list):
+            current = [str(x).strip() or "none" for x in state_payload.get("reader_labels", [])[:3]]
+        attempts = []
+        for item in state_payload.get("attempted_star_signs") or []:
+            if not isinstance(item, dict):
+                continue
+            pos = item.get("positions") or {}
+            if not isinstance(pos, dict):
+                continue
+            vals = [str(pos.get(key, "none") or "none").strip() for key in ["r0", "r1", "r2"]]
+            attempts.append(vals)
+        return {"tries": tries, "current": current, "attempts": attempts}
+
+    @staticmethod
+    def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
+        if not state_payload or riddle_id in {"images", "piano", "chess", "knocking", "candles", "star_slider"}:
+            return ""
         generic = []
         for key, value in state_payload.items():
             if key in {"id", "fw", "up", "ts", "time_valid", "buttons"}:
@@ -425,6 +548,7 @@ class DashboardStore:
             if len(generic) >= 4:
                 break
         return "   ".join(generic)
+
 
 
 store = DashboardStore()
