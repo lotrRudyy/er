@@ -65,8 +65,13 @@ void ChessRiddle::tick(uint32_t nowMs) {
     const int cc = correctCount();
     perReaderMs_ = (cc >= 3) ? kPollFastMs : kPollSlowMs;
 
-    // Evaluate riddle state transitions
+    // Evaluate riddle state transitions first so state reflects the new puzzle state.
     evaluatePattern();
+
+    // Publish state on every reader event, even if the high-level riddle state did not
+    // change, because reader_labels/raw placement changed and the game master expects a
+    // fresh chess/state message whenever we log a new reader table.
+    publishState();
 
     // REQUIRED: print FULL TABLE on every event
     logFullTable();
@@ -350,25 +355,21 @@ void ChessRiddle::publishState() {
     default: stateName = "idle"; break;
   }
 
-  const bool effectiveEnabled = gameActive_ && moduleEnabled_ && ctx_->enabled();
-  const bool solved = (riddleState_ == RiddleState::Solved);
-
-  String data;
-  data.reserve(320);
-  data = String("{\"id\":\"chess\"") +
-         ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
-         ",\"enabled\":" + String(effectiveEnabled ? "true" : "false") +
-         ",\"solved\":" + String(solved ? "true" : "false") +
-         ",\"armed_after_unsatisfied\":" + String(solveArmedAfterUnsatisfied_ ? "true" : "false") +
-         ",\"raw_state\":\"" + stateName + "\"" +
-         ",\"state\":\"" + stateName + "\"" +
-         ",\"solved_count\":" + String(solvedCount_) +
-         ",\"reader_labels\":" + readerLabelsJson() +
-         "}";
+  const String data =
+      String("{\"id\":\"chess\"") +
+      ",\"mode\":\"" + (gameActive_ ? "ingame" : "standby") + "\"" +
+      ",\"enabled\":" + ((gameActive_ && moduleEnabled_ && ctx_->enabled()) ? String("true") : String("false")) +
+      ",\"solved\":" + ((riddleState_ == RiddleState::Solved) ? String("true") : String("false")) +
+      ",\"armed_after_unsatisfied\":" + (solveArmedAfterUnsatisfied_ ? String("true") : String("false")) +
+      ",\"raw_state\":\"" + stateName + "\"" +
+      ",\"state\":\"" + stateName + "\"" +
+      ",\"solved_count\":" + solvedCount_ +
+      ",\"reader_labels\":" + readerLabelsJson() +
+      "}";
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+    publish(topics.state.c_str(), data, true);
   }
 }
 
