@@ -387,17 +387,7 @@ class GameMaster:
             commands = action.payload.get("commands", [])
             if isinstance(commands, list):
                 for command in commands:
-                    if not isinstance(command, dict):
-                        continue
-                    kind = command.get("kind")
-                    payload = command.get("payload", {})
-                    if isinstance(kind, str) and isinstance(payload, dict):
-                        class _Action:
-                            def __init__(self, kind: str, payload: dict[str, Any]) -> None:
-                                self.kind = kind
-                                self.payload = payload
-                        self._run_transition_action(_Action(kind, payload))
-                    else:
+                    if isinstance(command, dict):
                         self.publish_lighting_cmd(command)
             return
         if action.kind == "maintenance_unsolve":
@@ -416,21 +406,27 @@ class GameMaster:
             self.publish_maglock_cmd({"cmd": "open" if state == "open" else "close", "lock": lock_id})
 
         # explicit stable light scene
+        star_sky_pct = int(spec.lights.get("star_sky", 0) or 0)
+
         if all(v == 0 for v in spec.lights.values()):
             self.publish_lighting_cmd({"cmd": "all_off"})
+            self._publish_json("star_sky/cmd", {"cmd": "off"})
             return
 
         if all(v == 100 for v in spec.lights.values()):
             self.publish_lighting_cmd({"cmd": "all_on"})
+            self._publish_json("star_sky/cmd", {"cmd": "on"})
             return
 
         self.publish_lighting_cmd({"cmd": "all_off"})
-        on_lights = [light for light, pct in spec.lights.items() if pct == 100]
+        on_lights = [light for light, pct in spec.lights.items() if pct == 100 and light != "star_sky"]
         if on_lights:
             self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": on_lights})
-        dim_lights = [(light, pct) for light, pct in spec.lights.items() if 0 < pct < 100]
+        dim_lights = [(light, pct) for light, pct in spec.lights.items() if 0 < pct < 100 and light != "star_sky"]
         for light, pct in dim_lights:
             self.publish_lighting_cmd({"cmd": "set", "light": light, "pct": pct})
+
+        self._publish_json("star_sky/cmd", {"cmd": "on" if star_sky_pct > 0 else "off"})
 
     def _run_transition_action(self, action) -> None:
         kind = action.kind
