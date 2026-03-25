@@ -9,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "17";
+static const char* FW_VERSION = "18";
 static const char* FW_DESC = "candles with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
@@ -32,6 +32,7 @@ static NodeCore nodeCore;
 static CandlesRiddle candles;
 static bool s_gameEnabled = false;
 static bool s_gameSolved = false;
+static int s_lastPhase = -1;
 
 struct PhaseCfg {
   bool enabled;
@@ -101,8 +102,15 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
   int phase = doc["phase"] | -1;
   if (phase < 0 || phase >= 15) return;
 
+  auto* module = static_cast<CandlesRiddle*>(user);
+  bool enteringResetPhase = (phase != s_lastPhase) && (phase == 1 || phase == 2);
+  if (enteringResetPhase && module) {
+    module->onCmd("CLEAR_LAST_ATTEMPT", "");
+  }
+
   const PhaseCfg& cfg = kPhaseCfg[phase];
-  applyTarget(static_cast<CandlesRiddle*>(user), cfg.enabled, cfg.solved);
+  applyTarget(module, cfg.enabled, cfg.solved);
+  s_lastPhase = phase;
 }
 
 void setup() {

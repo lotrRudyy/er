@@ -187,6 +187,13 @@ bool CandlesRiddle::onCmd(const char* cmd, const char* payload) {
     return true;
   }
 
+  if (strcasecmp(cmd, "CLEAR_LAST_ATTEMPT") == 0) {
+    lastAttempt_ = "";
+    log("INF", "CANDLES_LAST_ATTEMPT_CLEARED");
+    publishState();
+    return true;
+  }
+
   if (strcasecmp(cmd, "ENABLE") == 0) {
     moduleEnabled_ = true;
     log("INF", "CANDLES_ENABLE");
