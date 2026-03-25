@@ -256,28 +256,8 @@ function renderChessSlots(slots) {
 function renderAttemptsSummary(summary) {
   if (!summary) return '';
   const tries = summary.tries || '0';
-  const current = summary.current || '';
   const attempts = (summary.attempts || []).join(' ');
-  return `
-    <div class="inline-info inline-info-wrap">
-      <span>Tries: ${tries}</span>
-      ${current ? `<span class="inline-sep">|</span><span>Current: ${current}</span>` : ''}
-      ${attempts ? `<span class="inline-sep">|</span><span>Attempts: ${attempts}</span>` : ''}
-    </div>
-  `;
-}
-
-function renderPianoSummary(summary) {
-  if (!summary || !(summary.notes || []).length) return '';
-  return `
-    <div class="inline-info inline-info-wrap piano-summary">
-      <span>Played Notes:</span>
-      <span class="piano-notes">${(summary.notes || []).map(item => {
-        const cls = item.accepted ? 'piano-note-good' : 'piano-note-bad';
-        return `<span class="piano-note ${cls}">${item.note}</span>`;
-      }).join('')}</span>
-    </div>
-  `;
+  return `<div class="inline-info">Tries: ${tries}${attempts ? ` <span class="inline-sep">|</span> ${attempts}` : ''}</div>`;
 }
 
 function renderStarSliderSummary(summary) {
@@ -296,9 +276,22 @@ function renderStarSliderSummary(summary) {
   `;
 }
 
+function renderPianoNotes(notes) {
+  if (!notes || !notes.length) return '<div class="inline-info">Played Notes: —</div>';
+  return `
+    <div class="inline-info inline-info-wrap piano-notes-row">
+      <span>Played Notes:</span>
+      <span class="piano-notes-seq">${notes.map(item => {
+        const cls = item.accepted ? 'piano-note-good' : 'piano-note-bad';
+        return `<span class="piano-note ${cls}">${item.encoded || ''}</span>`;
+      }).join('')}</span>
+    </div>
+  `;
+}
+
 function renderRiddleInfo(riddle) {
   if (riddle.id === 'images') return renderImagesButtons(riddle.images_buttons);
-  if (riddle.id === 'piano') return renderPianoSummary(riddle.piano_summary);
+  if (riddle.id === 'piano') return renderPianoNotes(riddle.piano_notes);
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
   if (riddle.id === 'knocking' || riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
   if (riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
