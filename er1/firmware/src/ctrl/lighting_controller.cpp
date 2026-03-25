@@ -532,12 +532,16 @@ void LightingController::onGameStateMessage(const String& payload) {
     return;
   }
 
-  if (!doc["phase"].is<int>()) {
+  int scenePhase = -1;
+  if (doc["lighting_phase"].is<int>()) scenePhase = doc["lighting_phase"].as<int>();
+  else if (doc["phase"].is<int>()) scenePhase = doc["phase"].as<int>();
+
+  if (scenePhase < 0) {
     log("WRN", String("lighting game/state missing integer phase: ") + payload);
     return;
   }
 
-  applyPhaseScene(doc["phase"].as<int>(), "game_state_phase");
+  applyPhaseScene(scenePhase, "game_state_phase");
 }
 
 void LightingController::onLightingCommandTopic(const String& payload) {

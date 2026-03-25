@@ -76,6 +76,7 @@ class PhaseSpec:
     lights: dict[LightId, int]  # steady-state pct 0..100
     required_events: tuple[str, ...]
     next_phase: int | None
+    lighting_phase_on_enter: int | None = None
     on_enter: tuple[TransitionAction, ...] = field(default_factory=tuple)
     timer_action: str | None = None
     game_data_action: str | None = None
@@ -194,14 +195,21 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         ),
         required_events=("open_prison_solved",),
         next_phase=6,
+        lighting_phase_on_enter=4,
         on_enter=(
             TransitionAction("set_persistent_locks", {"r2": "open"}),
             TransitionAction("log_solve_time", {"riddle": "piano"}),
             TransitionAction("delay", {
-                "seconds": 8,
+                "seconds": 7,
                 "then": [
                     {"kind": "lighting_turn_on", "payload": {"light": "torch_r2"}},
-                    {"kind": "lighting_fade_to", "payload": {"lights": ["r2_chess", "r2_schronk"], "pct": 100, "duration_ms": 7000}},
+                    {"kind": "lighting_fade_to", "payload": {"lights": ["r2_chess", "r2_schronk"], "pct": 100, "duration_ms": 8000}},
+                ],
+            }),
+            TransitionAction("delay", {
+                "seconds": 15,
+                "then": [
+                    {"kind": "set_lighting_phase", "payload": {"phase": 5}},
                 ],
             }),
         ),
@@ -306,6 +314,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         ),
         required_events=("knocking_solved",),
         next_phase=11,
+        lighting_phase_on_enter=9,
         on_enter=(
             TransitionAction("set_persistent_locks", {"r3": "open"}),
             TransitionAction("log_solve_time", {"riddle": "chess"}),
@@ -314,6 +323,12 @@ PHASES: dict[PhaseId, PhaseSpec] = {
                 "then": [
                     {"kind": "lighting_turn_on", "payload": {"light": "torch_r2r3"}},
                     {"kind": "lighting_fade_to", "payload": {"lights": ["r3_cage", "r3_slider"], "pct": 100, "duration_ms": 7000}},
+                ],
+            }),
+            TransitionAction("delay", {
+                "seconds": 12,
+                "then": [
+                    {"kind": "set_lighting_phase", "payload": {"phase": 10}},
                 ],
             }),
             TransitionAction("candles_solve_enabled", {"enabled": False}),

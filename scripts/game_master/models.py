@@ -39,6 +39,7 @@ class CurrentRun:
 @dataclass(slots=True)
 class RuntimeState:
     phase: int = 0
+    lighting_phase: int = 0
     last_phase: int | None = None
     node_last_hb: dict[str, float] = field(default_factory=dict)
     node_last_state: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -47,7 +48,7 @@ class RuntimeState:
     completed_phase_events: set[str] = field(default_factory=set)
 
     def to_game_state_payload(self) -> dict[str, Any]:
-        payload = {"phase": self.phase}
+        payload = {"phase": self.phase, "lighting_phase": self.lighting_phase}
         if self.last_phase is not None:
             payload["last_phase"] = self.last_phase
         run = self.current_run

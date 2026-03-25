@@ -400,39 +400,49 @@ class GameMaster:
                     else:
                         self.publish_lighting_cmd(command)
             return
-    def _apply_phase_stable_scene(self, phase: int) -> None:
+    def _apply_phase_stable_scene(self, phase: int, lighting_phase: int | None = None, apply_maglocks: bool = True) -> None:
         spec = PHASES[phase]
+        scene_phase = phase if lighting_phase is None else int(lighting_phase)
+        scene_spec = PHASES[scene_phase]
 
-        # phase notifications for future phase-based firmware
-        self.publish_maglock_cmd({"cmd": "set_phase", "phase": phase})
-        self.publish_lighting_cmd({"cmd": "set_phase", "phase": phase})
+        if apply_maglocks:
+            self.publish_maglock_cmd({"cmd": "set_phase", "phase": phase})
 
-        # persistent locks only
-        for lock_id, state in spec.persistent_locks.items():
-            self.publish_maglock_cmd({"cmd": "open" if state == "open" else "close", "lock": lock_id})
+        self.publish_lighting_cmd({"cmd": "set_phase", "phase": scene_phase})
 
-        # explicit stable light scene
-        star_sky_pct = int(spec.lights.get("star_sky", 0) or 0)
+        if apply_maglocks:
+            for lock_id, state in spec.persistent_locks.items():
+                self.publish_maglock_cmd({"cmd": "open" if state == "open" else "close", "lock": lock_id})
 
-        if all(v == 0 for v in spec.lights.values()):
+        star_sky_pct = int(scene_spec.lights.get("star_sky", 0) or 0)
+
+        if all(v == 0 for v in scene_spec.lights.values()):
             self.publish_lighting_cmd({"cmd": "all_off"})
             self._publish_json("star_sky/cmd", {"cmd": "off"})
             return
 
-        if all(v == 100 for v in spec.lights.values()):
+        if all(v == 100 for v in scene_spec.lights.values()):
             self.publish_lighting_cmd({"cmd": "all_on"})
             self._publish_json("star_sky/cmd", {"cmd": "on"})
             return
 
         self.publish_lighting_cmd({"cmd": "all_off"})
-        on_lights = [light for light, pct in spec.lights.items() if pct == 100 and light != "star_sky"]
+        on_lights = [light for light, pct in scene_spec.lights.items() if pct == 100 and light != "star_sky"]
         if on_lights:
             self.publish_lighting_cmd({"cmd": "turn_on_many", "lights": on_lights})
-        dim_lights = [(light, pct) for light, pct in spec.lights.items() if 0 < pct < 100 and light != "star_sky"]
+        dim_lights = [(light, pct) for light, pct in scene_spec.lights.items() if 0 < pct < 100 and light != "star_sky"]
         for light, pct in dim_lights:
             self.publish_lighting_cmd({"cmd": "set", "light": light, "pct": pct})
 
         self._publish_json("star_sky/cmd", {"cmd": "on" if star_sky_pct > 0 else "off"})
+
+    def _set_lighting_phase(self, lighting_phase: int) -> None:
+        with self._lock:
+            self.state.lighting_phase = int(lighting_phase)
+            phase = self.state.phase
+        self._record_event("lighting_phase_changed", {"phase": phase, "lighting_phase": int(lighting_phase)})
+        self._apply_phase_stable_scene(phase, lighting_phase=int(lighting_phase), apply_maglocks=False)
+        self.publish_game_state()
 
     def _run_transition_action(self, action) -> None:
         kind = action.kind
@@ -476,6 +486,9 @@ class GameMaster:
         if kind == "delay":
             self.schedule_in(float(payload["seconds"]), "lighting_batch", {"commands": payload["then"]})
             return
+        if kind == "set_lighting_phase":
+            self._set_lighting_phase(int(payload["phase"]))
+            return
         if kind == "star_sky_on":
             self.publish_lighting_cmd({"cmd": "turn_on", "light": "r3_uv"})
             self._publish_json("star_sky/cmd", {"cmd": "on"})
@@ -488,16 +501,18 @@ class GameMaster:
         self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
 
     def _enter_phase(self, new_phase: int, reason: str) -> None:
+        spec = PHASES[new_phase]
         with self._lock:
             old_phase = self.state.phase
             self.state.last_phase = old_phase
             self.state.phase = new_phase
+            self.state.lighting_phase = int(spec.lighting_phase_on_enter if spec.lighting_phase_on_enter is not None else new_phase)
             self.state.completed_phase_events.clear()
+            lighting_phase = self.state.lighting_phase
 
-        self._record_event("phase_changed", {"from": old_phase, "to": new_phase, "reason": reason})
-        self._apply_phase_stable_scene(new_phase)
+        self._record_event("phase_changed", {"from": old_phase, "to": new_phase, "reason": reason, "lighting_phase": lighting_phase})
+        self._apply_phase_stable_scene(new_phase, lighting_phase=lighting_phase)
 
-        spec = PHASES[new_phase]
         self._mark_activations(spec.active_riddles)
         for action in spec.on_enter:
             self._run_transition_action(action)
