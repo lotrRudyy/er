@@ -29,7 +29,6 @@ private:
     {0x3A, 0x09, 0x51, 0xD2}  // r2 libra (pov von spieler: links)
   };
 
-  static constexpr size_t kAttemptHistoryMax = 64;
   static constexpr size_t kAttemptStringMax = 128;
 
 /*
@@ -61,11 +60,9 @@ private:
 
   const char* labelForUid(uint8_t readerIdx, const byte* uid, uint8_t len) const;
   String currentOrderString() const;
-  String attemptedStarSignsJson() const;
   String readerLabelsJson() const;
   String readerPositionsJson() const;
   String currentAttemptPositionsJson() const;
-  void appendAttemptedOrder();
 
   Core::NodeContext* ctx_ = nullptr;
   Preferences* prefs_ = nullptr;
@@ -90,7 +87,6 @@ private:
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
 
-  char attemptedStarSigns_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
-  size_t attemptedStarSignsCount_ = 0;
+  String lastAttemptPositions_;
   String lastPublishedReaderOrder_;
 };

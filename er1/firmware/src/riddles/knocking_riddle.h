@@ -44,7 +44,6 @@ private:
 
   static constexpr uint8_t kAudioVolume = 21;
 
-  static constexpr size_t kAttemptHistoryMax = 64;
   static constexpr size_t kAttemptStringMax = 48;
   static constexpr size_t kEmbeddedChunkFrames = 128;
 
@@ -86,10 +85,8 @@ private:
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetSequence();
 
-  void appendAttemptedSequence();
   String currentSequenceHyphen() const;
   String currentSequenceJson() const;
-  String attemptedSequencesJson() const;
 
   void publishSolvedEvent();
   void publishState();
@@ -125,9 +122,8 @@ private:
   int seqLen_ = 0;
   uint32_t lastSeqActivityMs_ = 0;
 
-  char attemptedSequences_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
-  size_t attemptedSequencesCount_ = 0;
   uint32_t tries_ = 0;
+  String lastAttempt_;
 
   mutable uint32_t errorCount_ = 0;
   bool solved_ = false;

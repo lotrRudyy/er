@@ -61,10 +61,7 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
   solved_ = false;
   moduleEnabled_ = true;
   tries_ = 0;
-  attemptedSequencesCount_ = 0;
-  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
-    attemptedSequences_[i][0] = '\0';
-  }
+  lastAttempt_ = "";
 
   gameActive_ = false;
   publishState();
@@ -471,7 +468,7 @@ void KnockingRiddle::evaluateSequence(bool timeoutAttempt) {
     resetSequence();
   } else {
     tries_++;
-    appendAttemptedSequence();
+    lastAttempt_ = currentSequenceHyphen();
     log("DBG", "SEQ_FAIL",
         String("{\"t\":") + millis() +
         ",\"len\":" + seqLen_ +
@@ -492,13 +489,6 @@ void KnockingRiddle::resetSequence() {
   lastSeqActivityMs_ = 0;
 }
 
-void KnockingRiddle::appendAttemptedSequence() {
-  if (attemptedSequencesCount_ >= kAttemptHistoryMax) return;
-  String seq = currentSequenceHyphen();
-  seq.toCharArray(attemptedSequences_[attemptedSequencesCount_], kAttemptStringMax);
-  attemptedSequencesCount_++;
-}
-
 String KnockingRiddle::currentSequenceHyphen() const {
   String out;
   for (int i = 0; i < seqLen_; i++) {
@@ -514,18 +504,6 @@ String KnockingRiddle::currentSequenceJson() const {
     if (i > 0) out += ",";
     out += "\"";
     out += String(seqBuf_[i] + 1);
-    out += "\"";
-  }
-  out += "]";
-  return out;
-}
-
-String KnockingRiddle::attemptedSequencesJson() const {
-  String out = "[";
-  for (size_t i = 0; i < attemptedSequencesCount_; i++) {
-    if (i > 0) out += ",";
-    out += "\"";
-    out += attemptedSequences_[i];
     out += "\"";
   }
   out += "]";
@@ -554,6 +532,8 @@ void KnockingRiddle::resetState(const char* reason) {
 
   solved_ = false;
   resetSequence();
+  tries_ = 0;
+  lastAttempt_ = "";
 
   const char* src = (reason && reason[0]) ? reason : "reset";
   String data = String("{\"src\":\"") + src + "\",\"was_solved\":" + (wasSolved ? "1" : "0") + "}";
@@ -570,11 +550,11 @@ void KnockingRiddle::publishState() {
       ",\"raw_state\":\"" + (solved_ ? "solved" : (seqLen_ > 0 ? "progress" : "idle")) + "\"" +
       ",\"tries\":" + String(tries_) +
       ",\"sequence_current\":" + currentSequenceJson() +
-      ",\"attempted_sequences\":" + attemptedSequencesJson() +
+      ",\"last_attempt\":\"" + lastAttempt_ + "\"" +
       "}";
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+    publish(topics.state.c_str(), data, true);
   }
 }

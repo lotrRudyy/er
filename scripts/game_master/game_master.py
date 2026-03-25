@@ -88,6 +88,12 @@ class GameMaster:
         obj = json.loads(payload_text)
         if not isinstance(obj, dict):
             raise ValueError(f"expected object payload on {topic}")
+        if isinstance(obj.get("d"), dict):
+            inner = dict(obj["d"])
+            for key in ("t", "ts", "time_valid", "type", "v", "id"):
+                if key in obj and key not in inner:
+                    inner[key] = obj[key]
+            return inner
         return obj
 
     def _publish_json(self, topic: str, payload: dict[str, Any], retained: bool = False) -> None:
@@ -240,13 +246,34 @@ class GameMaster:
         if changed:
             self.publish_game_state()
 
+
+    @staticmethod
+    def _merge_riddle_state(previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(previous or {})
+        merged.update(payload)
+        rid = str(payload.get("id") or "")
+        if rid in {"knocking", "candles"}:
+            attempts = list(merged.get("attempted_sequences") or [])
+            last_attempt = str(payload.get("last_attempt") or "").strip()
+            if last_attempt and (not attempts or attempts[-1] != last_attempt):
+                attempts.append(last_attempt)
+            merged["attempted_sequences"] = attempts
+        elif rid == "star_slider":
+            attempts = list(merged.get("attempted_star_signs") or [])
+            last_positions = payload.get("last_attempt_positions")
+            if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
+                attempts.append(last_positions)
+            merged["attempted_star_signs"] = attempts
+        return merged
+
     def handle_heartbeat(self, node_id: str) -> None:
         with self._lock:
             self.state.mark_hb(node_id)
 
     def handle_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
-            self.state.node_last_state[node_id] = payload
+            previous = self.state.node_last_state.get(node_id)
+            self.state.node_last_state[node_id] = self._merge_riddle_state(previous, payload)
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
         node = str(payload.get("node", "")).strip()

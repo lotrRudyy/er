@@ -184,10 +184,28 @@ class DashboardStore:
 
     def update_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
-            self.node_states[node_id] = payload
+            previous_node = self.node_states.get(node_id, {}) if isinstance(self.node_states.get(node_id), dict) else {}
+            merged_node = dict(previous_node)
+            merged_node.update(payload)
+            self.node_states[node_id] = merged_node
             riddle_id = str(payload.get("id", "")).strip()
             if riddle_id:
-                self.riddle_states[riddle_id] = payload
+                prev = self.riddle_states.get(riddle_id, {}) if isinstance(self.riddle_states.get(riddle_id), dict) else {}
+                merged = dict(prev)
+                merged.update(payload)
+                if riddle_id in {"knocking", "candles"}:
+                    attempts = list(merged.get("attempted_sequences") or [])
+                    last_attempt = str(payload.get("last_attempt") or "").strip()
+                    if last_attempt and (not attempts or attempts[-1] != last_attempt):
+                        attempts.append(last_attempt)
+                    merged["attempted_sequences"] = attempts
+                elif riddle_id == "star_slider":
+                    attempts = list(merged.get("attempted_star_signs") or [])
+                    last_positions = payload.get("last_attempt_positions")
+                    if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
+                        attempts.append(last_positions)
+                    merged["attempted_star_signs"] = attempts
+                self.riddle_states[riddle_id] = merged
 
     def update_lock_state(self, lock_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -579,7 +597,15 @@ mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIEN
 def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
     try:
         data = json.loads(payload.decode("utf-8", errors="ignore"))
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        if isinstance(data.get("d"), dict):
+            inner = dict(data["d"])
+            for key in ("t", "ts", "time_valid", "type", "v", "id"):
+                if key in data and key not in inner:
+                    inner[key] = data[key]
+            return inner
+        return data
     except Exception:
         return None
 

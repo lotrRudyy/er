@@ -277,10 +277,7 @@ void CandlesRiddle::initState() {
   solvedEventSent_ = false;
   resetArmed_ = false;
   tries_ = 0;
-  attemptedSequencesCount_ = 0;
-  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
-    attemptedSequences_[i][0] = '\0';
-  }
+  lastAttempt_ = "";
 }
 
 bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
@@ -374,7 +371,7 @@ void CandlesRiddle::evaluateSequence(uint32_t nowMs) {
     publishSolvedEvent();
   } else {
     tries_++;
-    appendAttemptedSequence();
+    lastAttempt_ = currentSequenceHyphen();
     if (progressed_ >= 4) {
       resetArmed_ = true;
       resetArmMs_ = nowMs;
@@ -478,13 +475,6 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
   }
 }
 
-void CandlesRiddle::appendAttemptedSequence() {
-  if (attemptedSequencesCount_ >= kAttemptHistoryMax) return;
-  String seq = currentSequenceHyphen();
-  seq.toCharArray(attemptedSequences_[attemptedSequencesCount_], kAttemptStringMax);
-  attemptedSequencesCount_++;
-}
-
 String CandlesRiddle::currentSequenceHyphen() const {
   String out;
   for (int i = 0; i < progressed_; i++) {
@@ -506,18 +496,6 @@ String CandlesRiddle::currentSequenceJson() const {
   return out;
 }
 
-String CandlesRiddle::attemptedSequencesJson() const {
-  String out = "[";
-  for (size_t i = 0; i < attemptedSequencesCount_; i++) {
-    if (i > 0) out += ",";
-    out += "\"";
-    out += attemptedSequences_[i];
-    out += "\"";
-  }
-  out += "]";
-  return out;
-}
-
 void CandlesRiddle::publishState() {
   if (!ctx_) return;
   const auto& topics = ctx_->config().topics;
@@ -532,10 +510,10 @@ void CandlesRiddle::publishState() {
          ",\"raw_state\":\"" + (solved_ ? "solved" : (progressed_ > 0 ? "progress" : "idle")) + "\"" +
          ",\"tries\":" + String(tries_) +
          ",\"sequence_current\":" + currentSequenceJson() +
-         ",\"attempted_sequences\":" + attemptedSequencesJson() +
+         ",\"last_attempt\":\"" + lastAttempt_ + "\"" +
          ",\"lit\":[" + (lit_[0] ? "1" : "0") + "," + (lit_[1] ? "1" : "0") + "," + (lit_[2] ? "1" : "0") + "," + (lit_[3] ? "1" : "0") + "]" +
          ",\"progressed\":" + progressed_ +
          "}";
 
-  publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+  publish(topics.state.c_str(), data, true);
 }

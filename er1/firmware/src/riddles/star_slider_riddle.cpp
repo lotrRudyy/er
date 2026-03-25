@@ -62,10 +62,7 @@ void StarSliderRiddle::begin(Core::NodeContext& ctx) {
   gameActive_ = false;
   moduleEnabled_ = true;
   solvedFlag_ = false;
-  attemptedStarSignsCount_ = 0;
-  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
-    attemptedStarSigns_[i][0] = '\0';
-  }
+  lastAttemptPositions_ = "";
   if (prefs_) prefs_->putBool("solved", false);
   lastPublishedReaderOrder_ = currentOrderString();
   publishState();
@@ -134,10 +131,7 @@ void StarSliderRiddle::resetState(const char* reason) {
   solvedFlag_ = false;
   solveAttempts_ = 0;
   solveSuccess_ = 0;
-  attemptedStarSignsCount_ = 0;
-  for (size_t i = 0; i < kAttemptHistoryMax; ++i) {
-    attemptedStarSigns_[i][0] = '\0';
-  }
+  lastAttemptPositions_ = "";
 
   // Clear last read snapshot.
   for (uint8_t i = 0; i < kReaderCount; i++) {
@@ -305,23 +299,6 @@ String StarSliderRiddle::currentOrderString() const {
   return out;
 }
 
-void StarSliderRiddle::appendAttemptedOrder() {
-  if (attemptedStarSignsCount_ >= kAttemptHistoryMax) return;
-  String snapshot = currentAttemptPositionsJson();
-  snapshot.toCharArray(attemptedStarSigns_[attemptedStarSignsCount_], kAttemptStringMax);
-  attemptedStarSignsCount_++;
-}
-
-String StarSliderRiddle::attemptedStarSignsJson() const {
-  String out = "[";
-  for (size_t i = 0; i < attemptedStarSignsCount_; i++) {
-    if (i > 0) out += ",";
-    out += attemptedStarSigns_[i];
-  }
-  out += "]";
-  return out;
-}
-
 String StarSliderRiddle::readerLabelsJson() const {
   String out = "[";
   for (uint8_t i = 0; i < kReaderCount; i++) {
@@ -375,7 +352,7 @@ void StarSliderRiddle::evaluateSolveAttempt() {
   }
 
   solveAttempts_++;
-  appendAttemptedOrder();
+  lastAttemptPositions_ = currentAttemptPositionsJson();
 
   if (isCurrentPatternCorrect()) {
     solvedFlag_ = true;
@@ -470,15 +447,14 @@ void StarSliderRiddle::publishState() {
       ",\"solved\":" + (solvedFlag_ ? "true" : "false") +
       ",\"raw_state\":\"" + (solvedFlag_ ? "solved" : "idle") + "\"" +
       ",\"tries\":" + String(solveAttempts_) +
-      ",\"attempted_star_signs\":" + attemptedStarSignsJson() +
       ",\"reader_labels\":" + readerLabelsJson() +
       ",\"reader_positions\":" + readerPositionsJson() +
-      ",\"last_attempt_positions\":" + (attemptedStarSignsCount_ > 0 ? String(attemptedStarSigns_[attemptedStarSignsCount_ - 1]) : String("null")) +
+      ",\"last_attempt_positions\":" + (lastAttemptPositions_.length() > 0 ? lastAttemptPositions_ : String("null")) +
       ",\"attempts\":" + String(solveAttempts_) +
       ",\"success\":" + String(solveSuccess_) +
       "}";
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+    publish(topics.state.c_str(), data, true);
   }
 }

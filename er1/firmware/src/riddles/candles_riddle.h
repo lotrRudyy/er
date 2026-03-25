@@ -18,7 +18,6 @@ private:
   static constexpr bool kDevLog = false;
   static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kSeqTimeoutMs = 4500;
-  static constexpr size_t kAttemptHistoryMax = 128;
   static constexpr size_t kAttemptStringMax = 24;
 
   static constexpr int kLedPins[4] = {12, 14, 26, 25};
@@ -54,10 +53,8 @@ private:
   void publishState();
   void publishMetricsIfDue(uint32_t nowMs);
 
-  void appendAttemptedSequence();
   String currentSequenceHyphen() const;
   String currentSequenceJson() const;
-  String attemptedSequencesJson() const;
 
   Core::NodeContext* ctx_ = nullptr;
   bool lit_[4] = {true, true, true, true};
@@ -87,6 +84,5 @@ private:
   bool moduleEnabled_ = true;
 
   uint32_t tries_ = 0;
-  char attemptedSequences_[kAttemptHistoryMax][kAttemptStringMax] = {{0}};
-  size_t attemptedSequencesCount_ = 0;
+  String lastAttempt_;
 };

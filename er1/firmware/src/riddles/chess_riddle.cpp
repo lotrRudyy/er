@@ -364,7 +364,7 @@ void ChessRiddle::publishState() {
 
   const auto& topics = ctx_->config().topics;
   if (topics.state.length() > 0) {
-    publish(topics.state.c_str(), "state", 1, data, nullptr, true);
+    publish(topics.state.c_str(), data, true);
   }
 }
 
