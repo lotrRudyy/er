@@ -21,6 +21,7 @@ static const IPAddress MQTT_SERVER(192, 168, 0, 10);
 static constexpr uint16_t MQTT_PORT = 1883;
 
 static const char* TOPIC_GAME = "game/state";
+static const char* TOPIC_STAR_SKY_GAME_CMD = "star_sky/cmd";
 
 static const char* OTA_HOST = "192.168.0.10";
 static constexpr uint16_t OTA_PORT = 80;
@@ -80,6 +81,30 @@ static bool moduleCommandHandler(const char* cmd, const char* payload, void* use
   auto* module = static_cast<StarSkyRiddle*>(user);
   return module ? module->onCmd(cmd, payload) : false;
 }
+
+
+static void starSkyGameCommandSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
+  (void)ctx;
+  auto* module = static_cast<StarSkyRiddle*>(user);
+  if (!module) return;
+
+  StaticJsonDocument<128> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (!err) {
+    const char* cmd = doc["cmd"] | doc["CMD"] | "";
+    if (cmd && cmd[0]) {
+      module->onCmd(cmd, "");
+      return;
+    }
+  }
+
+  String raw = payload;
+  raw.trim();
+  if (raw.length() > 0) {
+    module->onCmd(raw.c_str(), "");
+  }
+}
+
 
 static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const String& payload, void* user) {
   (void)ctx;
@@ -144,6 +169,7 @@ void setup() {
   nodeCore.begin(cfg);
   nodeCore.registerCommandHandler(moduleCommandHandler, &starSky);
   nodeCore.registerSubscription(TOPIC_GAME, gameModeSubscription, &starSky);
+  nodeCore.registerSubscription(TOPIC_STAR_SKY_GAME_CMD, starSkyGameCommandSubscription, &starSky);
 
   NodeContext& ctx = nodeCore.context();
   starSky.begin(ctx);
