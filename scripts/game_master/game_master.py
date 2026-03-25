@@ -318,6 +318,7 @@ class GameMaster:
             else:
                 self.state.current_run.players = cleaned
         self._record_event("players_updated", {"players": cleaned})
+        self.publish_game_state()
 
     def add_hint(self, riddle: str, hint_text: str) -> None:
         if not riddle or not hint_text:
@@ -328,6 +329,7 @@ class GameMaster:
                 raise ValueError("No current run")
             run.hints.append({"at": iso_now(), "riddle": riddle, "hint_text": hint_text})
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
+        self.publish_game_state()
 
     def handle_solve(self, riddle: str, source: str) -> None:
         if riddle not in config.RIDDLES:
@@ -350,7 +352,10 @@ class GameMaster:
         if required and required.issubset(completed):
             if spec.next_phase is not None:
                 self._enter_phase(spec.next_phase, event_name)
-        return
+            else:
+                self.publish_game_state()
+        else:
+            self.publish_game_state()
 
     def schedule_in(self, delay_s: float, kind: str, payload: dict[str, Any]) -> None:
         with self._lock:
@@ -437,6 +442,7 @@ class GameMaster:
             phase = self.state.phase
         self._record_event("lighting_phase_changed", {"phase": phase, "lighting_phase": int(lighting_phase)})
         self._apply_phase_stable_scene(phase, lighting_phase=int(lighting_phase), apply_maglocks=False)
+        self.publish_game_state()
 
     def _run_transition_action(self, action) -> None:
         kind = action.kind

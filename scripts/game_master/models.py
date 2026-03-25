@@ -48,9 +48,46 @@ class RuntimeState:
     completed_phase_events: set[str] = field(default_factory=set)
 
     def to_game_state_payload(self) -> dict[str, Any]:
-        payload = {"phase": self.phase}
+        payload = {"phase": self.phase, "lighting_phase": self.lighting_phase}
         if self.last_phase is not None:
             payload["last_phase"] = self.last_phase
+        run = self.current_run
+        if run is not None:
+            elapsed_s = 0
+            timer_running = False
+            if run.ended_at is not None and run.duration_s is not None:
+                elapsed_s = int(round(run.duration_s))
+            elif run.started_monotonic:
+                elapsed_s = max(0, int(time.monotonic() - run.started_monotonic))
+                timer_running = self.phase not in {0, 1, 2, 14}
+            payload["run"] = {
+                "players": list(run.players),
+                "started_at": run.started_at,
+                "ended_at": run.ended_at,
+                "duration_s": run.duration_s,
+                "elapsed_s": elapsed_s,
+                "timer_running": timer_running,
+                "riddle_timings": {
+                    node: {
+                        "activated_at": timing.activated_at,
+                        "solved_at": timing.solved_at,
+                        "solve_time_from_run_start_s": timing.solve_time_from_run_start_s,
+                        "solve_time_from_activation_s": timing.solve_time_from_activation_s,
+                        "solved": timing.solved,
+                    }
+                    for node, timing in run.riddle_timings.items()
+                },
+            }
+        else:
+            payload["run"] = {
+                "players": [],
+                "started_at": None,
+                "ended_at": None,
+                "duration_s": None,
+                "elapsed_s": 0,
+                "timer_running": False,
+                "riddle_timings": {},
+            }
         return payload
 
     def mark_hb(self, node_id: str) -> None:
