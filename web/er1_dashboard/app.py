@@ -133,9 +133,17 @@ class DashboardStore:
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hints: dict[str, list[dict[str, Any]]] = field(default_factory=load_hint_store)
+    local_players: list[str] = field(default_factory=list)
+    phase_started_monotonic: float = field(default_factory=time.monotonic)
+    phase_started_wallclock_s: float = field(default_factory=time.time)
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
         with self.lock:
+            old_phase = int(self.game_state.get("phase", 0) or 0)
+            new_phase = int(payload.get("phase", old_phase) or 0)
+            if old_phase != new_phase:
+                self.phase_started_monotonic = time.monotonic()
+                self.phase_started_wallclock_s = time.time()
             self.game_state = payload
 
     def update_node_hb(self, node_id: str, payload: dict[str, Any]) -> None:
@@ -157,6 +165,12 @@ class DashboardStore:
     def update_light_state(self, light_name: str, payload: dict[str, Any]) -> None:
         with self.lock:
             self.lights[light_name] = payload
+
+    def set_players(self, players: list[str]) -> list[str]:
+        cleaned = [str(x).strip() for x in players if str(x).strip()]
+        with self.lock:
+            self.local_players = cleaned
+            return list(self.local_players)
 
     def add_hint(self, riddle_id: str, hint_text: str) -> list[dict[str, Any]]:
         hint = {"id": f"{int(time.time() * 1000)}", "text": hint_text.strip()}
@@ -182,9 +196,12 @@ class DashboardStore:
             riddle_states = json.loads(json.dumps(self.riddle_states))
             node_last_hb = dict(self.node_last_hb)
             local_hints = json.loads(json.dumps(self.local_hints))
+            local_players = list(self.local_players)
+            phase_started_monotonic = float(self.phase_started_monotonic)
+            phase_started_wallclock_s = float(self.phase_started_wallclock_s)
 
         return {
-            "game": self._build_game_summary(game),
+            "game": self._build_game_summary(game, local_players, phase_started_monotonic, phase_started_wallclock_s),
             "nodes": self._build_node_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
@@ -192,7 +209,7 @@ class DashboardStore:
             "meta": {"broker": BROKER_HOST},
         }
 
-    def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
+    def _build_game_summary(self, game: dict[str, Any], local_players: list[str], phase_started_monotonic: float, phase_started_wallclock_s: float) -> dict[str, Any]:
         phase = int(game.get("phase", 1))
         last_phase = game.get("last_phase")
         phase_meta = PHASE_META.get(phase, {"name": f"phase_{phase}", "active": (), "solved": ()})
@@ -201,34 +218,13 @@ class DashboardStore:
             last_name = PHASE_META.get(int(last_phase), {"name": f"phase_{last_phase}"}).get("name", "")
         phase_name_pretty = pretty_phase_name(phase_meta["name"])
         last_name_pretty = pretty_phase_name(last_name)
-        run = game.get("run") or {}
-        riddle_timings = run.get("riddle_timings") or {}
-        current_riddle_elapsed_s = 0
-        current_riddle_name = ""
-        for riddle_id in phase_meta.get("active", ()):
-            timing = riddle_timings.get(riddle_id) or {}
-            if bool(timing.get("solved")):
-                continue
-            current_riddle_name = riddle_id
-            solve_from_activation = timing.get("solve_time_from_activation_s")
-            if solve_from_activation is not None:
-                try:
-                    current_riddle_elapsed_s = int(round(float(solve_from_activation)))
-                except Exception:
-                    current_riddle_elapsed_s = 0
-            elif timing.get("activated_at") and bool(run.get("timer_running", False)):
-                try:
-                    from datetime import datetime, timezone
-                    activated = datetime.fromisoformat(str(timing.get("activated_at")).replace("Z", "+00:00"))
-                    now = datetime.now(timezone.utc)
-                    current_riddle_elapsed_s = max(0, int((now - activated).total_seconds()))
-                except Exception:
-                    current_riddle_elapsed_s = 0
-            break
-        current_riddle_started_at = None
-        if current_riddle_name:
-            timing = riddle_timings.get(current_riddle_name) or {}
-            current_riddle_started_at = timing.get("activated_at") or run.get("started_at")
+        timer_running = phase not in {0, 1, 2, 14}
+        elapsed_s = max(0, int(time.monotonic() - phase_started_monotonic)) if timer_running else 0
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(phase_started_wallclock_s)) if timer_running else None
+        active_riddles = list(phase_meta.get("active", ()))
+        current_riddle_name = active_riddles[0] if active_riddles else ""
+        current_riddle_elapsed_s = elapsed_s if current_riddle_name else 0
+        current_riddle_started_at = started_at if current_riddle_name else None
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
@@ -237,10 +233,10 @@ class DashboardStore:
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
-            "players": list(run.get("players") or []),
-            "timer_running": bool(run.get("timer_running", False)),
-            "elapsed_s": int(run.get("elapsed_s", 0) or 0),
-            "started_at": run.get("started_at"),
+            "players": list(local_players),
+            "timer_running": timer_running,
+            "elapsed_s": elapsed_s,
+            "started_at": started_at,
             "current_riddle_elapsed_s": current_riddle_elapsed_s,
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
@@ -321,8 +317,6 @@ class DashboardStore:
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = set(meta.get("active", ()))
         solved = set(meta.get("solved", ()))
-        run = game.get("run") or {}
-        riddle_timings = run.get("riddle_timings") or {}
         now_mono = time.monotonic()
         out = []
         for row in RIDDLES:
@@ -330,12 +324,7 @@ class DashboardStore:
             node_id = row["node_id"]
             state_payload = riddle_states.get(riddle_id) or (node_states.get(node_id, {}) if node_id else {})
 
-            timing = riddle_timings.get(riddle_id) or {}
             if riddle_id in solved:
-                phase_state = "solved"
-            elif riddle_id in active and bool(timing.get("solved")):
-                phase_state = "solved_pending"
-            elif bool(timing.get("solved")):
                 phase_state = "solved"
             elif riddle_id in active:
                 phase_state = "active"
@@ -644,7 +633,7 @@ def api_players() -> Any:
     players = data.get("players") or []
     if not isinstance(players, list):
         return jsonify({"ok": False, "error": "players must be a list"}), 400
-    cleaned = [str(x).strip() for x in players if str(x).strip()]
+    cleaned = store.set_players(players)
     mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players", "players": cleaned})
     return jsonify({"ok": True, "players": cleaned})
 
