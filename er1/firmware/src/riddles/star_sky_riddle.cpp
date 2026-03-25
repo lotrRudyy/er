@@ -26,28 +26,9 @@ void StarSkyRiddle::begin(Core::NodeContext& ctx) {
 }
 
 void StarSkyRiddle::setGameMode(bool inGame) {
-  if (manualOverride_ && !inGame) {
-    publishState();
-    return;
-  }
   gameActive_ = inGame;
-  if (inGame) {
-    moduleEnabled_ = true;
-  }
   cycleStartMs_ = millis();
   setAllStripsOff();
-  publishState();
-}
-
-void StarSkyRiddle::setManualOverride(bool enabled) {
-  manualOverride_ = enabled;
-  if (enabled) {
-    gameActive_ = true;
-    moduleEnabled_ = true;
-    cycleStartMs_ = millis();
-  } else if (!gameActive_) {
-    setAllStripsOff();
-  }
   publishState();
 }
 
@@ -72,11 +53,8 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
     return true;
   }
 
-  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_STAR_SKY") == 0 ||
-      strcasecmp(cmd, "ON") == 0) {
-    manualOverride_ = true;
-    gameActive_ = true;
-    moduleEnabled_ = true;
+  if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_STAR_SKY") == 0) {
+    if (!gameActive_) setGameMode(true);
     cycleStartMs_ = millis();
     log("INF", "STAR_SKY_FORCE_ENABLE");
     publishState();
@@ -84,18 +62,13 @@ bool StarSkyRiddle::onCmd(const char* cmd, const char* payload) {
   }
 
   if (strcasecmp(cmd, "ENABLE") == 0) {
-    manualOverride_ = true;
     moduleEnabled_ = true;
-    gameActive_ = true;
-    cycleStartMs_ = millis();
     publishState();
     return true;
   }
 
-  if (strcasecmp(cmd, "DISABLE") == 0 || strcasecmp(cmd, "OFF") == 0) {
-    manualOverride_ = false;
+  if (strcasecmp(cmd, "DISABLE") == 0) {
     moduleEnabled_ = false;
-    gameActive_ = false;
     setAllStripsOff();
     publishState();
     return true;

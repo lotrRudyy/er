@@ -9,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "star_sky";
-static const char* FW_VERSION = "16";
+static const char* FW_VERSION = "18";
 static const char* FW_DESC = "star_sky with new ota";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x55};
