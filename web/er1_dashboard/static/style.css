@@ -285,8 +285,34 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   color: var(--red-text);
 }
 
-.piano-notes-row { align-items: flex-start; }
-.piano-notes-seq { display: inline-flex; flex-wrap: wrap; gap: 2px; font-weight: 700; letter-spacing: 1px; }
-.piano-note { display: inline-block; min-width: 12px; text-align: center; }
-.piano-note-good { color: var(--green-text); }
-.piano-note-bad { color: var(--red-text); }
+.piano-summary {
+  align-items: flex-start;
+}
+
+.piano-notes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.piano-note {
+  display: inline-block;
+  min-width: 18px;
+  padding: 2px 6px;
+  border: 1px solid var(--gray-line);
+  border-radius: 999px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.piano-note-good {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-text);
+}
+
+.piano-note-bad {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-text);
+}
