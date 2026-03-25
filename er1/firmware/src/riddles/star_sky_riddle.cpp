@@ -31,6 +31,9 @@ void StarSkyRiddle::setGameMode(bool inGame) {
     return;
   }
   gameActive_ = inGame;
+  if (inGame) {
+    moduleEnabled_ = true;
+  }
   cycleStartMs_ = millis();
   setAllStripsOff();
   publishState();
