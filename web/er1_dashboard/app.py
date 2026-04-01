@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,6 +25,9 @@ GAME_DB_PATH = Path(
         str(BASE_DIR.parent / "scripts" / "game_master" / "data" / "game_master.sqlite3")
     )
 ).resolve()
+
+REMOVED_GAMES_DIR = GAME_DB_PATH.parent / "removed"
+REMOVED_GAME_DB_PATH = REMOVED_GAMES_DIR / GAME_DB_PATH.name
 
 TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
@@ -688,6 +691,138 @@ def _maybe_json(value: Any) -> Any:
         return value
 
 
+def _parse_dt(value: Any) -> Any:
+    if value in {None, ""}:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            from datetime import datetime
+            return datetime.fromtimestamp(float(value))
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(normalized)
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            from datetime import datetime
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def format_datetime_readable(value: Any) -> str:
+    dt = _parse_dt(value)
+    if dt is None:
+        return str(value or "—")
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_mmss(value: Any) -> str:
+    if value in {None, ""}:
+        return "—"
+    try:
+        total_seconds = int(round(float(value)))
+    except Exception:
+        return str(value)
+    minutes, seconds = divmod(max(total_seconds, 0), 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def list_games_from_db() -> list[dict[str, Any]]:
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+
+    with sqlite3.connect(GAME_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM games ORDER BY COALESCE(started_at, date, id) DESC, id DESC"
+        ).fetchall()
+
+    games: list[dict[str, Any]] = []
+    for row in rows:
+        item = _row_to_dict(row) or {}
+        item["started_at_display"] = format_datetime_readable(item.get("started_at") or item.get("game_started_at") or item.get("date"))
+        item["duration_mmss"] = format_mmss(item.get("duration_s"))
+        games.append(item)
+    return games
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_table_schema(src: sqlite3.Connection, dst: sqlite3.Connection, table_name: str) -> None:
+    if _table_exists(dst, table_name):
+        return
+    row = src.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if row is None or not row[0]:
+        raise RuntimeError(f"Could not read schema for table {table_name}")
+    dst.execute(row[0])
+
+
+def move_game_to_removed(game_id: str) -> None:
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+
+    REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(GAME_DB_PATH) as src, sqlite3.connect(REMOVED_GAME_DB_PATH) as dst:
+        src.row_factory = sqlite3.Row
+        dst.row_factory = sqlite3.Row
+
+        game_row = src.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if game_row is None:
+            raise ValueError(f"No game found for id {game_id}.")
+
+        riddle_rows = src.execute("SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
+        hint_rows = src.execute("SELECT * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
+
+        for table_name in ("games", "game_riddles", "game_hints"):
+            _ensure_table_schema(src, dst, table_name)
+
+        dst.execute("DELETE FROM games WHERE id = ?", (game_id,))
+        dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
+        dst.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
+
+        game_values = dict(game_row)
+        game_cols = list(game_values.keys())
+        dst.execute(
+            f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})",
+            tuple(game_values[col] for col in game_cols),
+        )
+
+        for rows, table_name in ((riddle_rows, "game_riddles"), (hint_rows, "game_hints")):
+            for row in rows:
+                values = dict(row)
+                cols = list(values.keys())
+                dst.execute(
+                    f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+                    tuple(values[col] for col in cols),
+                )
+
+        src.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
+        src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
+        src.execute("DELETE FROM games WHERE id = ?", (game_id,))
+
+        dst.commit()
+        src.commit()
+
+
 def load_game_from_db(game_id: str) -> dict[str, Any]:
     if not GAME_DB_PATH.exists():
         raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
@@ -797,9 +932,16 @@ def game_viewer() -> str:
     game = None
     riddles: list[dict[str, Any]] = []
     hints: list[dict[str, Any]] = []
-    error = ""
+    games: list[dict[str, Any]] = []
+    error = str(request.args.get("error", "")).strip()
+    message = str(request.args.get("message", "")).strip()
 
-    if game_id:
+    try:
+        games = list_games_from_db()
+    except Exception as exc:
+        error = error or str(exc)
+
+    if game_id and not error:
         try:
             loaded = load_game_from_db(game_id)
             game = loaded["game"]
@@ -807,6 +949,12 @@ def game_viewer() -> str:
             hints = loaded["hints"]
             if game is None:
                 error = f"No game found for id {game_id}."
+            else:
+                game["started_at_display"] = format_datetime_readable(game.get("started_at") or game.get("game_started_at") or game.get("date"))
+                game["ended_at_display"] = format_datetime_readable(game.get("ended_at"))
+                game["duration_mmss"] = format_mmss(game.get("duration_s"))
+                for row in riddles:
+                    row["solve_time_mmss"] = format_mmss(row.get("solve_time_from_run_start_s"))
         except Exception as exc:
             error = str(exc)
 
@@ -816,9 +964,24 @@ def game_viewer() -> str:
         game=game,
         riddles=riddles,
         hints=hints,
+        games=games,
         error=error,
+        message=message,
         db_path=str(GAME_DB_PATH),
+        removed_db_path=str(REMOVED_GAME_DB_PATH),
     )
+
+
+@app.post("/games/delete/<game_id>")
+def delete_game(game_id: str) -> Any:
+    game_id = str(game_id or "").strip()
+    if not game_id:
+        return redirect(url_for("game_viewer", error="Missing game id."))
+    try:
+        move_game_to_removed(game_id)
+        return redirect(url_for("game_viewer", message=f"Moved game {game_id} to {REMOVED_GAMES_DIR}"))
+    except Exception as exc:
+        return redirect(url_for("game_viewer", error=str(exc), game_id=game_id))
 
 @app.get("/api/state")
 def api_state() -> Any:

@@ -13,66 +13,112 @@
         <div>
           <h1>Game Viewer</h1>
           <div class="subline">DB: {{ db_path }}</div>
+          <div class="subline">Removed games DB: {{ removed_db_path }}</div>
         </div>
         <div class="top-nav-links">
           <a class="nav-button" href="/">Back to Dashboard</a>
         </div>
       </div>
 
-      <form class="game-search-row" method="get" action="/games">
-        <input class="player-input game-id-input" type="text" name="game_id" value="{{ game_id }}" placeholder="Enter game ID" />
-        <button type="submit">Load Game</button>
-      </form>
-
+      {% if message %}
+        <div class="viewer-message viewer-success">{{ message }}</div>
+      {% endif %}
       {% if error %}
         <div class="viewer-message viewer-error">{{ error }}</div>
-      {% elif not game_id %}
-        <div class="viewer-message">Enter a game ID to view stored DB data.</div>
+      {% endif %}
+    </section>
+
+    <section class="panel game-viewer-panel">
+      <h2>All Games</h2>
+      {% if games %}
+      <table class="simple-table viewer-table games-list-table">
+        <thead>
+          <tr>
+            <th>Game ID</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Players</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in games %}
+          <tr class="{% if row.id == game_id %}selected-game-row{% endif %}">
+            <td>{{ row.id }}</td>
+            <td>{{ row.started_at_display }}</td>
+            <td>{{ row.duration_mmss }}</td>
+            <td>
+              {% if row.player_names_json is sequence and row.player_names_json is not string %}
+                {{ row.player_names_json | join(', ') }}
+              {% else %}
+                {{ row.player_names_json or '—' }}
+              {% endif %}
+            </td>
+            <td>
+              <div class="game-actions-cell">
+                <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Open</a>
+                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" onsubmit="return confirm('Move game {{ row.id }} to removed folder?');">
+                  <button type="submit" class="danger-button">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="viewer-message">No games found in the database.</div>
       {% endif %}
     </section>
 
     {% if game %}
     <section class="panel game-viewer-panel">
       <h2>Game Summary</h2>
-      <table class="simple-table viewer-table">
-        <tbody>
-          {% for key, value in game.items() %}
-          <tr>
-            <th>{{ key }}</th>
-            <td>
-              {% if value is mapping or (value is sequence and value is not string) %}
-                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="viewer-summary-grid">
+        <div class="viewer-summary-card">
+          <div class="viewer-summary-label">Game ID</div>
+          <div class="viewer-summary-value">{{ game.id }}</div>
+        </div>
+        <div class="viewer-summary-card">
+          <div class="viewer-summary-label">Started At</div>
+          <div class="viewer-summary-value">{{ game.started_at_display }}</div>
+        </div>
+        <div class="viewer-summary-card">
+          <div class="viewer-summary-label">Ended At</div>
+          <div class="viewer-summary-value">{{ game.ended_at_display }}</div>
+        </div>
+        <div class="viewer-summary-card">
+          <div class="viewer-summary-label">Duration</div>
+          <div class="viewer-summary-value">{{ game.duration_mmss }}</div>
+        </div>
+        <div class="viewer-summary-card viewer-summary-card-wide">
+          <div class="viewer-summary-label">Players</div>
+          <div class="viewer-summary-value">
+            {% if game.player_names_json is sequence and game.player_names_json is not string %}
+              {{ game.player_names_json | join(', ') }}
+            {% else %}
+              {{ game.player_names_json or '—' }}
+            {% endif %}
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="panel game-viewer-panel">
       <h2>Riddles</h2>
       {% if riddles %}
-      <table class="simple-table viewer-table">
+      <table class="simple-table viewer-table riddles-simple-table">
         <thead>
           <tr>
-            {% for key in riddles[0].keys() %}<th>{{ key }}</th>{% endfor %}
+            <th>Riddle</th>
+            <th>Solve Time</th>
           </tr>
         </thead>
         <tbody>
           {% for row in riddles %}
           <tr>
-            {% for value in row.values() %}
-            <td>
-              {% if value is mapping or (value is sequence and value is not string) %}
-                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
-            {% endfor %}
+            <td>{{ row.riddle or row.id or '—' }}</td>
+            <td>{{ row.solve_time_mmss }}</td>
           </tr>
           {% endfor %}
         </tbody>

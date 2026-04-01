@@ -366,3 +366,66 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   font-family: monospace;
   font-size: 13px;
 }
+
+.viewer-success {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+
+.games-list-table th:nth-child(1) { width: 220px; }
+.games-list-table th:nth-child(2) { width: 220px; }
+.games-list-table th:nth-child(3) { width: 110px; }
+.games-list-table th:nth-child(5) { width: 180px; }
+
+.selected-game-row {
+  background: var(--blue-bg);
+}
+
+.game-actions-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.game-actions-cell form {
+  margin: 0;
+}
+
+.danger-button {
+  border-color: var(--red-line);
+  color: var(--red-text);
+  background: var(--red-bg);
+}
+
+.viewer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.viewer-summary-card {
+  border: 1px solid var(--line);
+  background: #fafafa;
+  padding: 10px 12px;
+}
+
+.viewer-summary-card-wide {
+  grid-column: span 2;
+}
+
+.viewer-summary-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.viewer-summary-value {
+  font-size: 18px;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.riddles-simple-table th:nth-child(1) { width: auto; }
+.riddles-simple-table th:nth-child(2) { width: 160px; }
