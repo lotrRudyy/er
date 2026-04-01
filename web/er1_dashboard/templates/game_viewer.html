@@ -112,6 +112,7 @@
           <tr>
             <th>Riddle</th>
             <th>Solve Time</th>
+            <th>Riddle Time</th>
           </tr>
         </thead>
         <tbody>
@@ -119,6 +120,7 @@
           <tr>
             <td>{{ row.riddle or row.id or '—' }}</td>
             <td>{{ row.solve_time_mmss }}</td>
+            <td>{{ row.riddle_time_mmss }}</td>
           </tr>
           {% endfor %}
         </tbody>

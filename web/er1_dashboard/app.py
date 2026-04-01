@@ -953,8 +953,23 @@ def game_viewer() -> str:
                 game["started_at_display"] = format_datetime_readable(game.get("started_at") or game.get("game_started_at") or game.get("date"))
                 game["ended_at_display"] = format_datetime_readable(game.get("ended_at"))
                 game["duration_mmss"] = format_mmss(game.get("duration_s"))
+
+                previous_solve_time = 0.0
                 for row in riddles:
-                    row["solve_time_mmss"] = format_mmss(row.get("solve_time_from_run_start_s"))
+                    current_solve_time = row.get("solve_time_from_run_start_s")
+                    row["solve_time_mmss"] = format_mmss(current_solve_time)
+                    try:
+                        current_seconds = float(current_solve_time)
+                    except Exception:
+                        current_seconds = None
+
+                    if current_seconds is None:
+                        row["riddle_time_mmss"] = "—"
+                        continue
+
+                    delta_seconds = max(0.0, current_seconds - previous_solve_time)
+                    row["riddle_time_mmss"] = format_mmss(delta_seconds)
+                    previous_solve_time = current_seconds
         except Exception as exc:
             error = str(exc)
 
