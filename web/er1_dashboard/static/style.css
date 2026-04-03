@@ -477,3 +477,62 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   background: #ffffff;
   color: var(--text);
 }
+
+
+.game-viewer-page-wide {
+  max-width: 1680px;
+  margin: 0;
+}
+
+.compact-viewer-panel {
+  padding: 10px;
+}
+
+.compact-table {
+  table-layout: fixed;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.compact-table td,
+.compact-table th,
+.game-actions-cell {
+  word-break: break-word;
+}
+
+.all-games-table th:nth-child(1) { width: 34%; }
+.all-games-table th:nth-child(2) { width: 12%; }
+.all-games-table th:nth-child(3) { width: 10%; }
+.all-games-table th:nth-child(4) { width: 24%; }
+.all-games-table th:nth-child(5) { width: 20%; }
+
+.summary-table th:nth-child(1) { width: 34%; }
+.summary-table th:nth-child(2) { width: 14%; }
+.summary-table th:nth-child(3) { width: 10%; }
+.summary-table th:nth-child(4) { width: 30%; }
+.summary-table th:nth-child(5) { width: 12%; }
+
+.riddles-compact-table th:nth-child(1) { width: 24%; }
+.riddles-compact-table th:nth-child(2) { width: 14%; }
+.riddles-compact-table th:nth-child(3) { width: 14%; }
+.riddles-compact-table th:nth-child(4) { width: 34%; }
+.riddles-compact-table th:nth-child(5) { width: 14%; }
+
+.game-actions-cell {
+  gap: 6px;
+}
+
+.game-actions-cell .nav-button,
+.game-actions-cell .danger-button,
+.save-row-button {
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.cell-editor {
+  padding: 6px 8px;
+}

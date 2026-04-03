@@ -744,6 +744,85 @@ def serialize_db_value(value: Any) -> str:
     return str(value)
 
 
+def display_player_names(value: Any) -> str:
+    parsed = _maybe_json(value)
+    if isinstance(parsed, list):
+        items = [str(item).strip() for item in parsed if str(item).strip()]
+        return ", ".join(items) if items else "—"
+    text = str(parsed or "").strip()
+    return text or "—"
+
+
+def parse_player_names_input(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text == "—":
+        return json.dumps([], ensure_ascii=False)
+    parts = [item.strip() for item in re.split(r"[,;\n]+", text) if item.strip()]
+    if not parts:
+        parts = [text]
+    return json.dumps(parts, ensure_ascii=False)
+
+
+def parse_mmss_input(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text or text == "—":
+        return None
+    if re.fullmatch(r"\d{1,2}:\d{1,2}(?::\d{1,2})?", text):
+        chunks = [int(part) for part in text.split(":")]
+        if len(chunks) == 2:
+            minutes, seconds = chunks
+            return float(minutes * 60 + seconds)
+        hours, minutes, seconds = chunks
+        return float(hours * 3600 + minutes * 60 + seconds)
+    return float(text)
+
+
+def update_hint_rows_for_riddle(conn: sqlite3.Connection, game_id: str, riddle: str, target_count: int) -> None:
+    target_count = max(int(target_count), 0)
+    rows = conn.execute(
+        "SELECT id, at, hint_text FROM game_hints WHERE game_id = ? AND riddle = ? ORDER BY id ASC",
+        (game_id, riddle),
+    ).fetchall()
+    current_count = len(rows)
+    if target_count == current_count:
+        return
+    if target_count < current_count:
+        to_delete = [row[0] for row in rows[target_count:]]
+        conn.executemany("DELETE FROM game_hints WHERE id = ?", [(item,) for item in to_delete])
+        return
+
+    base_at = None
+    if rows:
+        base_at = rows[-1][1]
+    if not base_at:
+        base_at = conn.execute(
+            "SELECT solved_at FROM game_riddles WHERE game_id = ? AND riddle = ? ORDER BY rowid ASC LIMIT 1",
+            (game_id, riddle),
+        ).fetchone()
+        base_at = base_at[0] if base_at and base_at[0] else None
+    if not base_at:
+        base_at = conn.execute(
+            "SELECT started_at FROM games WHERE id = ?",
+            (game_id,),
+        ).fetchone()
+        base_at = base_at[0] if base_at and base_at[0] else datetime.now(timezone.utc).isoformat()
+
+    missing = target_count - current_count
+    conn.executemany(
+        "INSERT INTO game_hints (game_id, at, riddle, hint_text) VALUES (?, ?, ?, ?)",
+        [(game_id, base_at, riddle, "") for _ in range(missing)],
+    )
+
+
+def first_existing_key(row: dict[str, Any] | None, candidates: list[str]) -> str | None:
+    if not isinstance(row, dict):
+        return None
+    for key in candidates:
+        if key in row:
+            return key
+    return None
+
+
 def build_editable_columns(rows: list[dict[str, Any]], *, exclude: set[str] | None = None, preferred: list[str] | None = None) -> list[str]:
     exclude = set(exclude or set()) | {"_rowid_"}
     ordered: list[str] = []
@@ -773,7 +852,9 @@ def list_games_from_db() -> list[dict[str, Any]]:
     for row in rows:
         item = _row_to_dict(row) or {}
         item["started_at_display"] = format_datetime_readable(item.get("started_at") or item.get("game_started_at") or item.get("date"))
+        item["date_display"] = str(item.get("date") or item.get("started_at_display")[:10] or "—")
         item["duration_mmss"] = format_mmss(item.get("duration_s"))
+        item["players_display"] = display_player_names(item.get("player_names_json"))
         games.append(item)
     return games
 
@@ -902,6 +983,101 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
             for col in columns_info
             if str(col[1]) not in set(config.get("blocked_columns") or set())
         }
+
+        if table_name == "games":
+            current = conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE rowid = ?", (rowid,)).fetchone()
+            if current is None:
+                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+            normalized_updates: dict[str, Any] = {}
+            for key, value in updates.items():
+                column = str(key or "").strip()
+                if column == "players_display":
+                    normalized_updates["player_names_json"] = parse_player_names_input(value)
+                elif column == "duration_mmss":
+                    normalized_updates["duration_s"] = parse_mmss_input(value)
+                elif column == "hint_count_display":
+                    normalized_updates["hint_count"] = max(int(float(str(value).strip() or "0")), 0)
+                elif column in editable_columns:
+                    normalized_updates[column] = value
+                else:
+                    raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+
+            if normalized_updates:
+                set_clause = ", ".join(f"{column} = ?" for column in normalized_updates.keys())
+                values = [normalized_updates[column] for column in normalized_updates.keys()]
+                values.append(rowid)
+                conn.execute(f"UPDATE games SET {set_clause} WHERE rowid = ?", values)
+            conn.commit()
+            return
+
+        if table_name == "game_riddles":
+            current = conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE rowid = ?", (rowid,)).fetchone()
+            if current is None:
+                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+            game_id = str(current[2])
+            current_riddle = str(current[3])
+            normalized_updates: dict[str, Any] = {}
+
+            all_rows = conn.execute(
+                "SELECT rowid, solve_time_from_run_start_s FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC",
+                (game_id,),
+            ).fetchall()
+            previous_solve = 0.0
+            for item in all_rows:
+                if int(item[0]) == int(rowid):
+                    break
+                try:
+                    previous_solve = float(item[1] or 0)
+                except Exception:
+                    previous_solve = 0.0
+
+            pending_riddle_name = current_riddle
+            pending_hint_count = None
+            leaderboard_code_value = None
+
+            for key, value in updates.items():
+                column = str(key or "").strip()
+                if column == "solve_time_mmss":
+                    normalized_updates["solve_time_from_run_start_s"] = parse_mmss_input(value)
+                elif column == "riddle_time_mmss":
+                    if "solve_time_mmss" not in updates:
+                        delta = parse_mmss_input(value)
+                        normalized_updates["solve_time_from_run_start_s"] = None if delta is None else previous_solve + delta
+                elif column == "hint_count_display":
+                    pending_hint_count = max(int(float(str(value).strip() or "0")), 0)
+                elif column in {"leaderboard_code", "leaderboard_code_display"}:
+                    leaderboard_code_value = str(value or "").strip() or None
+                elif column == "riddle":
+                    pending_riddle_name = str(value or "").strip()
+                    normalized_updates["riddle"] = pending_riddle_name
+                elif column in editable_columns:
+                    normalized_updates[column] = value
+                else:
+                    raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+
+            if normalized_updates:
+                set_clause = ", ".join(f"{column} = ?" for column in normalized_updates.keys())
+                values = [normalized_updates[column] for column in normalized_updates.keys()]
+                values.append(rowid)
+                conn.execute(f"UPDATE game_riddles SET {set_clause} WHERE rowid = ?", values)
+
+            if leaderboard_code_value is not None or any(str(k) in {"leaderboard_code", "leaderboard_code_display"} for k in updates):
+                conn.execute("UPDATE games SET leaderboard_code = ? WHERE id = ?", (leaderboard_code_value, game_id))
+
+            if pending_riddle_name != current_riddle:
+                conn.execute(
+                    "UPDATE game_hints SET riddle = ? WHERE game_id = ? AND riddle = ?",
+                    (pending_riddle_name, game_id, current_riddle),
+                )
+
+            if pending_hint_count is not None:
+                update_hint_rows_for_riddle(conn, game_id, pending_riddle_name, pending_hint_count)
+                total_hints = conn.execute("SELECT COUNT(*) FROM game_hints WHERE game_id = ?", (game_id,)).fetchone()[0]
+                conn.execute("UPDATE games SET hint_count = ? WHERE id = ?", (int(total_hints or 0), game_id))
+
+            conn.commit()
+            return
+
         normalized_updates: dict[str, Any] = {}
         for key, value in updates.items():
             column = str(key or "").strip()
@@ -1008,6 +1184,7 @@ def game_viewer() -> str:
     summary_columns: list[str] = []
     riddle_columns: list[str] = []
     hint_columns: list[str] = []
+    raw_rows: list[dict[str, Any]] = []
 
     try:
         games = list_games_from_db()
@@ -1026,6 +1203,15 @@ def game_viewer() -> str:
                 game["started_at_display"] = format_datetime_readable(game.get("started_at") or game.get("game_started_at") or game.get("date"))
                 game["ended_at_display"] = format_datetime_readable(game.get("ended_at"))
                 game["duration_mmss"] = format_mmss(game.get("duration_s"))
+                game["players_display"] = display_player_names(game.get("player_names_json"))
+                game["hint_count_display"] = int(game.get("hint_count") or 0)
+                game["leaderboard_code_display"] = serialize_db_value(game.get("leaderboard_code")) or ""
+
+                riddle_hint_counts: dict[str, int] = {}
+                for hint in hints:
+                    name = str(hint.get("riddle") or "").strip()
+                    if name:
+                        riddle_hint_counts[name] = riddle_hint_counts.get(name, 0) + 1
 
                 previous_solve_time = 0.0
                 for row in riddles:
@@ -1038,19 +1224,28 @@ def game_viewer() -> str:
 
                     if current_seconds is None:
                         row["riddle_time_mmss"] = "—"
-                        continue
+                    else:
+                        delta_seconds = max(0.0, current_seconds - previous_solve_time)
+                        row["riddle_time_mmss"] = format_mmss(delta_seconds)
+                        previous_solve_time = current_seconds
 
-                    delta_seconds = max(0.0, current_seconds - previous_solve_time)
-                    row["riddle_time_mmss"] = format_mmss(delta_seconds)
-                    previous_solve_time = current_seconds
+                    row["hint_count_display"] = int(riddle_hint_counts.get(str(row.get("riddle") or ""), 0))
 
-                summary_columns = build_editable_columns(
-                    [game],
-                    exclude={"started_at_display", "ended_at_display", "duration_mmss"},
-                    preferred=["id", "date", "started_at", "ended_at", "duration_s", "player_names_json"],
-                )
-                riddle_columns = build_editable_columns(riddles, preferred=["riddle", "source", "activated_at", "solved_at", "solve_time_from_run_start_s", "solve_time_from_activation_s"])
+                summary_columns = [col for col in ["id", "date", "player_names_json", "hint_count", "leaderboard_code"] if col in game]
+                riddle_columns = ["riddle", "solve_time_mmss", "riddle_time_mmss", "hint_count_display"]
                 hint_columns = build_editable_columns(hints, preferred=["at", "riddle", "hint_text"])
+
+                raw_rows = [
+                    {"table": "games", "rowid": game.get("_rowid_"), "raw_json": json.dumps({k: v for k, v in game.items() if not str(k).endswith("_display") and not str(k).endswith("_mmss")}, ensure_ascii=False, indent=2, default=str)}
+                ]
+                raw_rows.extend(
+                    {"table": "game_riddles", "rowid": row.get("_rowid_"), "raw_json": json.dumps({k: v for k, v in row.items() if not str(k).endswith("_display") and not str(k).endswith("_mmss")}, ensure_ascii=False, indent=2, default=str)}
+                    for row in riddles
+                )
+                raw_rows.extend(
+                    {"table": "game_hints", "rowid": row.get("_rowid_"), "raw_json": json.dumps(row, ensure_ascii=False, indent=2, default=str)}
+                    for row in hints
+                )
         except Exception as exc:
             error = str(exc)
 
@@ -1070,6 +1265,7 @@ def game_viewer() -> str:
         hint_columns=hint_columns,
         serialize_db_value=serialize_db_value,
         editable_tables=EDITABLE_TABLES,
+        raw_rows=raw_rows,
     )
 
 
