@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,8 @@ class Database:
                     ended_at TEXT,
                     duration_s REAL,
                     player_names_json TEXT NOT NULL,
-                    hint_count INTEGER NOT NULL DEFAULT 0
+                    hint_count INTEGER NOT NULL DEFAULT 0,
+                    leaderboard_code TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS game_riddles (
@@ -57,14 +59,41 @@ class Database:
                 );
                 '''
             )
+            self._ensure_games_column(conn, "leaderboard_code", "TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL"
+            )
+
+    def _ensure_games_column(self, conn: sqlite3.Connection, column_name: str, column_type: str) -> None:
+        existing_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(games)").fetchall()
+        }
+        if column_name not in existing_columns:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {column_name} {column_type}")
+
+    def generate_leaderboard_code(self) -> str:
+        with self._connect() as conn:
+            for _ in range(100):
+                code = f"{random.randint(0, 999999):06d}"
+                exists = conn.execute(
+                    "SELECT 1 FROM games WHERE leaderboard_code = ? LIMIT 1",
+                    (code,),
+                ).fetchone()
+                if not exists:
+                    return code
+        raise RuntimeError("Could not generate unique leaderboard code")
 
     def save_completed_run(self, run: CurrentRun) -> None:
+        leaderboard_code = run.leaderboard_code or self.generate_leaderboard_code()
+        run.leaderboard_code = leaderboard_code
+
         with self._connect() as conn:
             conn.execute(
                 '''
                 INSERT OR REPLACE INTO games (
-                    id, date, started_at, ended_at, duration_s, player_names_json, hint_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    id, date, started_at, ended_at, duration_s, player_names_json, hint_count, leaderboard_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     run.run_id,
@@ -74,6 +103,7 @@ class Database:
                     run.duration_s,
                     json.dumps(run.players, ensure_ascii=False),
                     run.hint_count(),
+                    leaderboard_code,
                 ),
             )
 
@@ -117,7 +147,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 '''
-                SELECT id, date, started_at, ended_at, duration_s, player_names_json, hint_count
+                SELECT id, date, started_at, ended_at, duration_s, player_names_json, hint_count, leaderboard_code
                 FROM games
                 ORDER BY started_at DESC
                 '''
@@ -133,6 +163,7 @@ class Database:
                     "duration_s": row[4],
                     "player_names": json.loads(row[5]),
                     "hint_count": row[6],
+                    "leaderboard_code": row[7],
                 }
             )
         return out

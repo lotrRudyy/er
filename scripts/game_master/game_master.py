@@ -182,6 +182,7 @@ class GameMaster:
             "ended_at": run.ended_at,
             "duration_s": run.duration_s,
             "players": list(run.players),
+            "leaderboard_code": run.leaderboard_code,
             "hint_count": run.hint_count(),
             "hints": list(run.hints),
             "riddle_timings": {

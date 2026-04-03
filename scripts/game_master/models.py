@@ -27,6 +27,7 @@ class CurrentRun:
     started_at: str
     started_monotonic: float
     players: list[str] = field(default_factory=list)
+    leaderboard_code: str | None = None
     hints: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     riddle_timings: dict[str, RiddleTiming] = field(default_factory=dict)
