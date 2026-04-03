@@ -14,6 +14,7 @@
           <h1>Game Viewer</h1>
           <div class="subline">DB: {{ db_path }}</div>
           <div class="subline">Removed games DB: {{ removed_db_path }}</div>
+          <div class="subline">Tipp: Auf eine Zelle klicken, Text ändern und dann pro Zeile auf „Speichern“ drücken.</div>
         </div>
         <div class="top-nav-links">
           <a class="nav-button" href="/">Back to Dashboard</a>
@@ -26,6 +27,7 @@
       {% if error %}
         <div class="viewer-message viewer-error">{{ error }}</div>
       {% endif %}
+      <div id="editorStatus" class="viewer-message editor-status" hidden></div>
     </section>
 
     <section class="panel game-viewer-panel">
@@ -74,53 +76,59 @@
     {% if game %}
     <section class="panel game-viewer-panel">
       <h2>Game Summary</h2>
-      <div class="viewer-summary-grid">
-        <div class="viewer-summary-card">
-          <div class="viewer-summary-label">Game ID</div>
-          <div class="viewer-summary-value">{{ game.id }}</div>
-        </div>
-        <div class="viewer-summary-card">
-          <div class="viewer-summary-label">Started At</div>
-          <div class="viewer-summary-value">{{ game.started_at_display }}</div>
-        </div>
-        <div class="viewer-summary-card">
-          <div class="viewer-summary-label">Ended At</div>
-          <div class="viewer-summary-value">{{ game.ended_at_display }}</div>
-        </div>
-        <div class="viewer-summary-card">
-          <div class="viewer-summary-label">Duration</div>
-          <div class="viewer-summary-value">{{ game.duration_mmss }}</div>
-        </div>
-        <div class="viewer-summary-card viewer-summary-card-wide">
-          <div class="viewer-summary-label">Players</div>
-          <div class="viewer-summary-value">
-            {% if game.player_names_json is sequence and game.player_names_json is not string %}
-              {{ game.player_names_json | join(', ') }}
-            {% else %}
-              {{ game.player_names_json or '—' }}
-            {% endif %}
-          </div>
-        </div>
-      </div>
+      <table class="simple-table viewer-table editable-table">
+        <thead>
+          <tr>
+            {% for col in summary_columns %}
+            <th>{{ col }}</th>
+            {% endfor %}
+            <th>Save</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-table="games" data-rowid="{{ game._rowid_ }}">
+            {% for col in summary_columns %}
+            {% set raw_value = serialize_db_value(game.get(col)) %}
+            {% set is_blocked = col in editable_tables['games']['blocked_columns'] %}
+            <td
+              class="{% if not is_blocked %}editable-cell{% else %}readonly-cell{% endif %}"
+              data-column="{{ col }}"
+              data-value="{{ raw_value }}"
+              {% if is_blocked %}data-readonly="true"{% endif %}
+            >{{ raw_value or '—' }}</td>
+            {% endfor %}
+            <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section class="panel game-viewer-panel">
       <h2>Riddles</h2>
       {% if riddles %}
-      <table class="simple-table viewer-table riddles-simple-table">
+      <table class="simple-table viewer-table editable-table">
         <thead>
           <tr>
-            <th>Riddle</th>
-            <th>Solve Time</th>
-            <th>Riddle Time</th>
+            {% for col in riddle_columns %}
+            <th>{{ col }}</th>
+            {% endfor %}
+            <th>Save</th>
           </tr>
         </thead>
         <tbody>
           {% for row in riddles %}
-          <tr>
-            <td>{{ row.riddle or row.id or '—' }}</td>
-            <td>{{ row.solve_time_mmss }}</td>
-            <td>{{ row.riddle_time_mmss }}</td>
+          <tr data-table="game_riddles" data-rowid="{{ row._rowid_ }}">
+            {% for col in riddle_columns %}
+            {% set raw_value = serialize_db_value(row.get(col)) %}
+            {% set is_blocked = col in editable_tables['game_riddles']['blocked_columns'] %}
+            <td
+              class="{% if not is_blocked %}editable-cell{% else %}readonly-cell{% endif %}"
+              data-column="{{ col }}"
+              data-value="{{ raw_value }}"
+              {% if is_blocked %}data-readonly="true"{% endif %}
+            >{{ raw_value or '—' }}</td>
+            {% endfor %}
+            <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -133,24 +141,29 @@
     <section class="panel game-viewer-panel">
       <h2>Hints</h2>
       {% if hints %}
-      <table class="simple-table viewer-table">
+      <table class="simple-table viewer-table editable-table">
         <thead>
           <tr>
-            {% for key in hints[0].keys() %}<th>{{ key }}</th>{% endfor %}
+            {% for col in hint_columns %}
+            <th>{{ col }}</th>
+            {% endfor %}
+            <th>Save</th>
           </tr>
         </thead>
         <tbody>
           {% for row in hints %}
-          <tr>
-            {% for value in row.values() %}
-            <td>
-              {% if value is mapping or (value is sequence and value is not string) %}
-                <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
+          <tr data-table="game_hints" data-rowid="{{ row._rowid_ }}">
+            {% for col in hint_columns %}
+            {% set raw_value = serialize_db_value(row.get(col)) %}
+            {% set is_blocked = col in editable_tables['game_hints']['blocked_columns'] %}
+            <td
+              class="{% if not is_blocked %}editable-cell{% else %}readonly-cell{% endif %}"
+              data-column="{{ col }}"
+              data-value="{{ raw_value }}"
+              {% if is_blocked %}data-readonly="true"{% endif %}
+            >{{ raw_value or '—' }}</td>
             {% endfor %}
+            <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -161,5 +174,9 @@
     </section>
     {% endif %}
   </div>
+
+  {% if game %}
+  <script src="{{ url_for('static', filename='game_viewer.js') }}"></script>
+  {% endif %}
 </body>
 </html>

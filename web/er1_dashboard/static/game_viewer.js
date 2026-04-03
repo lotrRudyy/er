@@ -1,111 +1,152 @@
-const viewerStatus = document.getElementById('viewerStatus');
-const viewerContent = document.getElementById('viewerContent');
-const gameIdInput = document.getElementById('gameIdInput');
-const loadGameBtn = document.getElementById('loadGameBtn');
+const editorStatus = document.getElementById('editorStatus');
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function showStatus(message, kind = 'info') {
+  if (!editorStatus) return;
+  editorStatus.hidden = false;
+  editorStatus.textContent = message;
+  editorStatus.className = 'viewer-message editor-status';
+  if (kind === 'error') editorStatus.classList.add('viewer-error');
+  if (kind === 'success') editorStatus.classList.add('viewer-success');
 }
 
-function fmtSeconds(value) {
-  if (value == null || value === '') return '—';
-  const num = Number(value);
-  if (!Number.isFinite(num)) return String(value);
-  return `${num.toFixed(3)} s`;
+function normalizeDisplay(value) {
+  return value === '' ? '—' : value;
 }
 
-function renderSummary(game) {
-  const grid = document.getElementById('gameSummaryGrid');
-  const players = (game.player_names || []).length ? game.player_names.join(', ') : '—';
-  const items = [
-    ['Game ID', game.id],
-    ['Date', game.date || '—'],
-    ['Started At', game.started_at || '—'],
-    ['Ended At', game.ended_at || '—'],
-    ['Duration', fmtSeconds(game.duration_s)],
-    ['Players', players],
-    ['Hint Count', game.hint_count ?? '0'],
-  ];
-  grid.innerHTML = items.map(([label, value]) => `
-    <div class="viewer-summary-card">
-      <div class="viewer-summary-label">${escapeHtml(label)}</div>
-      <div class="viewer-summary-value">${escapeHtml(value)}</div>
-    </div>
-  `).join('');
+function getEditorValue(cell) {
+  const editor = cell.querySelector('textarea, input');
+  if (editor) return editor.value;
+  return cell.dataset.currentValue ?? cell.dataset.value ?? '';
 }
 
-function renderRiddles(rows) {
-  const body = document.getElementById('viewerRiddlesBody');
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7">No riddle rows found.</td></tr>';
+function updateRowDirtyState(row) {
+  const saveButton = row.querySelector('.save-row-button');
+  if (!saveButton) return;
+  const dirty = Array.from(row.querySelectorAll('.editable-cell')).some((cell) => {
+    const currentValue = getEditorValue(cell);
+    return currentValue !== (cell.dataset.value ?? '');
+  });
+  saveButton.disabled = !dirty;
+}
+
+function autoResize(editor) {
+  editor.style.height = 'auto';
+  editor.style.height = `${Math.max(editor.scrollHeight, 38)}px`;
+}
+
+function openEditor(cell) {
+  if (!cell || cell.dataset.readonly === 'true') return;
+  if (cell.querySelector('textarea, input')) return;
+
+  const value = cell.dataset.currentValue ?? cell.dataset.value ?? '';
+  const useTextarea = value.includes('\n') || value.length > 60 || value.trim().startsWith('{') || value.trim().startsWith('[');
+  const editor = document.createElement(useTextarea ? 'textarea' : 'input');
+  editor.className = 'cell-editor';
+  editor.value = value;
+  if (!useTextarea) editor.type = 'text';
+  cell.dataset.currentValue = value;
+  cell.classList.add('is-editing');
+  cell.textContent = '';
+  cell.appendChild(editor);
+  if (useTextarea) autoResize(editor);
+
+  editor.addEventListener('input', () => {
+    cell.dataset.currentValue = editor.value;
+    if (useTextarea) autoResize(editor);
+    updateRowDirtyState(cell.closest('tr'));
+  });
+
+  editor.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cell.dataset.currentValue = cell.dataset.value ?? '';
+      closeEditor(cell, false);
+      updateRowDirtyState(cell.closest('tr'));
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      const row = cell.closest('tr');
+      const saveButton = row?.querySelector('.save-row-button');
+      saveButton?.click();
+    }
+  });
+
+  editor.focus();
+  if (editor.setSelectionRange) {
+    const end = editor.value.length;
+    editor.setSelectionRange(end, end);
+  }
+}
+
+function closeEditor(cell, keepCurrent = true) {
+  const editor = cell.querySelector('textarea, input');
+  let nextValue = keepCurrent ? (editor ? editor.value : (cell.dataset.currentValue ?? cell.dataset.value ?? '')) : (cell.dataset.value ?? '');
+  cell.dataset.currentValue = nextValue;
+  if (editor) editor.remove();
+  cell.classList.remove('is-editing');
+  cell.textContent = normalizeDisplay(nextValue);
+}
+
+async function saveRow(row) {
+  const button = row.querySelector('.save-row-button');
+  const table = row.dataset.table;
+  const rowid = row.dataset.rowid;
+  const updates = {};
+  const editableCells = Array.from(row.querySelectorAll('.editable-cell'));
+
+  editableCells.forEach((cell) => {
+    const currentValue = getEditorValue(cell);
+    if (currentValue !== (cell.dataset.value ?? '')) {
+      updates[cell.dataset.column] = currentValue;
+    }
+  });
+
+  if (!Object.keys(updates).length) {
+    showStatus('Keine Änderungen in dieser Zeile.', 'info');
+    button.disabled = true;
     return;
   }
-  body.innerHTML = rows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.riddle)}</td>
-      <td>${escapeHtml(row.source)}</td>
-      <td>${escapeHtml(row.activated_at || '—')}</td>
-      <td>${escapeHtml(row.solved_at || '—')}</td>
-      <td><span class="status-badge ${row.solved ? 'phase-solved' : 'phase-pending'}">${row.solved ? 'yes' : 'no'}</span></td>
-      <td>${escapeHtml(fmtSeconds(row.solve_time_from_run_start_s))}</td>
-      <td>${escapeHtml(fmtSeconds(row.solve_time_from_activation_s))}</td>
-    </tr>
-  `).join('');
-}
 
-function renderHints(rows) {
-  const body = document.getElementById('viewerHintsBody');
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="4">No hints saved for this game.</td></tr>';
-    return;
-  }
-  body.innerHTML = rows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.id)}</td>
-      <td>${escapeHtml(row.at || '—')}</td>
-      <td>${escapeHtml(row.riddle)}</td>
-      <td>${escapeHtml(row.hint_text)}</td>
-    </tr>
-  `).join('');
-}
+  button.disabled = true;
+  button.textContent = 'Speichert...';
 
-async function loadGame(gameId) {
-  viewerStatus.textContent = 'Loading...';
-  viewerStatus.className = 'viewer-status';
-  viewerContent.hidden = true;
   try {
-    const res = await fetch(`/api/game/${encodeURIComponent(gameId)}`);
+    const res = await fetch('/api/db/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table, rowid, updates }),
+    });
     const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to load game');
-    renderSummary(data.game);
-    renderRiddles(data.riddles || []);
-    renderHints(data.hints || []);
-    viewerStatus.textContent = `Loaded game ${data.game.id} from ${data.meta.db_path}`;
-    viewerStatus.className = 'viewer-status ok';
-    viewerContent.hidden = false;
-  } catch (err) {
-    viewerStatus.textContent = err.message || String(err);
-    viewerStatus.className = 'viewer-status error';
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+
+    editableCells.forEach((cell) => {
+      const currentValue = getEditorValue(cell);
+      if (cell.dataset.column in updates) {
+        cell.dataset.value = currentValue;
+      }
+      closeEditor(cell, true);
+    });
+
+    showStatus(`Zeile ${rowid} gespeichert.`, 'success');
+  } catch (error) {
+    showStatus(error.message || String(error), 'error');
+  } finally {
+    button.textContent = 'Speichern';
+    updateRowDirtyState(row);
   }
 }
 
-loadGameBtn.addEventListener('click', async () => {
-  const gameId = gameIdInput.value.trim();
-  if (!gameId) {
-    viewerStatus.textContent = 'Please enter a game id.';
-    viewerStatus.className = 'viewer-status error';
-    return;
-  }
-  await loadGame(gameId);
+document.querySelectorAll('.editable-cell').forEach((cell) => {
+  cell.addEventListener('click', (event) => {
+    if (event.target.closest('textarea, input')) return;
+    openEditor(cell);
+  });
 });
 
-gameIdInput.addEventListener('keydown', async (e) => {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  loadGameBtn.click();
+document.querySelectorAll('.save-row-button').forEach((button) => {
+  button.addEventListener('click', () => {
+    const row = button.closest('tr');
+    if (row) saveRow(row);
+  });
 });

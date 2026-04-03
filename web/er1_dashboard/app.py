@@ -736,6 +736,29 @@ def format_mmss(value: Any) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def serialize_db_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def build_editable_columns(rows: list[dict[str, Any]], *, exclude: set[str] | None = None, preferred: list[str] | None = None) -> list[str]:
+    exclude = set(exclude or set()) | {"_rowid_"}
+    ordered: list[str] = []
+    preferred = preferred or []
+    for name in preferred:
+        if name not in exclude and any(name in (row or {}) for row in rows):
+            ordered.append(name)
+    for row in rows:
+        for key in (row or {}).keys():
+            if key in exclude or key in ordered:
+                continue
+            ordered.append(key)
+    return ordered
+
+
 def list_games_from_db() -> list[dict[str, Any]]:
     if not GAME_DB_PATH.exists():
         raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
@@ -743,7 +766,7 @@ def list_games_from_db() -> list[dict[str, Any]]:
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM games ORDER BY COALESCE(started_at, date, id) DESC, id DESC"
+            "SELECT rowid AS _rowid_, * FROM games ORDER BY COALESCE(started_at, date, id) DESC, id DESC"
         ).fetchall()
 
     games: list[dict[str, Any]] = []
@@ -829,16 +852,16 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
 
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        game = _row_to_dict(conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone())
+        game = _row_to_dict(conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone())
         if game is None:
             return {"game": None, "riddles": [], "hints": []}
 
         riddles = [_row_to_dict(row) for row in conn.execute(
-            "SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC",
+            "SELECT rowid AS _rowid_, * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC",
             (game_id,),
         ).fetchall()]
         hints = [_row_to_dict(row) for row in conn.execute(
-            "SELECT * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC",
+            "SELECT rowid AS _rowid_, * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC",
             (game_id,),
         ).fetchall()]
 
@@ -851,6 +874,53 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
             row[key] = _maybe_json(row[key])
 
     return {"game": game, "riddles": riddles, "hints": hints}
+
+
+EDITABLE_TABLES: dict[str, dict[str, Any]] = {
+    "games": {"blocked_columns": {"id"}},
+    "game_riddles": {"blocked_columns": {"id", "game_id"}},
+    "game_hints": {"blocked_columns": {"id", "game_id"}},
+}
+
+
+def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
+    config = EDITABLE_TABLES.get(table_name)
+    if config is None:
+        raise ValueError(f"Table {table_name} is not editable.")
+    if not updates:
+        return
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+
+    with sqlite3.connect(GAME_DB_PATH) as conn:
+        columns_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        if not columns_info:
+            raise ValueError(f"Could not read schema for table {table_name}.")
+
+        editable_columns = {
+            str(col[1])
+            for col in columns_info
+            if str(col[1]) not in set(config.get("blocked_columns") or set())
+        }
+        normalized_updates: dict[str, Any] = {}
+        for key, value in updates.items():
+            column = str(key or "").strip()
+            if not column or column not in editable_columns:
+                raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+            normalized_updates[column] = value
+
+        if not normalized_updates:
+            return
+
+        current = conn.execute(f"SELECT rowid FROM {table_name} WHERE rowid = ?", (rowid,)).fetchone()
+        if current is None:
+            raise ValueError(f"Row {rowid} not found in table {table_name}.")
+
+        set_clause = ", ".join(f"{column} = ?" for column in normalized_updates.keys())
+        values = [normalized_updates[column] for column in normalized_updates.keys()]
+        values.append(rowid)
+        conn.execute(f"UPDATE {table_name} SET {set_clause} WHERE rowid = ?", values)
+        conn.commit()
 
 def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
     try:
@@ -935,6 +1005,9 @@ def game_viewer() -> str:
     games: list[dict[str, Any]] = []
     error = str(request.args.get("error", "")).strip()
     message = str(request.args.get("message", "")).strip()
+    summary_columns: list[str] = []
+    riddle_columns: list[str] = []
+    hint_columns: list[str] = []
 
     try:
         games = list_games_from_db()
@@ -970,6 +1043,14 @@ def game_viewer() -> str:
                     delta_seconds = max(0.0, current_seconds - previous_solve_time)
                     row["riddle_time_mmss"] = format_mmss(delta_seconds)
                     previous_solve_time = current_seconds
+
+                summary_columns = build_editable_columns(
+                    [game],
+                    exclude={"started_at_display", "ended_at_display", "duration_mmss"},
+                    preferred=["id", "date", "started_at", "ended_at", "duration_s", "player_names_json"],
+                )
+                riddle_columns = build_editable_columns(riddles, preferred=["riddle", "source", "activated_at", "solved_at", "solve_time_from_run_start_s", "solve_time_from_activation_s"])
+                hint_columns = build_editable_columns(hints, preferred=["at", "riddle", "hint_text"])
         except Exception as exc:
             error = str(exc)
 
@@ -984,6 +1065,11 @@ def game_viewer() -> str:
         message=message,
         db_path=str(GAME_DB_PATH),
         removed_db_path=str(REMOVED_GAME_DB_PATH),
+        summary_columns=summary_columns,
+        riddle_columns=riddle_columns,
+        hint_columns=hint_columns,
+        serialize_db_value=serialize_db_value,
+        editable_tables=EDITABLE_TABLES,
     )
 
 
@@ -997,6 +1083,26 @@ def delete_game(game_id: str) -> Any:
         return redirect(url_for("game_viewer", message=f"Moved game {game_id} to {REMOVED_GAMES_DIR}"))
     except Exception as exc:
         return redirect(url_for("game_viewer", error=str(exc), game_id=game_id))
+
+@app.post("/api/db/update")
+def api_db_update() -> Any:
+    data = request.get_json(force=True) or {}
+    table_name = str(data.get("table", "")).strip()
+    try:
+        rowid = int(data.get("rowid"))
+    except Exception:
+        return jsonify({"ok": False, "error": "rowid must be an integer"}), 400
+
+    updates = data.get("updates") or {}
+    if not isinstance(updates, dict):
+        return jsonify({"ok": False, "error": "updates must be an object"}), 400
+
+    try:
+        update_db_row(table_name, rowid, updates)
+        return jsonify({"ok": True, "table": table_name, "rowid": rowid, "updated_columns": sorted(updates.keys())})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
 
 @app.get("/api/state")
 def api_state() -> Any:
