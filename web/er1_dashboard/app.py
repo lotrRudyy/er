@@ -1401,6 +1401,12 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
             ).fetchall()]
             conn.commit()
 
+        if riddles:
+            _refresh_game_duration_and_end(conn, game_id)
+        _refresh_game_hint_count(conn, game_id)
+        game = _row_to_dict(conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone())
+        conn.commit()
+
     if "players_count" in game:
         game["players_count"] = parse_players_count_input(game.get("players_count"))
     for row in riddles:

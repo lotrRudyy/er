@@ -85,8 +85,10 @@ function readLocalRiddleTimer() {
 
 function renderPlayersCountControls() {
   const input = document.getElementById('playersCountInput');
-  if (!input) return;
+  const stored = document.getElementById('playersCountStored');
   const currentValue = Math.max(0, parseInt(state.game.players_count || 0, 10) || 0);
+  if (stored) stored.textContent = `(gespeichert: ${currentValue})`;
+  if (!input) return;
   if (!playersCountEditing && document.activeElement !== input) {
     input.value = String(currentValue);
   }
@@ -405,9 +407,10 @@ function wireTopControls() {
 
   const savePlayersCount = async (nextCount) => {
     const normalized = Math.max(0, parseInt(nextCount || 0, 10) || 0);
-    await api('/api/players-count', { method: 'POST', body: JSON.stringify({ players_count: normalized }) });
-    state.game.players_count = normalized;
+    const response = await api('/api/players-count', { method: 'POST', body: JSON.stringify({ players_count: normalized }) });
+    state.game.players_count = Math.max(0, parseInt(response?.players_count ?? normalized, 10) || 0);
     playersCountEditing = false;
+    renderPlayersCountControls();
     await fetchAndPatch();
   };
 

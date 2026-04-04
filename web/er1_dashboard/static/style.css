@@ -531,3 +531,11 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .cell-editor {
   padding: 6px 8px;
 }
+
+
+.players-count-stored {
+  color: #333;
+  font-weight: 500;
+  margin-left: 8px;
+  font-size: 0.95em;
+}
