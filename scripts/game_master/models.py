@@ -26,7 +26,7 @@ class CurrentRun:
     date: str
     started_at: str
     started_monotonic: float
-    players: list[str] = field(default_factory=list)
+    players_count: int = 0
     leaderboard_code: str | None = None
     hints: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)

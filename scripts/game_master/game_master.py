@@ -118,14 +118,14 @@ class GameMaster:
             payload["d"] = d
         self._publish_json(config.TOPIC_GAME_MASTER_DEBUG, payload, retained=False)
 
-    def _new_run_shell(self, players: list[str] | None = None) -> CurrentRun:
+    def _new_run_shell(self, players_count: int = 0) -> CurrentRun:
         now = utc_now()
         run = CurrentRun(
             run_id=f"run_{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}",
             date=now.date().isoformat(),
             started_at=now.isoformat(timespec="seconds"),
             started_monotonic=time.monotonic(),
-            players=list(players or []),
+            players_count=max(0, int(players_count or 0)),
         )
         for node in config.RIDDLES:
             source = "manual" if node in config.MANUAL_RIDDLES else "node"
@@ -134,8 +134,8 @@ class GameMaster:
 
     def _prepare_new_run(self) -> None:
         with self._lock:
-            players = list(self.state.current_run.players) if self.state.current_run is not None else []
-            self.state.current_run = self._new_run_shell(players)
+            players_count = int(self.state.current_run.players_count) if self.state.current_run is not None else 0
+            self.state.current_run = self._new_run_shell(players_count)
             self.state.completed_phase_events.clear()
             self.state.game_started_at = None
             self.state.last_riddle_solved_at = None
@@ -181,7 +181,7 @@ class GameMaster:
             "started_at": run.started_at,
             "ended_at": run.ended_at,
             "duration_s": run.duration_s,
-            "players": list(run.players),
+            "players_count": int(run.players_count or 0),
             "leaderboard_code": run.leaderboard_code,
             "hint_count": run.hint_count(),
             "hints": list(run.hints),
@@ -314,7 +314,15 @@ class GameMaster:
             players = payload.get("players", [])
             if not isinstance(players, list):
                 raise ValueError("set_players requires players as list")
-            self.set_players([str(p) for p in players])
+            self.set_players_count(len([str(p).strip() for p in players if str(p).strip()]))
+            return
+        if cmd == "set_players_count":
+            players_count = payload.get("players_count", 0)
+            try:
+                count = int(players_count)
+            except (TypeError, ValueError):
+                raise ValueError("set_players_count requires integer players_count")
+            self.set_players_count(count)
             return
         if cmd == "add_hint":
             self.add_hint(str(payload.get("riddle", "")).strip(), str(payload.get("hint_text", "")).strip())
@@ -350,14 +358,14 @@ class GameMaster:
             return
         raise ValueError(f"Unknown command: {cmd}")
 
-    def set_players(self, players: list[str]) -> None:
-        cleaned = [p.strip() for p in players if p.strip()]
+    def set_players_count(self, players_count: int) -> None:
+        cleaned_count = max(0, int(players_count or 0))
         with self._lock:
             if self.state.current_run is None:
-                self.state.current_run = self._new_run_shell(cleaned)
+                self.state.current_run = self._new_run_shell(cleaned_count)
             else:
-                self.state.current_run.players = cleaned
-        self._record_event("players_updated", {"players": cleaned})
+                self.state.current_run.players_count = cleaned_count
+        self._record_event("players_count_updated", {"players_count": cleaned_count})
 
     def add_hint(self, riddle: str, hint_text: str) -> None:
         if not riddle or not hint_text:

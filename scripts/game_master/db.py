@@ -31,7 +31,8 @@ class Database:
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
                     duration_s REAL,
-                    player_names_json TEXT NOT NULL,
+                    player_names_json TEXT NOT NULL DEFAULT '[]',
+                    players_count INTEGER NOT NULL DEFAULT 0,
                     hint_count INTEGER NOT NULL DEFAULT 0,
                     leaderboard_code TEXT
                 );
@@ -60,6 +61,7 @@ class Database:
                 '''
             )
             self._ensure_games_column(conn, "leaderboard_code", "TEXT")
+            self._ensure_games_column(conn, "players_count", "INTEGER NOT NULL DEFAULT 0")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL"
             )
@@ -92,8 +94,8 @@ class Database:
             conn.execute(
                 '''
                 INSERT OR REPLACE INTO games (
-                    id, date, started_at, ended_at, duration_s, player_names_json, hint_count, leaderboard_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, date, started_at, ended_at, duration_s, player_names_json, players_count, hint_count, leaderboard_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     run.run_id,
@@ -101,7 +103,8 @@ class Database:
                     run.started_at,
                     run.ended_at,
                     run.duration_s,
-                    json.dumps(run.players, ensure_ascii=False),
+                    '[]',
+                    int(run.players_count or 0),
                     run.hint_count(),
                     leaderboard_code,
                 ),
@@ -147,7 +150,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 '''
-                SELECT id, date, started_at, ended_at, duration_s, player_names_json, hint_count, leaderboard_code
+                SELECT id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code
                 FROM games
                 ORDER BY started_at DESC
                 '''
@@ -161,7 +164,7 @@ class Database:
                     "started_at": row[2],
                     "ended_at": row[3],
                     "duration_s": row[4],
-                    "player_names": json.loads(row[5]),
+                    "players_count": row[5],
                     "hint_count": row[6],
                     "leaderboard_code": row[7],
                 }
