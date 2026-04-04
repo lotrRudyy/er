@@ -865,7 +865,13 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> list[dict[str, Any]]:
     return [
-        {"name": str(row[1]), "type": str(row[2] or "TEXT")}
+        {
+            "name": str(row[1]),
+            "type": str(row[2] or "TEXT"),
+            "notnull": bool(row[3]),
+            "default": row[4],
+            "pk": bool(row[5]),
+        }
         for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     ]
 
@@ -888,6 +894,37 @@ def _intersecting_columns(src: sqlite3.Connection, dst: sqlite3.Connection, tabl
     src_names = [item["name"] for item in _table_columns(src, table_name)]
     dst_names = {item["name"] for item in _table_columns(dst, table_name)}
     return [name for name in src_names if name in dst_names]
+
+
+def _fallback_value_for_missing_column(column: dict[str, Any]) -> Any:
+    name = str(column.get("name") or "")
+    if name in {"player_names_json", "player_names"}:
+        return "[]" if name.endswith("_json") else ""
+    if name in {"team_name", "display_mode", "leaderboard_code"}:
+        return ""
+    coltype = str(column.get("type") or "").upper()
+    if "INT" in coltype or "REAL" in coltype or "NUM" in coltype:
+        return 0
+    return ""
+
+
+def _build_insert_payload_for_dst(src_row: dict[str, Any], dst: sqlite3.Connection, table_name: str) -> tuple[list[str], list[Any]]:
+    columns = _table_columns(dst, table_name)
+    names: list[str] = []
+    values: list[Any] = []
+    for column in columns:
+        name = column["name"]
+        if name in src_row:
+            value = src_row.get(name)
+        elif column.get("default") is not None:
+            continue
+        elif column.get("notnull"):
+            value = _fallback_value_for_missing_column(column)
+        else:
+            value = None
+        names.append(name)
+        values.append(value)
+    return names, values
 
 
 def _run_json_path(game_id: str) -> Path:
@@ -1074,19 +1111,19 @@ def move_game_to_removed(game_id: str) -> None:
         dst.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
 
         game_values = dict(game_row)
-        game_cols = _intersecting_columns(src, dst, "games")
+        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
         dst.execute(
             f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})",
-            tuple(game_values.get(col) for col in game_cols),
+            tuple(game_params),
         )
 
         for rows, table_name in ((riddle_rows, "game_riddles"), (hint_rows, "game_hints")):
-            cols = _intersecting_columns(src, dst, table_name)
             for row in rows:
                 values = dict(row)
+                cols, params = _build_insert_payload_for_dst(values, dst, table_name)
                 dst.execute(
                     f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                    tuple(values.get(col) for col in cols),
+                    tuple(params),
                 )
 
         src.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
