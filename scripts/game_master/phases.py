@@ -408,10 +408,17 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         ),
         required_events=("sissi_solved",),
         next_phase=14,
+        lighting_phase_on_enter=12,
         on_enter=(
             TransitionAction("pulse_open", {"lock": "slider", "max_open_ms": 1000}),
             TransitionAction("log_solve_time", {"riddle": "star_slider"}),
-            TransitionAction("lighting_fade_to", {"lights": ["r3_cage", "r3_slider"], "pct": 100, "duration_ms": 7000}),
+            TransitionAction("lighting_fade_to", {"lights": ["r3_cage", "r3_slider"], "pct": 100, "duration_ms": 5000}),
+            TransitionAction("delay", {
+                "seconds": 5,
+                "then": [
+                    {"kind": "set_lighting_phase", "payload": {"phase": 13}},
+                ],
+            }),
         ),
     ),
     14: PhaseSpec(

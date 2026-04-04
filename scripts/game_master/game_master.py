@@ -322,7 +322,7 @@ class GameMaster:
             self.add_hint(str(payload.get("riddle", "")).strip(), str(payload.get("hint_text", "")).strip())
             return
         if cmd == "solve":
-            riddle = str(payload.get("node", payload.get("riddle", ""))).strip()
+            riddle = self._normalize_riddle_id(payload.get("node", payload.get("riddle", "")))
             self.handle_solve(riddle, source="manual")
             return
         if cmd == "open_lock":
@@ -352,6 +352,23 @@ class GameMaster:
             return
         raise ValueError(f"Unknown command: {cmd}")
 
+
+
+    @staticmethod
+    def _normalize_riddle_id(riddle: str) -> str:
+        raw = str(riddle or '').strip().lower()
+        normalized = raw.replace('-', '_').replace(' ', '_')
+        aliases = {
+            'sisi': 'sissi',
+            'sissi_solved': 'sissi',
+            'sissi_final': 'sissi',
+            'star_slider_solved': 'star_slider',
+            'openprison': 'open_prison',
+            'mountwheel': 'mount_wheel',
+            'ropepaths': 'rope_paths',
+        }
+        return aliases.get(normalized, normalized)
+
     def set_players_count(self, players_count: int) -> None:
         cleaned_count = max(0, int(players_count or 0))
         with self._lock:
@@ -372,6 +389,7 @@ class GameMaster:
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
 
     def handle_solve(self, riddle: str, source: str) -> None:
+        riddle = self._normalize_riddle_id(riddle)
         if riddle not in config.RIDDLES:
             raise ValueError(f"Unknown riddle node: {riddle}")
         spec = PHASES[self.state.phase]
