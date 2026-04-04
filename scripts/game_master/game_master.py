@@ -310,12 +310,6 @@ class GameMaster:
                 return
             self._enter_phase(3, "admin_start")
             return
-        if cmd == "set_players":
-            players = payload.get("players", [])
-            if not isinstance(players, list):
-                raise ValueError("set_players requires players as list")
-            self.set_players_count(len([str(p).strip() for p in players if str(p).strip()]))
-            return
         if cmd == "set_players_count":
             players_count = payload.get("players_count", 0)
             try:

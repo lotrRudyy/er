@@ -31,7 +31,6 @@ class Database:
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
                     duration_s REAL,
-                    player_names_json TEXT NOT NULL DEFAULT '[]',
                     players_count INTEGER NOT NULL DEFAULT 0,
                     hint_count INTEGER NOT NULL DEFAULT 0,
                     leaderboard_code TEXT
@@ -62,6 +61,7 @@ class Database:
             )
             self._ensure_games_column(conn, "leaderboard_code", "TEXT")
             self._ensure_games_column(conn, "players_count", "INTEGER NOT NULL DEFAULT 0")
+            self._drop_player_names_column_if_present(conn)
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL"
             )
@@ -73,6 +73,34 @@ class Database:
         }
         if column_name not in existing_columns:
             conn.execute(f"ALTER TABLE games ADD COLUMN {column_name} {column_type}")
+
+    def _drop_player_names_column_if_present(self, conn: sqlite3.Connection) -> None:
+        existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()]
+        if "player_names_json" not in existing_columns:
+            return
+
+        conn.executescript(
+            """
+            ALTER TABLE games RENAME TO games_old;
+
+            CREATE TABLE games (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_s REAL,
+                players_count INTEGER NOT NULL DEFAULT 0,
+                hint_count INTEGER NOT NULL DEFAULT 0,
+                leaderboard_code TEXT
+            );
+
+            INSERT INTO games (id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code)
+            SELECT id, date, started_at, ended_at, duration_s, COALESCE(players_count, 0), hint_count, leaderboard_code
+            FROM games_old;
+
+            DROP TABLE games_old;
+            """
+        )
 
     def generate_leaderboard_code(self) -> str:
         with self._connect() as conn:
@@ -94,8 +122,8 @@ class Database:
             conn.execute(
                 '''
                 INSERT OR REPLACE INTO games (
-                    id, date, started_at, ended_at, duration_s, player_names_json, players_count, hint_count, leaderboard_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     run.run_id,
@@ -103,7 +131,6 @@ class Database:
                     run.started_at,
                     run.ended_at,
                     run.duration_s,
-                    '[]',
                     int(run.players_count or 0),
                     run.hint_count(),
                     leaderboard_code,
