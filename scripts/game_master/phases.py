@@ -412,7 +412,12 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         on_enter=(
             TransitionAction("pulse_open", {"lock": "slider", "max_open_ms": 1000}),
             TransitionAction("log_solve_time", {"riddle": "star_slider"}),
-            TransitionAction("lighting_fade_to", {"lights": ["r3_cage", "r3_slider"], "pct": 100, "duration_ms": 5000}),
+            TransitionAction("delay", {
+                "seconds": 0,
+                "then": [
+                    {"kind": "lighting_fade_to", "payload": {"lights": ["r3_cage", "r3_slider"], "pct": 100, "duration_ms": 5000}},
+                ],
+            }),
             TransitionAction("delay", {
                 "seconds": 5,
                 "then": [
