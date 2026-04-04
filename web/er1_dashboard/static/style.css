@@ -539,3 +539,46 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   margin-left: 8px;
   font-size: 0.95em;
 }
+
+
+.summary-table th,
+.summary-table td {
+  vertical-align: middle;
+}
+
+.summary-table td:nth-child(1),
+.summary-table td:nth-child(3),
+.summary-table td:nth-child(4),
+.summary-table td:nth-child(5),
+.summary-table td:nth-child(8) {
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-table td:nth-child(2),
+.summary-table td:nth-child(5),
+.summary-table td:nth-child(6),
+.summary-table td:nth-child(7),
+.summary-table td:nth-child(8) {
+  white-space: nowrap;
+}
+
+.summary-table td:nth-child(3),
+.summary-table td:nth-child(4) {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.summary-table td:nth-child(6),
+.summary-table td:nth-child(7),
+.summary-table td:nth-child(8) {
+  text-align: center;
+}
+
+.summary-table th:nth-child(9),
+.summary-table td:nth-child(9) {
+  text-align: center;
+}
+
+.summary-table .save-row-button {
+  min-width: 120px;
+}
