@@ -93,21 +93,13 @@
               data-column="date"
               data-value="{{ serialize_db_value(game.get('date')) }}"
             >{{ serialize_db_value(game.get('date')) or '—' }}</td>
-            <td
-              class="editable-cell"
-              data-column="duration_mmss"
-              data-value="{{ '' if game.duration_mmss == '—' else game.duration_mmss }}"
-            >{{ game.duration_mmss }}</td>
+            <td class="readonly-cell">{{ game.duration_mmss }}</td>
             <td
               class="editable-cell"
               data-column="players_count_display"
               data-value="{{ game.players_count_display if game.players_count_display != '—' else '0' }}"
             >{{ game.players_count_display }}</td>
-            <td
-              class="editable-cell"
-              data-column="hint_count_display"
-              data-value="{{ game.hint_count_display }}"
-            >{{ game.hint_count_display }}</td>
+            <td class="readonly-cell">{{ game.hint_count_display }}</td>
             <td
               class="editable-cell"
               data-column="leaderboard_code"
@@ -126,8 +118,7 @@
         <thead>
           <tr>
             <th>Riddle</th>
-            <th>Solve Time</th>
-            <th>Riddle Time</th>
+                        <th>Riddle Time</th>
             <th>Hints</th>
             <th>Save</th>
           </tr>
@@ -140,11 +131,6 @@
               data-column="riddle"
               data-value="{{ serialize_db_value(row.get('riddle')) }}"
             >{{ serialize_db_value(row.get('riddle')) or '—' }}</td>
-            <td
-              class="editable-cell"
-              data-column="solve_time_mmss"
-              data-value="{{ '' if row.solve_time_mmss == '—' else row.solve_time_mmss }}"
-            >{{ row.solve_time_mmss }}</td>
             <td
               class="editable-cell"
               data-column="riddle_time_mmss"

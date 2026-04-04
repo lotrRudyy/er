@@ -145,12 +145,23 @@ class DashboardStore:
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hints: dict[str, list[dict[str, Any]]] = field(default_factory=load_hint_store)
+    local_players_count_override: int | None = None
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
         with self.lock:
-            self.game_state = payload
+            next_payload = dict(payload or {})
+            if self.local_players_count_override is not None:
+                try:
+                    incoming_players_count = parse_players_count_input(next_payload.get("players_count", 0))
+                except Exception:
+                    incoming_players_count = None
+                if incoming_players_count == self.local_players_count_override:
+                    self.local_players_count_override = None
+                else:
+                    next_payload["players_count"] = self.local_players_count_override
+            self.game_state = next_payload
             try:
-                phase = int(payload.get("phase", 0))
+                phase = int(next_payload.get("phase", 0))
             except Exception:
                 phase = 0
             if phase in {1, 2}:
@@ -175,6 +186,13 @@ class DashboardStore:
             self.game_state = current
             if phase in {1, 2}:
                 self._reset_riddle_display_state_locked()
+
+    def set_local_players_count(self, players_count: int) -> None:
+        with self.lock:
+            current = dict(self.game_state)
+            current["players_count"] = int(players_count)
+            self.local_players_count_override = int(players_count)
+            self.game_state = current
 
     def _clear_node_payload_locked(self, node_id: str) -> None:
         existing = self.node_states.get(node_id, {}) or {}
@@ -676,7 +694,11 @@ mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIEN
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
-    return {key: row[key] for key in row.keys()}
+    if isinstance(row, dict):
+        return dict(row)
+    if hasattr(row, "keys"):
+        return {key: row[key] for key in row.keys()}
+    raise TypeError(f"Unsupported row type for dict conversion: {type(row)!r}")
 
 
 def _maybe_json(value: Any) -> Any:
@@ -1408,6 +1430,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
 
     with sqlite3.connect(GAME_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
         columns_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
         if not columns_info:
             raise ValueError(f"Could not read schema for table {table_name}.")
@@ -1642,7 +1665,7 @@ def game_viewer() -> str:
                 error = f"No game found for id {game_id}."
             else:
                 summary_columns = [col for col in ["id", "date", "players_count", "hint_count", "leaderboard_code"] if col in game]
-                riddle_columns = ["riddle", "solve_time_mmss", "riddle_time_mmss", "hint_count_display"]
+                riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display"]
         except Exception as exc:
             error = str(exc)
 
@@ -1724,6 +1747,7 @@ def api_players_count() -> Any:
         players_count = parse_players_count_input(data.get("players_count", 0))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    store.set_local_players_count(players_count)
     mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count})
     return jsonify({"ok": True, "players_count": players_count})
 

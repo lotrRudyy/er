@@ -415,7 +415,6 @@ function wireTopControls() {
     input.addEventListener('focus', () => { playersCountEditing = true; });
     input.addEventListener('blur', () => {
       playersCountEditing = false;
-      renderPlayersCountControls();
     });
     input.addEventListener('input', () => {
       input.value = input.value.replace(/[^0-9]/g, '');
@@ -426,6 +425,10 @@ function wireTopControls() {
       await savePlayersCount(getDraftCount());
     });
   }
+
+  saveButton?.addEventListener('mousedown', () => {
+    playersCountEditing = true;
+  });
 
   saveButton?.addEventListener('click', async () => {
     await savePlayersCount(getDraftCount());
