@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   <style>html, body.game-viewer-body { min-width: 0; width: auto; }</style>
 </head>
-<body class="game-viewer-body">
+<body class="game-viewer-body" data-game-id="{{ game_id }}">
   <div class="game-viewer-page game-viewer-page-wide">
     <section class="panel game-viewer-panel compact-viewer-panel">
       <div class="game-viewer-header">
@@ -31,7 +31,7 @@
       <div id="editorStatus" class="viewer-message editor-status" hidden></div>
     </section>
 
-    <section class="panel game-viewer-panel compact-viewer-panel">
+    <section id="allGamesSection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>All Games</h2>
       {% if games %}
       <table class="simple-table viewer-table games-list-table compact-table all-games-table">
@@ -69,7 +69,7 @@
     </section>
 
     {% if game %}
-    <section class="panel game-viewer-panel compact-viewer-panel">
+    <section id="gameSummarySection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>Game Summary</h2>
       <table class="simple-table viewer-table editable-table compact-table summary-table">
         <thead>
@@ -117,7 +117,7 @@
       </table>
     </section>
 
-    <section class="panel game-viewer-panel compact-viewer-panel">
+    <section id="riddlesSection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>Riddles</h2>
       {% if riddles %}
       <table class="simple-table viewer-table editable-table compact-table riddles-compact-table">
@@ -163,7 +163,7 @@
       {% endif %}
     </section>
 
-    <section class="panel game-viewer-panel compact-viewer-panel">
+    <section id="hintsSection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>Hints</h2>
       {% if hints %}
       <table class="simple-table viewer-table editable-table compact-table">
@@ -198,7 +198,7 @@
       {% endif %}
     </section>
 
-    <section class="panel game-viewer-panel compact-viewer-panel">
+    <section id="rawDbSection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>Raw DB</h2>
       {% if raw_rows %}
       <table class="simple-table viewer-table compact-table">

@@ -20,7 +20,7 @@ function getEditorValue(cell) {
 }
 
 function updateRowDirtyState(row) {
-  const saveButton = row.querySelector('.save-row-button');
+  const saveButton = row?.querySelector('.save-row-button');
   if (!saveButton) return;
   const dirty = Array.from(row.querySelectorAll('.editable-cell')).some((cell) => {
     const currentValue = getEditorValue(cell);
@@ -81,11 +81,46 @@ function openEditor(cell) {
 
 function closeEditor(cell, keepCurrent = true) {
   const editor = cell.querySelector('textarea, input');
-  let nextValue = keepCurrent ? (editor ? editor.value : (cell.dataset.currentValue ?? cell.dataset.value ?? '')) : (cell.dataset.value ?? '');
+  const nextValue = keepCurrent ? (editor ? editor.value : (cell.dataset.currentValue ?? cell.dataset.value ?? '')) : (cell.dataset.value ?? '');
   cell.dataset.currentValue = nextValue;
   if (editor) editor.remove();
   cell.classList.remove('is-editing');
   cell.textContent = normalizeDisplay(nextValue);
+}
+
+function bindViewerEditors(scope = document) {
+  scope.querySelectorAll('.editable-cell').forEach((cell) => {
+    if (cell.dataset.bound === 'true') return;
+    cell.dataset.bound = 'true';
+    cell.addEventListener('click', (event) => {
+      if (event.target.closest('textarea, input')) return;
+      openEditor(cell);
+    });
+  });
+
+  scope.querySelectorAll('.save-row-button').forEach((button) => {
+    if (button.dataset.bound === 'true') return;
+    button.dataset.bound = 'true';
+    button.addEventListener('click', () => {
+      const row = button.closest('tr');
+      if (row) saveRow(row);
+    });
+  });
+}
+
+async function refreshViewerFromServer() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('_ts', String(Date.now()));
+  const res = await fetch(url.toString(), { headers: { 'X-Requested-With': 'fetch' } });
+  if (!res.ok) throw new Error('Aktualisieren der Ansicht fehlgeschlagen');
+  const html = await res.text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  ['allGamesSection', 'gameSummarySection', 'riddlesSection', 'hintsSection', 'rawDbSection'].forEach((id) => {
+    const next = doc.getElementById(id);
+    const current = document.getElementById(id);
+    if (current && next) current.replaceWith(next);
+  });
+  bindViewerEditors(document);
 }
 
 async function saveRow(row) {
@@ -104,12 +139,14 @@ async function saveRow(row) {
 
   if (!Object.keys(updates).length) {
     showStatus('Keine Änderungen in dieser Zeile.', 'info');
-    button.disabled = true;
+    if (button) button.disabled = true;
     return;
   }
 
-  button.disabled = true;
-  button.textContent = 'Speichert...';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Speichert...';
+  }
 
   try {
     const res = await fetch('/api/db/update', {
@@ -120,33 +157,16 @@ async function saveRow(row) {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
 
-    editableCells.forEach((cell) => {
-      const currentValue = getEditorValue(cell);
-      if (cell.dataset.column in updates) {
-        cell.dataset.value = currentValue;
-      }
-      closeEditor(cell, true);
-    });
-
-    showStatus(`Zeile ${rowid} gespeichert.`, 'success');
+    await refreshViewerFromServer();
+    showStatus(`Zeile ${rowid} gespeichert und Seite aktualisiert.`, 'success');
   } catch (error) {
     showStatus(error.message || String(error), 'error');
   } finally {
-    button.textContent = 'Speichern';
-    updateRowDirtyState(row);
+    if (button && button.isConnected) {
+      button.textContent = 'Speichern';
+      updateRowDirtyState(row);
+    }
   }
 }
 
-document.querySelectorAll('.editable-cell').forEach((cell) => {
-  cell.addEventListener('click', (event) => {
-    if (event.target.closest('textarea, input')) return;
-    openEditor(cell);
-  });
-});
-
-document.querySelectorAll('.save-row-button').forEach((button) => {
-  button.addEventListener('click', () => {
-    const row = button.closest('tr');
-    if (row) saveRow(row);
-  });
-});
+bindViewerEditors(document);
