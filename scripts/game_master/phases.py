@@ -148,7 +148,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
             TransitionAction("new_game_init", {}),
         ),
         timer_action="reset_to_zero",
-        game_data_action="initialize run; players can be added/deleted",
+        game_data_action="initialize run; players_count can be adjusted",
     ),
     3: PhaseSpec(
         phase=3,

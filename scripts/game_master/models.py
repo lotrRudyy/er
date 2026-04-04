@@ -59,6 +59,7 @@ class RuntimeState:
         if self.last_riddle_solved_at:
             payload["last_riddle_solved_at"] = self.last_riddle_solved_at
         payload["timer_running"] = self.game_started_at is not None and self.phase >= 3 and self.phase < 14
+        payload["players_count"] = int(self.current_run.players_count) if self.current_run is not None else 0
         return payload
 
     def mark_hb(self, node_id: str) -> None:
