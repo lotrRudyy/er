@@ -78,6 +78,8 @@
           <tr>
             <th>Game ID</th>
             <th>Datum</th>
+            <th>Started At</th>
+            <th>Ended At</th>
             <th>Duration</th>
             <th>Spieleranzahl</th>
             <th>Hints</th>
@@ -93,7 +95,21 @@
               data-column="date"
               data-value="{{ serialize_db_value(game.get('date')) }}"
             >{{ serialize_db_value(game.get('date')) or '—' }}</td>
-            <td class="readonly-cell">{{ game.duration_mmss }}</td>
+            <td
+              class="editable-cell"
+              data-column="started_at"
+              data-value="{{ serialize_db_value(game.get('started_at')) }}"
+            >{{ game.started_at_display }}</td>
+            <td
+              class="editable-cell"
+              data-column="ended_at"
+              data-value="{{ serialize_db_value(game.get('ended_at')) }}"
+            >{{ game.ended_at_display }}</td>
+            <td
+              class="editable-cell"
+              data-column="duration_mmss"
+              data-value="{{ '' if game.duration_mmss == '—' else game.duration_mmss }}"
+            >{{ game.duration_mmss }}</td>
             <td
               class="editable-cell"
               data-column="players_count_display"
