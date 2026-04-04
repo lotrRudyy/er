@@ -305,7 +305,8 @@ function renderRiddles() {
   body.innerHTML = '';
   for (const riddle of state.riddles || []) {
     const infoHtml = renderRiddleInfo(riddle);
-    const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending';
+    const currentPhaseName = (state.game.phase_name || '').trim();
+    const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending' || (riddle.manual && currentPhaseName === riddle.id && riddle.phase_state !== 'solved');
     const tr = document.createElement('tr');
     tr.dataset.riddleId = riddle.id;
     tr.innerHTML = `
@@ -398,11 +399,9 @@ function wireTopControls() {
   });
 
   const input = document.getElementById('playersCountInput');
-  const minusButton = document.getElementById('playersCountMinus');
-  const plusButton = document.getElementById('playersCountPlus');
   const saveButton = document.getElementById('playersCountSave');
 
-  const getDraftCount = () => Math.max(0, parseInt(input?.value || String(state.game.players_count || 0), 10) || 0);
+  const getDraftCount = () => Math.max(0, parseInt(String(input?.value ?? state.game.players_count ?? 0).replace(/[^0-9-]/g, ''), 10) || 0, 0);
 
   const savePlayersCount = async (nextCount) => {
     const normalized = Math.max(0, parseInt(nextCount || 0, 10) || 0);
@@ -418,24 +417,15 @@ function wireTopControls() {
       playersCountEditing = false;
       renderPlayersCountControls();
     });
+    input.addEventListener('input', () => {
+      input.value = input.value.replace(/[^0-9]/g, '');
+    });
     input.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
       await savePlayersCount(getDraftCount());
     });
   }
-
-  minusButton?.addEventListener('click', async () => {
-    const next = Math.max(0, getDraftCount() - 1);
-    if (input) input.value = String(next);
-    await savePlayersCount(next);
-  });
-
-  plusButton?.addEventListener('click', async () => {
-    const next = getDraftCount() + 1;
-    if (input) input.value = String(next);
-    await savePlayersCount(next);
-  });
 
   saveButton?.addEventListener('click', async () => {
     await savePlayersCount(getDraftCount());

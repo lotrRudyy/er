@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -883,11 +884,10 @@ def _recalculate_game_riddle_solve_times(
         )
 
     final_solve = max((float(row.get("_solve_seconds")) for row in recalculated if row.get("_solve_seconds") is not None), default=None)
-    if final_solve is not None:
-        try:
-            conn.execute("UPDATE games SET duration_s = ? WHERE id = ?", (final_solve, game_id))
-        except Exception:
-            pass
+    try:
+        _refresh_game_duration_and_end(conn, game_id, final_solve)
+    except Exception:
+        pass
 
     return recalculated
 
@@ -896,6 +896,44 @@ def _refresh_game_hint_count(conn: sqlite3.Connection, game_id: str) -> int:
     total_hints = conn.execute("SELECT COUNT(*) FROM game_hints WHERE game_id = ?", (game_id,)).fetchone()[0]
     conn.execute("UPDATE games SET hint_count = ? WHERE id = ?", (int(total_hints or 0), game_id))
     return int(total_hints or 0)
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _refresh_game_duration_and_end(conn: sqlite3.Connection, game_id: str, explicit_duration_s: float | None = None) -> float | None:
+    if explicit_duration_s is None:
+        row = conn.execute(
+            "SELECT MAX(solve_time_from_run_start_s) FROM game_riddles WHERE game_id = ?",
+            (game_id,),
+        ).fetchone()
+        duration_s = None if not row or row[0] is None else float(row[0])
+    else:
+        duration_s = float(explicit_duration_s)
+
+    game_row = conn.execute("SELECT started_at, ended_at FROM games WHERE id = ?", (game_id,)).fetchone()
+    if game_row is None:
+        return duration_s
+
+    started_at = _parse_iso_datetime(game_row[0])
+    ended_at_value = game_row[1]
+    if duration_s is None:
+        conn.execute("UPDATE games SET duration_s = ?, ended_at = ? WHERE id = ?", (None, ended_at_value, game_id))
+        return None
+
+    next_ended_at = ended_at_value
+    if started_at is not None:
+        next_ended_at = (started_at + timedelta(seconds=max(0.0, duration_s))).isoformat(timespec='seconds')
+
+    conn.execute("UPDATE games SET duration_s = ?, ended_at = ? WHERE id = ?", (duration_s, next_ended_at, game_id))
+    return duration_s
 
 
 def update_hint_rows_for_riddle(conn: sqlite3.Connection, game_id: str, riddle: str, target_count: int) -> None:
@@ -976,6 +1014,7 @@ def list_games_from_db() -> list[dict[str, Any]]:
         item["date_display"] = str(item.get("date") or item.get("started_at_display")[:10] or "—")
         item["duration_mmss"] = format_mmss(item.get("duration_s"))
         item["players_count_display"] = display_players_count(item.get("players_count"))
+        item["leaderboard_code_display"] = serialize_db_value(item.get("leaderboard_code")) or ""
         games.append(item)
     return games
 
@@ -1402,6 +1441,9 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 values = [normalized_updates[column] for column in normalized_updates.keys()]
                 values.append(rowid)
                 conn.execute(f"UPDATE games SET {set_clause} WHERE rowid = ?", values)
+                game_id = str(_row_to_dict(current).get("id") or "")
+                if game_id and "duration_s" in normalized_updates:
+                    _refresh_game_duration_and_end(conn, game_id, normalized_updates.get("duration_s"))
             conn.commit()
             return
 
@@ -1692,8 +1734,8 @@ def api_solve() -> Any:
     node = str(data.get("node", "")).strip()
     if not node:
         return jsonify({"ok": False, "error": "node required"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node})
-    return jsonify({"ok": True})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node})
+    return jsonify({"ok": True, "node": node})
 
 
 @app.post("/api/lock")

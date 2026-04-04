@@ -41,6 +41,7 @@
             <th>Datum</th>
             <th>Duration</th>
             <th>Spieleranzahl</th>
+            <th>Leaderboard Code</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -51,6 +52,7 @@
             <td>{{ row.date_display }}</td>
             <td>{{ row.duration_mmss }}</td>
             <td>{{ row.players_count_display }}</td>
+            <td>{{ row.leaderboard_code_display or "—" }}</td>
             <td>
               <div class="game-actions-cell">
                 <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Open</a>
