@@ -506,11 +506,15 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .all-games-table th:nth-child(4) { width: 24%; }
 .all-games-table th:nth-child(5) { width: 20%; }
 
-.summary-table th:nth-child(1) { width: 34%; }
-.summary-table th:nth-child(2) { width: 14%; }
-.summary-table th:nth-child(3) { width: 10%; }
-.summary-table th:nth-child(4) { width: 30%; }
-.summary-table th:nth-child(5) { width: 12%; }
+.summary-table th:nth-child(1) { width: 26%; }
+.summary-table th:nth-child(2) { width: 8%; }
+.summary-table th:nth-child(3) { width: 13%; }
+.summary-table th:nth-child(4) { width: 15%; }
+.summary-table th:nth-child(5) { width: 7%; }
+.summary-table th:nth-child(6) { width: 8%; }
+.summary-table th:nth-child(7) { width: 5%; }
+.summary-table th:nth-child(8) { width: 8%; }
+.summary-table th:nth-child(9) { width: 10%; }
 
 .riddles-compact-table th:nth-child(1) { width: 28%; }
 .riddles-compact-table th:nth-child(2) { width: 22%; }
@@ -554,20 +558,37 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   font-variant-numeric: tabular-nums;
 }
 
-.summary-table td:nth-child(2),
+.summary-table th:nth-child(1),
+.summary-table td:nth-child(1),
+.summary-table th:nth-child(3),
+.summary-table td:nth-child(3),
+.summary-table th:nth-child(4),
+.summary-table td:nth-child(4),
+.summary-table th:nth-child(5),
 .summary-table td:nth-child(5),
+.summary-table th:nth-child(6),
 .summary-table td:nth-child(6),
+.summary-table th:nth-child(7),
 .summary-table td:nth-child(7),
+.summary-table th:nth-child(8),
 .summary-table td:nth-child(8) {
   white-space: nowrap;
 }
 
+.summary-table td:nth-child(1),
 .summary-table td:nth-child(3),
 .summary-table td:nth-child(4) {
-  font-size: 13px;
-  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
+.summary-table td:nth-child(3),
+.summary-table td:nth-child(4) {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.summary-table td:nth-child(5),
 .summary-table td:nth-child(6),
 .summary-table td:nth-child(7),
 .summary-table td:nth-child(8) {
