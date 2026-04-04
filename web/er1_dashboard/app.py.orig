@@ -28,7 +28,6 @@ GAME_DB_PATH = Path(
 
 REMOVED_GAMES_DIR = GAME_DB_PATH.parent / "removed"
 REMOVED_GAME_DB_PATH = REMOVED_GAMES_DIR / GAME_DB_PATH.name
-RUN_JSON_DIR = GAME_DB_PATH.parent / "game_runs"
 
 TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
@@ -863,179 +862,6 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
-def _table_columns(conn: sqlite3.Connection, table_name: str) -> list[dict[str, Any]]:
-    return [
-        {"name": str(row[1]), "type": str(row[2] or "TEXT")}
-        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    ]
-
-
-def _ensure_missing_columns(src: sqlite3.Connection, dst: sqlite3.Connection, table_name: str) -> None:
-    src_columns = _table_columns(src, table_name)
-    dst_column_names = {item["name"] for item in _table_columns(dst, table_name)}
-    for column in src_columns:
-        name = column["name"]
-        if name in dst_column_names:
-            continue
-        coltype = column["type"] or "TEXT"
-        if name == "players_count":
-            dst.execute(f"ALTER TABLE {table_name} ADD COLUMN players_count INTEGER NOT NULL DEFAULT 0")
-        else:
-            dst.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {coltype}")
-
-
-def _intersecting_columns(src: sqlite3.Connection, dst: sqlite3.Connection, table_name: str) -> list[str]:
-    src_names = [item["name"] for item in _table_columns(src, table_name)]
-    dst_names = {item["name"] for item in _table_columns(dst, table_name)}
-    return [name for name in src_names if name in dst_names]
-
-
-def _run_json_path(game_id: str) -> Path:
-    return RUN_JSON_DIR / f"{game_id}.json"
-
-
-def _restore_game_from_run_json_backup(conn: sqlite3.Connection, game_id: str) -> bool:
-    backup_path = _run_json_path(game_id)
-    if not backup_path.exists():
-        return False
-    try:
-        payload = json.loads(backup_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if not isinstance(payload, dict):
-        return False
-
-    game_row = conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone()
-    if game_row is None:
-        return False
-
-    game_columns = {item["name"] for item in _table_columns(conn, "games")}
-    game_updates: dict[str, Any] = {}
-    if "players_count" in game_columns:
-        game_updates["players_count"] = int(payload.get("players_count") or 0)
-    if "leaderboard_code" in game_columns:
-        code = str(payload.get("leaderboard_code") or "").strip()
-        game_updates["leaderboard_code"] = code or None
-    if "hint_count" in game_columns:
-        hints_payload = payload.get("hints") if isinstance(payload.get("hints"), list) else []
-        game_updates["hint_count"] = len(hints_payload)
-    if game_updates:
-        set_clause = ", ".join(f"{name} = ?" for name in game_updates.keys())
-        conn.execute(f"UPDATE games SET {set_clause} WHERE id = ?", [*game_updates.values(), game_id])
-
-    riddle_timings = payload.get("riddle_timings")
-    restored_any = False
-    if isinstance(riddle_timings, dict):
-        conn.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
-        for riddle_name, timing in riddle_timings.items():
-            timing = timing if isinstance(timing, dict) else {}
-            conn.execute(
-                """
-                INSERT INTO game_riddles (
-                    game_id, riddle, source, activated_at, solved_at,
-                    solve_time_from_run_start_s, solve_time_from_activation_s, solved
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    game_id,
-                    str(timing.get("node") or riddle_name),
-                    str(timing.get("source") or "manual"),
-                    timing.get("activated_at"),
-                    timing.get("solved_at"),
-                    timing.get("solve_time_from_run_start_s"),
-                    timing.get("solve_time_from_activation_s"),
-                    1 if bool(timing.get("solved")) else 0,
-                ),
-            )
-            restored_any = True
-
-    hints_payload = payload.get("hints")
-    if isinstance(hints_payload, list):
-        conn.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
-        for hint in hints_payload:
-            hint = hint if isinstance(hint, dict) else {}
-            conn.execute(
-                "INSERT INTO game_hints (game_id, at, riddle, hint_text) VALUES (?, ?, ?, ?)",
-                (
-                    game_id,
-                    hint.get("at") or payload.get("ended_at") or payload.get("started_at") or payload.get("date") or "",
-                    str(hint.get("riddle") or ""),
-                    str(hint.get("hint_text") or ""),
-                ),
-            )
-            restored_any = True
-
-    return restored_any
-
-
-def _restore_game_from_backup_db(conn: sqlite3.Connection, game_id: str) -> bool:
-    candidates = []
-    for path in sorted(GAME_DB_PATH.parent.glob("*.sqlite3*")):
-        if path.resolve() != GAME_DB_PATH.resolve():
-            candidates.append(path)
-    if REMOVED_GAME_DB_PATH.exists():
-        candidates.append(REMOVED_GAME_DB_PATH)
-    seen: set[str] = set()
-    for path in candidates:
-        key = str(path.resolve())
-        if key in seen or not path.exists() or path.is_dir():
-            continue
-        seen.add(key)
-        try:
-            with sqlite3.connect(path) as backup:
-                backup.row_factory = sqlite3.Row
-                if not _table_exists(backup, "games"):
-                    continue
-                row = backup.execute("SELECT id FROM games WHERE id = ?", (game_id,)).fetchone()
-                if row is None:
-                    continue
-                if _table_exists(backup, "game_riddles"):
-                    riddles = backup.execute("SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
-                    if riddles:
-                        conn.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
-                        cols = _intersecting_columns(backup, conn, "game_riddles")
-                        for row in riddles:
-                            values = dict(row)
-                            conn.execute(
-                                f"INSERT INTO game_riddles ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                                tuple(values.get(col) for col in cols),
-                            )
-                if _table_exists(backup, "game_hints"):
-                    hints = backup.execute("SELECT * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
-                    if hints:
-                        conn.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
-                        cols = _intersecting_columns(backup, conn, "game_hints")
-                        for row in hints:
-                            values = dict(row)
-                            conn.execute(
-                                f"INSERT INTO game_hints ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                                tuple(values.get(col) for col in cols),
-                            )
-                game_cols = {item["name"] for item in _table_columns(conn, "games")}
-                backup_game = dict(backup.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone())
-                updates = {}
-                for name in ("players_count", "hint_count", "leaderboard_code"):
-                    if name in game_cols and name in backup_game:
-                        updates[name] = backup_game.get(name)
-                if updates:
-                    set_clause = ", ".join(f"{name} = ?" for name in updates.keys())
-                    conn.execute(f"UPDATE games SET {set_clause} WHERE id = ?", [*updates.values(), game_id])
-                has_riddles = conn.execute("SELECT 1 FROM game_riddles WHERE game_id = ? LIMIT 1", (game_id,)).fetchone()
-                has_hints = conn.execute("SELECT 1 FROM game_hints WHERE game_id = ? LIMIT 1", (game_id,)).fetchone()
-                if has_riddles or has_hints:
-                    return True
-        except Exception:
-            continue
-    return False
-
-
-def _restore_missing_game_details_from_backups(conn: sqlite3.Connection, game_id: str) -> bool:
-    restored = _restore_game_from_backup_db(conn, game_id)
-    if restored:
-        return True
-    return _restore_game_from_run_json_backup(conn, game_id)
-
-
 def _ensure_table_schema(src: sqlite3.Connection, dst: sqlite3.Connection, table_name: str) -> None:
     if _table_exists(dst, table_name):
         return
@@ -1067,26 +893,25 @@ def move_game_to_removed(game_id: str) -> None:
 
         for table_name in ("games", "game_riddles", "game_hints"):
             _ensure_table_schema(src, dst, table_name)
-            _ensure_missing_columns(src, dst, table_name)
 
         dst.execute("DELETE FROM games WHERE id = ?", (game_id,))
         dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
         dst.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
 
         game_values = dict(game_row)
-        game_cols = _intersecting_columns(src, dst, "games")
+        game_cols = list(game_values.keys())
         dst.execute(
             f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})",
-            tuple(game_values.get(col) for col in game_cols),
+            tuple(game_values[col] for col in game_cols),
         )
 
         for rows, table_name in ((riddle_rows, "game_riddles"), (hint_rows, "game_hints")):
-            cols = _intersecting_columns(src, dst, table_name)
             for row in rows:
                 values = dict(row)
+                cols = list(values.keys())
                 dst.execute(
                     f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                    tuple(values.get(col) for col in cols),
+                    tuple(values[col] for col in cols),
                 )
 
         src.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
@@ -1115,18 +940,6 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
             "SELECT rowid AS _rowid_, * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC",
             (game_id,),
         ).fetchall()]
-
-        if not riddles and _restore_missing_game_details_from_backups(conn, game_id):
-            game = _row_to_dict(conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone())
-            riddles = [_row_to_dict(row) for row in conn.execute(
-                "SELECT rowid AS _rowid_, * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC",
-                (game_id,),
-            ).fetchall()]
-            hints = [_row_to_dict(row) for row in conn.execute(
-                "SELECT rowid AS _rowid_, * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC",
-                (game_id,),
-            ).fetchall()]
-            conn.commit()
 
     if "players_count" in game:
         game["players_count"] = parse_players_count_input(game.get("players_count"))
@@ -1443,7 +1256,6 @@ def game_viewer() -> str:
         message=message,
         db_path=str(GAME_DB_PATH),
         removed_db_path=str(REMOVED_GAME_DB_PATH),
-        run_json_dir=str(RUN_JSON_DIR),
         summary_columns=summary_columns,
         riddle_columns=riddle_columns,
         hint_columns=hint_columns,
