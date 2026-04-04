@@ -338,7 +338,7 @@ class DashboardStore:
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
-            "players": [],
+            "players_count": int(game.get("players_count") or 0),
             "timer_running": timer_running,
             "elapsed_s": _seconds_since(started_at) if timer_running else 0,
             "started_at": started_at,
@@ -744,23 +744,18 @@ def serialize_db_value(value: Any) -> str:
     return str(value)
 
 
-def display_player_names(value: Any) -> str:
-    parsed = _maybe_json(value)
-    if isinstance(parsed, list):
-        items = [str(item).strip() for item in parsed if str(item).strip()]
-        return ", ".join(items) if items else "—"
-    text = str(parsed or "").strip()
-    return text or "—"
+def display_players_count(value: Any) -> str:
+    try:
+        return str(max(int(float(str(value).strip() or "0")), 0))
+    except Exception:
+        return "0"
 
 
-def parse_player_names_input(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text or text == "—":
-        return json.dumps([], ensure_ascii=False)
-    parts = [item.strip() for item in re.split(r"[,;\n]+", text) if item.strip()]
-    if not parts:
-        parts = [text]
-    return json.dumps(parts, ensure_ascii=False)
+def parse_players_count_input(value: Any) -> int:
+    try:
+        return max(int(float(str(value).strip() or "0")), 0)
+    except Exception as exc:
+        raise ValueError("players_count must be a non-negative integer") from exc
 
 
 def parse_mmss_input(value: Any) -> float | None:
@@ -854,7 +849,7 @@ def list_games_from_db() -> list[dict[str, Any]]:
         item["started_at_display"] = format_datetime_readable(item.get("started_at") or item.get("game_started_at") or item.get("date"))
         item["date_display"] = str(item.get("date") or item.get("started_at_display")[:10] or "—")
         item["duration_mmss"] = format_mmss(item.get("duration_s"))
-        item["players_display"] = display_player_names(item.get("player_names_json"))
+        item["players_count_display"] = display_players_count(item.get("players_count"))
         games.append(item)
     return games
 
@@ -946,7 +941,8 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
             (game_id,),
         ).fetchall()]
 
-    game["player_names_json"] = _maybe_json(game.get("player_names_json"))
+    if "players_count" in game:
+        game["players_count"] = parse_players_count_input(game.get("players_count"))
     for row in riddles:
         for key in list(row.keys()):
             row[key] = _maybe_json(row[key])
@@ -991,8 +987,8 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
             normalized_updates: dict[str, Any] = {}
             for key, value in updates.items():
                 column = str(key or "").strip()
-                if column == "players_display":
-                    normalized_updates["player_names_json"] = parse_player_names_input(value)
+                if column == "players_count_display":
+                    normalized_updates["players_count"] = parse_players_count_input(value)
                 elif column == "duration_mmss":
                     normalized_updates["duration_s"] = parse_mmss_input(value)
                 elif column == "hint_count_display":
@@ -1203,7 +1199,7 @@ def game_viewer() -> str:
                 game["started_at_display"] = format_datetime_readable(game.get("started_at") or game.get("game_started_at") or game.get("date"))
                 game["ended_at_display"] = format_datetime_readable(game.get("ended_at"))
                 game["duration_mmss"] = format_mmss(game.get("duration_s"))
-                game["players_display"] = display_player_names(game.get("player_names_json"))
+                game["players_count_display"] = display_players_count(game.get("players_count"))
                 game["hint_count_display"] = int(game.get("hint_count") or 0)
                 game["leaderboard_code_display"] = serialize_db_value(game.get("leaderboard_code")) or ""
 
@@ -1231,7 +1227,7 @@ def game_viewer() -> str:
 
                     row["hint_count_display"] = int(riddle_hint_counts.get(str(row.get("riddle") or ""), 0))
 
-                summary_columns = [col for col in ["id", "date", "player_names_json", "hint_count", "leaderboard_code"] if col in game]
+                summary_columns = [col for col in ["id", "date", "players_count", "hint_count", "leaderboard_code"] if col in game]
                 riddle_columns = ["riddle", "solve_time_mmss", "riddle_time_mmss", "hint_count_display"]
                 hint_columns = build_editable_columns(hints, preferred=["at", "riddle", "hint_text"])
 
@@ -1319,15 +1315,15 @@ def api_phase() -> Any:
     return jsonify({"ok": False, "error": "invalid phase action"}), 400
 
 
-@app.post("/api/players")
-def api_players() -> Any:
-    data = request.get_json(force=True)
-    players = data.get("players") or []
-    if not isinstance(players, list):
-        return jsonify({"ok": False, "error": "players must be a list"}), 400
-    cleaned = [str(x).strip() for x in players if str(x).strip()]
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players", "players": cleaned})
-    return jsonify({"ok": True, "players": cleaned})
+@app.post("/api/players-count")
+def api_players_count() -> Any:
+    data = request.get_json(force=True) or {}
+    try:
+        players_count = parse_players_count_input(data.get("players_count", 0))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count})
+    return jsonify({"ok": True, "players_count": players_count})
 
 
 @app.post("/api/solve")

@@ -81,7 +81,10 @@ body { padding: 12px; }
   gap: 6px;
 }
 .players-inline { margin-top: 10px; }
-.players-inline .player-input { margin-bottom: 6px; }
+.players-count-controls { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.players-count-input { width: 84px; height: 38px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); color: #fff; padding: 0 12px; font-size: 18px; }
+.players-count-button, .players-count-save { min-width: 42px; height: 38px; border: 0; border-radius: 10px; background: rgba(255,255,255,0.14); color: #fff; font-size: 18px; cursor: pointer; }
+.players-count-save { padding: 0 14px; }
 
 button, .player-input, .hint-input, .dim-input { font-size: 14px; }
 button {
@@ -101,12 +104,6 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 }
 .hint-input { margin-bottom: 10px; }
 
-.players-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-content: flex-start;
-}
 .player-chip, .hint-item {
   display: inline-flex;
   align-items: center;

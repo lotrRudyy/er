@@ -1,6 +1,6 @@
 
 const state = {
-  game: { phase: 0, last_phase: null, phase_name: 'standby', phase_display: '0 standby', last_phase_name: '', elapsed_s: 0, current_riddle_elapsed_s: 0, current_riddle_name: '', timer_running: false, players: [] },
+  game: { phase: 0, last_phase: null, phase_name: 'standby', phase_display: '0 standby', last_phase_name: '', elapsed_s: 0, current_riddle_elapsed_s: 0, current_riddle_name: '', timer_running: false, players_count: 0 },
   nodes: [],
   locks: [],
   lights: [],
@@ -15,7 +15,7 @@ let localRiddleTimerStartedAt = 0;
 
 const dimDrafts = {};
 const dimEditing = {};
-let playerEditing = false;
+let playersCountEditing = false;
 const hintEditing = new Set();
 
 async function api(path, options = {}) {
@@ -83,32 +83,13 @@ function readLocalRiddleTimer() {
   return Math.max(0, Math.floor((Date.now() - localRiddleTimerStartedAt) / 1000));
 }
 
-function renderPlayersInput() {
-  const input = document.getElementById('playerInput');
-  if (!playerEditing && document.activeElement !== input) {
-    input.value = '';
+function renderPlayersCountControls() {
+  const input = document.getElementById('playersCountInput');
+  if (!input) return;
+  const currentValue = Math.max(0, parseInt(state.game.players_count || 0, 10) || 0);
+  if (!playersCountEditing && document.activeElement !== input) {
+    input.value = String(currentValue);
   }
-}
-
-function renderPlayersList() {
-  const wrap = document.getElementById('playersList');
-  wrap.innerHTML = '';
-  (state.game.players || []).forEach((name, idx) => {
-    const chip = document.createElement('div');
-    chip.className = 'player-chip';
-    chip.innerHTML = `<span>${name}</span>`;
-    const btn = document.createElement('button');
-    btn.className = 'player-remove';
-    btn.textContent = 'x';
-    btn.addEventListener('click', async () => {
-      const next = state.game.players.filter((_, i) => i !== idx);
-      await api('/api/players', { method: 'POST', body: JSON.stringify({ players: next }) });
-      state.game.players = next;
-      renderPlayersList();
-    });
-    chip.appendChild(btn);
-    wrap.appendChild(chip);
-  });
 }
 
 function renderTop() {
@@ -118,8 +99,7 @@ function renderTop() {
     : `${state.game.last_phase}: ${state.game.last_phase_name_pretty || state.game.last_phase_name || ''}`.trim();
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
   document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
-  renderPlayersInput();
-  renderPlayersList();
+  renderPlayersCountControls();
 }
 
 function renderNodes() {
@@ -417,19 +397,48 @@ function wireTopControls() {
     });
   });
 
-  const input = document.getElementById('playerInput');
-  input.addEventListener('focus', () => { playerEditing = true; });
-  input.addEventListener('blur', () => { playerEditing = false; });
-  input.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const name = input.value.trim();
-    if (!name) return;
-    const next = [...(state.game.players || []), name];
-    await api('/api/players', { method: 'POST', body: JSON.stringify({ players: next }) });
-    input.value = '';
-    playerEditing = false;
+  const input = document.getElementById('playersCountInput');
+  const minusButton = document.getElementById('playersCountMinus');
+  const plusButton = document.getElementById('playersCountPlus');
+  const saveButton = document.getElementById('playersCountSave');
+
+  const getDraftCount = () => Math.max(0, parseInt(input?.value || String(state.game.players_count || 0), 10) || 0);
+
+  const savePlayersCount = async (nextCount) => {
+    const normalized = Math.max(0, parseInt(nextCount || 0, 10) || 0);
+    await api('/api/players-count', { method: 'POST', body: JSON.stringify({ players_count: normalized }) });
+    state.game.players_count = normalized;
+    playersCountEditing = false;
     await fetchAndPatch();
+  };
+
+  if (input) {
+    input.addEventListener('focus', () => { playersCountEditing = true; });
+    input.addEventListener('blur', () => {
+      playersCountEditing = false;
+      renderPlayersCountControls();
+    });
+    input.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      await savePlayersCount(getDraftCount());
+    });
+  }
+
+  minusButton?.addEventListener('click', async () => {
+    const next = Math.max(0, getDraftCount() - 1);
+    if (input) input.value = String(next);
+    await savePlayersCount(next);
+  });
+
+  plusButton?.addEventListener('click', async () => {
+    const next = getDraftCount() + 1;
+    if (input) input.value = String(next);
+    await savePlayersCount(next);
+  });
+
+  saveButton?.addEventListener('click', async () => {
+    await savePlayersCount(getDraftCount());
   });
 }
 

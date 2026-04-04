@@ -5,7 +5,7 @@ Single-page Flask dashboard for ER1.
 ## Features
 - Game mode buttons for the 4 current modes
 - Timer that counts up from the current run start
-- Player list with add-on-enter and remove buttons
+- Spieleranzahl setzen über Zähler/Plus-Minus
 - Lock controls
 - Light group controls
 - Solve buttons for riddles
@@ -35,7 +35,7 @@ http://<pi-ip>:8080
 
 ## Notes
 
-- Uses `game/cmd` for mode, players, and solve.
+- Uses `game/cmd` for mode, players_count, and solve.
 - Uses `maglock/cmd` for lock control.
 - Uses `lighting/cmd` for light control.
 - Uses `star_sky/sys/cmd` plus `lighting/cmd` for the `star sky` row.

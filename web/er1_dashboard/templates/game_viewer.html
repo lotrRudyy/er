@@ -40,7 +40,7 @@
             <th>Game ID</th>
             <th>Datum</th>
             <th>Duration</th>
-            <th>Players</th>
+            <th>Spieleranzahl</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -50,7 +50,7 @@
             <td>{{ row.id }}</td>
             <td>{{ row.date_display }}</td>
             <td>{{ row.duration_mmss }}</td>
-            <td>{{ row.players_display }}</td>
+            <td>{{ row.players_count_display }}</td>
             <td>
               <div class="game-actions-cell">
                 <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Open</a>
@@ -77,7 +77,7 @@
             <th>Game ID</th>
             <th>Datum</th>
             <th>Duration</th>
-            <th>Players</th>
+            <th>Spieleranzahl</th>
             <th>Hints</th>
             <th>Leaderboard Code</th>
             <th>Save</th>
@@ -98,9 +98,9 @@
             >{{ game.duration_mmss }}</td>
             <td
               class="editable-cell"
-              data-column="players_display"
-              data-value="{{ game.players_display if game.players_display != '—' else '' }}"
-            >{{ game.players_display }}</td>
+              data-column="players_count_display"
+              data-value="{{ game.players_count_display if game.players_count_display != '—' else '0' }}"
+            >{{ game.players_count_display }}</td>
             <td
               class="editable-cell"
               data-column="hint_count_display"

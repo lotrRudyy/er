@@ -21,9 +21,13 @@
             <button data-phase-action="start">Start</button>
           </div>
           <div class="players-inline">
-            <div class="label small-label">Players</div>
-            <input id="playerInput" class="player-input" type="text" placeholder="Add player + Enter" />
-            <div id="playersList" class="players-list"></div>
+            <div class="label small-label">Spieleranzahl</div>
+            <div class="players-count-controls">
+              <button id="playersCountMinus" type="button" class="players-count-button">−</button>
+              <input id="playersCountInput" class="players-count-input" type="number" min="0" step="1" value="0" />
+              <button id="playersCountPlus" type="button" class="players-count-button">+</button>
+              <button id="playersCountSave" type="button" class="players-count-save">Setzen</button>
+            </div>
           </div>
         </div>
 
