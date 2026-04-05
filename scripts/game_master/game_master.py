@@ -166,11 +166,10 @@ class GameMaster:
     def _finalize_current_run(self) -> None:
         with self._lock:
             run = self.state.current_run
-            if run is None:
-                return
-            if run.ended_at is None:
-                run.ended_at = iso_now()
-                run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
+        if run is None:
+            return
+        run.ended_at = iso_now()
+        run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
         self.db.save_completed_run(run)
         self._write_run_json(run)
         self.publish_game_state()
@@ -278,24 +277,42 @@ class GameMaster:
             self.state.node_last_state[node_id] = self._merge_riddle_state(previous, payload)
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
-        node = self._normalize_riddle_id(payload.get("node", ""))
-        event = str(payload.get("event", "")).strip().lower()
-        if not node or not event:
-            raise ValueError("game/event requires node and event")
+        raw_node = str(payload.get("node", "")).strip()
+        raw_event = str(payload.get("event", "")).strip()
+        if not raw_node and not raw_event:
+            raise ValueError("game/event requires node and/or event")
+
+        node = self._normalize_riddle_id(raw_node)
+        event = raw_event.lower()
+        event_token = self._normalize_riddle_id(raw_event)
         self._record_event("game_event", payload)
 
-        solved_events = {
+        solve_events = {
             "solved",
             "solve",
-            "finished",
-            "complete",
             "completed",
-            f"{node}_solved",
-            f"{node}_final",
-            f"{node}_completed",
+            "complete",
+            "finish",
+            "finished",
+            "success",
+            "successed",
+            "resolved",
         }
-        if event in solved_events:
-            self.handle_solve(node, source="node")
+
+        # Accept both styles used by nodes:
+        # 1) {"node": "sissi", "event": "solved"}
+        # 2) {"node": "sissi_final", "event": "completed"}
+        # 3) {"event": "sissi_solved"} or {"event": "star_slider_solved"}
+        inferred_riddle = None
+        if node in config.RIDDLES:
+            inferred_riddle = node
+        elif event_token in config.RIDDLES:
+            inferred_riddle = event_token
+        elif event.endswith("_solved") or event.endswith("_final") or event.endswith("_completed"):
+            inferred_riddle = self._normalize_riddle_id(event)
+
+        if inferred_riddle and (event in solve_events or event_token in config.RIDDLES or event.endswith(("_solved", "_final", "_completed"))):
+            self.handle_solve(inferred_riddle, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
         cmd = str(payload.get("cmd", "")).strip().lower()
@@ -417,11 +434,6 @@ class GameMaster:
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
-            current_phase = self.state.phase
-
-        if current_phase == 13 and riddle == "sissi":
-            self._enter_phase(14, event_name)
-            return
 
         required = set(spec.required_events)
         if required and required.issubset(completed):
@@ -567,7 +579,6 @@ class GameMaster:
             self.publish_debug("candles_solve_enabled", payload)
             return
         if kind == "save_game_to_db":
-            self._finalize_current_run()
             return
         self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
 
