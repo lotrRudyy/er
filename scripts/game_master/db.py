@@ -60,8 +60,7 @@ class Database:
                 '''
             )
             self._ensure_games_column(conn, "leaderboard_code", "TEXT")
-            self._ensure_games_column(conn, "players_count", "INTEGER NOT NULL DEFAULT 0")
-            self._drop_player_names_column_if_present(conn)
+            self._normalize_games_schema(conn)
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL"
             )
@@ -74,13 +73,25 @@ class Database:
         if column_name not in existing_columns:
             conn.execute(f"ALTER TABLE games ADD COLUMN {column_name} {column_type}")
 
-    def _drop_player_names_column_if_present(self, conn: sqlite3.Connection) -> None:
+    def _normalize_games_schema(self, conn: sqlite3.Connection) -> None:
         existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()]
-        if "player_names_json" not in existing_columns:
+        needs_rebuild = (
+            "player_names_json" in existing_columns
+            or "player_names" in existing_columns
+            or ("players_count" not in existing_columns and "player_count" in existing_columns)
+        )
+
+        if not needs_rebuild:
+            if "players_count" not in existing_columns:
+                conn.execute("ALTER TABLE games ADD COLUMN players_count INTEGER NOT NULL DEFAULT 0")
             return
 
+        players_expr = "COALESCE(players_count, player_count, 0)" if "player_count" in existing_columns else "COALESCE(players_count, 0)"
+        hint_expr = "COALESCE(hint_count, 0)"
+        leaderboard_expr = "leaderboard_code" if "leaderboard_code" in existing_columns else "NULL"
+
         conn.executescript(
-            """
+            f"""
             ALTER TABLE games RENAME TO games_old;
 
             CREATE TABLE games (
@@ -95,7 +106,7 @@ class Database:
             );
 
             INSERT INTO games (id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code)
-            SELECT id, date, started_at, ended_at, duration_s, COALESCE(players_count, 0), hint_count, leaderboard_code
+            SELECT id, date, started_at, ended_at, duration_s, {players_expr}, {hint_expr}, {leaderboard_expr}
             FROM games_old;
 
             DROP TABLE games_old;

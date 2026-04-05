@@ -31,6 +31,53 @@ REMOVED_GAMES_DIR = GAME_DB_PATH.parent / "removed"
 REMOVED_GAME_DB_PATH = REMOVED_GAMES_DIR / GAME_DB_PATH.name
 RUN_JSON_DIR = GAME_DB_PATH.parent / "game_runs"
 
+
+def _normalize_existing_games_db_schema(db_path: Path) -> None:
+    if not db_path.exists():
+        return
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+        if "games" not in tables:
+            return
+        existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()]
+        needs_rebuild = (
+            "player_names_json" in existing_columns
+            or "player_names" in existing_columns
+            or ("players_count" not in existing_columns and "player_count" in existing_columns)
+        )
+        if not needs_rebuild:
+            if "players_count" not in existing_columns:
+                conn.execute("ALTER TABLE games ADD COLUMN players_count INTEGER NOT NULL DEFAULT 0")
+            return
+
+        players_expr = "COALESCE(players_count, player_count, 0)" if "player_count" in existing_columns else "COALESCE(players_count, 0)"
+        hint_expr = "COALESCE(hint_count, 0)" if "hint_count" in existing_columns else "0"
+        leaderboard_expr = "leaderboard_code" if "leaderboard_code" in existing_columns else "NULL"
+
+        conn.executescript(f"""
+            ALTER TABLE games RENAME TO games_old;
+
+            CREATE TABLE games (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_s REAL,
+                players_count INTEGER NOT NULL DEFAULT 0,
+                hint_count INTEGER NOT NULL DEFAULT 0,
+                leaderboard_code TEXT
+            );
+
+            INSERT INTO games (id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code)
+            SELECT id, date, started_at, ended_at, duration_s, {players_expr}, {hint_expr}, {leaderboard_expr}
+            FROM games_old;
+
+            DROP TABLE games_old;
+        """)
+
+
+_normalize_existing_games_db_schema(GAME_DB_PATH)
+
 TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"
@@ -1753,29 +1800,13 @@ def api_players_count() -> Any:
     return jsonify({"ok": True, "players_count": players_count})
 
 
-def _normalize_manual_solve_node(value: Any) -> str:
-    raw = str(value or "").strip().lower()
-    normalized = raw.replace("-", "_").replace(" ", "_")
-    aliases = {
-        "sisi": "sissi",
-        "sissi_solved": "sissi",
-        "sissi_final": "sissi",
-        "sissi_completed": "sissi",
-        "sissi_finished": "sissi",
-        "openprison": "open_prison",
-        "mountwheel": "mount_wheel",
-        "ropepaths": "rope_paths",
-    }
-    return aliases.get(normalized, normalized)
-
-
 @app.post("/api/solve")
 def api_solve() -> Any:
     data = request.get_json(force=True)
-    node = _normalize_manual_solve_node(data.get("node", ""))
+    node = str(data.get("node", "")).strip()
     if not node:
         return jsonify({"ok": False, "error": "node required"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node})
     return jsonify({"ok": True, "node": node})
 
 
