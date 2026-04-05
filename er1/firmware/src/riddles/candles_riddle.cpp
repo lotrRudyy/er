@@ -294,8 +294,10 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   uint32_t now = millis();
   if (now - lastTrig[idx] < kRefractMs) return false;
 
-  static constexpr int samples = 50;
+  static constexpr int samples = kBlowWindowSamples;
+  static constexpr int delayMs = kBlowSampleDelayMs;
   static constexpr int needed = (samples * 60 + 99) / 100;
+  static constexpr uint32_t windowMs = uint32_t(samples) * uint32_t(delayMs);
 
   int over = 0;
   int minV = 4096;
@@ -316,6 +318,8 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
     mm.samples++;
     mm.lastRaw = (uint16_t)v;
     if ((uint16_t)v > mm.maxVal) mm.maxVal = (uint16_t)v;
+
+    delay(delayMs);
   }
 
   bool hit = (over >= needed);
@@ -328,20 +332,25 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   lastNeeded_[idx] = (uint8_t)needed;
   lastHit_[idx] = hit ? 1 : 0;
 
+  String payload = String("{\"i\":") + idx +
+                   ",\"base_eff\":" + effBase_[idx] +
+                   ",\"delta\":" + delta_[idx] +
+                   ",\"thr_abs\":" + thrAbs +
+                   ",\"samples\":" + samples +
+                   ",\"delay_ms\":" + delayMs +
+                   ",\"window_ms\":" + windowMs +
+                   ",\"needed\":" + needed +
+                   ",\"over\":" + over +
+                   ",\"avg\":" + lastAvgWin_[idx] +
+                   ",\"min\":" + minV +
+                   ",\"max\":" + maxV +
+                   ",\"hit\":" + (hit ? 1 : 0) +
+                   "}";
+
   if (hit) {
-    const int baseEff = effBase_[idx];
-    String payload = String("{\"i\":") + idx +
-                     ",\"base_eff\":" + baseEff +
-                     ",\"delta\":" + delta_[idx] +
-                     ",\"thr_abs\":" + thrAbs +
-                     ",\"samples\":" + samples +
-                     ",\"needed\":" + needed +
-                     ",\"over\":" + over +
-                     ",\"avg\":" + lastAvgWin_[idx] +
-                     ",\"min\":" + minV +
-                     ",\"max\":" + maxV +
-                     "}";
     log("INF", "candles_blow", payload);
+  } else {
+    log("DBG", "candles_blow_reject", payload);
   }
 
   return hit;

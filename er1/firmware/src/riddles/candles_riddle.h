@@ -19,6 +19,8 @@ private:
   static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kSeqTimeoutMs = 4500;
   static constexpr size_t kAttemptStringMax = 24;
+  static constexpr int kBlowWindowSamples = 150;
+  static constexpr int kBlowSampleDelayMs = 2;
 
   static constexpr int kLedPins[4] = {12, 14, 26, 25};
   static constexpr int kMicPins[4] = {33, 32, 35, 34};
