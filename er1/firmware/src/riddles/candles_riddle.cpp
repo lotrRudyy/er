@@ -290,68 +290,65 @@ void CandlesRiddle::initState() {
 bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   static uint32_t lastTrig[4] = {0, 0, 0, 0};
   static constexpr uint32_t kRefractMs = 250;
+  static constexpr uint32_t kWindowUs = 100000;  // 100 ms total window, no delay()
 
   uint32_t now = millis();
   if (now - lastTrig[idx] < kRefractMs) return false;
 
-  static constexpr int samples = kBlowWindowSamples;
-  static constexpr int delayMs = kBlowSampleDelayMs;
-  static constexpr int needed = (samples * 60 + 99) / 100;
-  static constexpr uint32_t windowMs = uint32_t(samples) * uint32_t(delayMs);
-
   int over = 0;
+  int samples = 0;
   int minV = 4096;
   int maxV = 0;
   uint32_t sum = 0;
   int lastRaw = 0;
 
-  for (int k = 0; k < samples; k++) {
+  const uint32_t startUs = micros();
+  while ((uint32_t)(micros() - startUs) < kWindowUs) {
     int v = analogRead(kMicPins[idx]);
     lastRaw = v;
     sum += (uint32_t)v;
     if (v < minV) minV = v;
     if (v > maxV) maxV = v;
     if (v > thrAbs) over++;
+    samples++;
 
     MicMetric& mm = metrics_[idx];
     mm.sum += (uint32_t)v;
     mm.samples++;
     mm.lastRaw = (uint16_t)v;
     if ((uint16_t)v > mm.maxVal) mm.maxVal = (uint16_t)v;
-
-    delay(delayMs);
   }
 
-  bool hit = (over >= needed);
+  if (samples <= 0) return false;
+
+  const int needed = (samples * 60 + 99) / 100;
+  const bool hit = (over >= needed);
   if (hit) lastTrig[idx] = now;
 
   lastRaw_[idx] = (uint16_t)lastRaw;
   lastAvgWin_[idx] = (uint16_t)(sum / (uint32_t)samples);
   lastMaxWin_[idx] = (uint16_t)maxV;
   lastOver_[idx] = (uint8_t)min(over, 255);
-  lastNeeded_[idx] = (uint8_t)needed;
+  lastNeeded_[idx] = (uint8_t)min(needed, 255);
   lastHit_[idx] = hit ? 1 : 0;
 
+  const int baseEff = effBase_[idx];
   String payload = String("{\"i\":") + idx +
-                   ",\"base_eff\":" + effBase_[idx] +
+                   ",\"base_eff\":" + baseEff +
                    ",\"delta\":" + delta_[idx] +
                    ",\"thr_abs\":" + thrAbs +
                    ",\"samples\":" + samples +
-                   ",\"delay_ms\":" + delayMs +
-                   ",\"window_ms\":" + windowMs +
                    ",\"needed\":" + needed +
                    ",\"over\":" + over +
+                   ",\"window_ms\":" + (kWindowUs / 1000) +
                    ",\"avg\":" + lastAvgWin_[idx] +
                    ",\"min\":" + minV +
                    ",\"max\":" + maxV +
-                   ",\"hit\":" + (hit ? 1 : 0) +
+                   ",\"hit\":" + (hit ? "1" : "0") +
                    "}";
 
-  if (hit) {
-    log("INF", "candles_blow", payload);
-  } else {
-    log("DBG", "candles_blow_reject", payload);
-  }
+  if (hit) log("INF", "candles_blow", payload);
+  else log("DBG", "candles_blow_reject", payload);
 
   return hit;
 }
