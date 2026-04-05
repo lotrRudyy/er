@@ -166,10 +166,12 @@ class GameMaster:
     def _finalize_current_run(self) -> None:
         with self._lock:
             run = self.state.current_run
-        if run is None:
-            return
-        run.ended_at = iso_now()
-        run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
+            if run is None:
+                return
+            if run.ended_at is None:
+                run.ended_at = iso_now()
+            if run.duration_s is None:
+                run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
         self.db.save_completed_run(run)
         self._write_run_json(run)
         self.publish_game_state()
@@ -286,6 +288,13 @@ class GameMaster:
         event = raw_event.lower()
         event_token = self._normalize_riddle_id(raw_event)
         self._record_event("game_event", payload)
+        self.publish_debug("GAME_EVENT_IN", {
+            "raw_node": raw_node,
+            "raw_event": raw_event,
+            "node": node,
+            "event": event,
+            "event_token": event_token,
+        })
 
         solve_events = {
             "solved",
@@ -311,7 +320,14 @@ class GameMaster:
         elif event.endswith("_solved") or event.endswith("_final") or event.endswith("_completed"):
             inferred_riddle = self._normalize_riddle_id(event)
 
-        if inferred_riddle and (event in solve_events or event_token in config.RIDDLES or event.endswith(("_solved", "_final", "_completed"))):
+        should_treat_as_solve = bool(
+            inferred_riddle and (
+                event in solve_events
+                or event_token in config.RIDDLES
+                or event.endswith(("_solved", "_final", "_completed"))
+            )
+        )
+        if should_treat_as_solve:
             self.handle_solve(inferred_riddle, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
@@ -391,7 +407,11 @@ class GameMaster:
             'sisi': 'sissi',
             'sissi_solved': 'sissi',
             'sissi_final': 'sissi',
+            'sissi_completed': 'sissi',
+            'sissi_finished': 'sissi',
             'star_slider_solved': 'star_slider',
+            'star_slider_completed': 'star_slider',
+            'star_slider_finished': 'star_slider',
             'openprison': 'open_prison',
             'mountwheel': 'mount_wheel',
             'ropepaths': 'rope_paths',
@@ -434,6 +454,11 @@ class GameMaster:
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
+
+        if self.state.phase == 13 and riddle == "sissi":
+            self.publish_debug("SISSI_FORCE_FINISH", {"source": source, "completed": sorted(completed)})
+            self._enter_phase(14, event_name)
+            return
 
         required = set(spec.required_events)
         if required and required.issubset(completed):
@@ -579,6 +604,7 @@ class GameMaster:
             self.publish_debug("candles_solve_enabled", payload)
             return
         if kind == "save_game_to_db":
+            self._finalize_current_run()
             return
         self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
 
