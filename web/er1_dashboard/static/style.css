@@ -369,10 +369,6 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   color: var(--green-text);
 }
 
-.games-list-table th:nth-child(1) { width: 220px; }
-.games-list-table th:nth-child(2) { width: 220px; }
-.games-list-table th:nth-child(3) { width: 110px; }
-.games-list-table th:nth-child(5) { width: 180px; }
 
 .selected-game-row {
   background: var(--blue-bg);
@@ -500,11 +496,15 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   word-break: break-word;
 }
 
-.all-games-table th:nth-child(1) { width: 34%; }
-.all-games-table th:nth-child(2) { width: 12%; }
-.all-games-table th:nth-child(3) { width: 10%; }
-.all-games-table th:nth-child(4) { width: 24%; }
-.all-games-table th:nth-child(5) { width: 20%; }
+.all-games-table th:nth-child(1) { width: 26%; }
+.all-games-table th:nth-child(2) { width: 8%; }
+.all-games-table th:nth-child(3) { width: 13%; }
+.all-games-table th:nth-child(4) { width: 15%; }
+.all-games-table th:nth-child(5) { width: 7%; }
+.all-games-table th:nth-child(6) { width: 8%; }
+.all-games-table th:nth-child(7) { width: 5%; }
+.all-games-table th:nth-child(8) { width: 8%; }
+.all-games-table th:nth-child(9) { width: 10%; }
 
 .summary-table th:nth-child(1) { width: 26%; }
 .summary-table th:nth-child(2) { width: 8%; }
@@ -602,4 +602,66 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 
 .summary-table .save-row-button {
   min-width: 120px;
+}
+
+
+.all-games-table th,
+.all-games-table td {
+  vertical-align: middle;
+}
+
+.all-games-table td:nth-child(1),
+.all-games-table td:nth-child(3),
+.all-games-table td:nth-child(4),
+.all-games-table td:nth-child(5),
+.all-games-table td:nth-child(8) {
+  font-variant-numeric: tabular-nums;
+}
+
+.all-games-table th:nth-child(1),
+.all-games-table td:nth-child(1),
+.all-games-table th:nth-child(3),
+.all-games-table td:nth-child(3),
+.all-games-table th:nth-child(4),
+.all-games-table td:nth-child(4),
+.all-games-table th:nth-child(5),
+.all-games-table td:nth-child(5),
+.all-games-table th:nth-child(6),
+.all-games-table td:nth-child(6),
+.all-games-table th:nth-child(7),
+.all-games-table td:nth-child(7),
+.all-games-table th:nth-child(8),
+.all-games-table td:nth-child(8) {
+  white-space: nowrap;
+}
+
+.all-games-table td:nth-child(1),
+.all-games-table td:nth-child(3),
+.all-games-table td:nth-child(4) {
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.all-games-table td:nth-child(3),
+.all-games-table td:nth-child(4) {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.all-games-table td:nth-child(5),
+.all-games-table td:nth-child(6),
+.all-games-table td:nth-child(7),
+.all-games-table td:nth-child(8),
+.all-games-table th:nth-child(9),
+.all-games-table td:nth-child(9) {
+  text-align: center;
+}
+
+.all-games-table .game-actions-cell {
+  justify-content: center;
+}
+
+.all-games-table .nav-button,
+.all-games-table .danger-button {
+  min-width: 72px;
 }

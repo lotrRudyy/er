@@ -34,13 +34,16 @@
     <section id="allGamesSection" class="panel game-viewer-panel compact-viewer-panel">
       <h2>All Games</h2>
       {% if games %}
-      <table class="simple-table viewer-table games-list-table compact-table all-games-table">
+      <table class="simple-table viewer-table compact-table all-games-table">
         <thead>
           <tr>
             <th>Game ID</th>
             <th>Datum</th>
+            <th>Started</th>
+            <th>Ended</th>
             <th>Duration</th>
             <th>Spieleranzahl</th>
+            <th>Hints</th>
             <th>Leaderboard Code</th>
             <th>Actions</th>
           </tr>
@@ -50,8 +53,11 @@
           <tr class="{% if row.id == game_id %}selected-game-row{% endif %}">
             <td>{{ row.id }}</td>
             <td>{{ row.date_display }}</td>
+            <td>{{ row.started_at_display }}</td>
+            <td>{{ row.ended_at_display }}</td>
             <td>{{ row.duration_mmss }}</td>
             <td>{{ row.players_count_display }}</td>
+            <td>{{ row.hint_count_display }}</td>
             <td>{{ row.leaderboard_code_display or "—" }}</td>
             <td>
               <div class="game-actions-cell">

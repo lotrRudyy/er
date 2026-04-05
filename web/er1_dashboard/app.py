@@ -1033,9 +1033,11 @@ def list_games_from_db() -> list[dict[str, Any]]:
     for row in rows:
         item = _row_to_dict(row) or {}
         item["started_at_display"] = format_datetime_readable(item.get("started_at") or item.get("game_started_at") or item.get("date"))
+        item["ended_at_display"] = format_datetime_readable(item.get("ended_at"))
         item["date_display"] = str(item.get("date") or item.get("started_at_display")[:10] or "—")
         item["duration_mmss"] = format_mmss(item.get("duration_s"))
         item["players_count_display"] = display_players_count(item.get("players_count"))
+        item["hint_count_display"] = int(item.get("hint_count") or 0)
         item["leaderboard_code_display"] = serialize_db_value(item.get("leaderboard_code")) or ""
         games.append(item)
     return games
