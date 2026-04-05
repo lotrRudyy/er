@@ -1753,13 +1753,29 @@ def api_players_count() -> Any:
     return jsonify({"ok": True, "players_count": players_count})
 
 
+def _normalize_manual_solve_node(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "sisi": "sissi",
+        "sissi_solved": "sissi",
+        "sissi_final": "sissi",
+        "sissi_completed": "sissi",
+        "sissi_finished": "sissi",
+        "openprison": "open_prison",
+        "mountwheel": "mount_wheel",
+        "ropepaths": "rope_paths",
+    }
+    return aliases.get(normalized, normalized)
+
+
 @app.post("/api/solve")
 def api_solve() -> Any:
     data = request.get_json(force=True)
-    node = str(data.get("node", "")).strip()
+    node = _normalize_manual_solve_node(data.get("node", ""))
     if not node:
         return jsonify({"ok": False, "error": "node required"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node})
     return jsonify({"ok": True, "node": node})
 
 
