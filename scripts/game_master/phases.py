@@ -200,7 +200,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
             TransitionAction("set_persistent_locks", {"r2": "open"}),
             TransitionAction("log_solve_time", {"riddle": "piano"}),
             TransitionAction("delay", {
-                "seconds": 7,
+                "seconds": 5,
                 "then": [
                     {"kind": "lighting_turn_on", "payload": {"light": "torch_r2"}},
                     {"kind": "lighting_fade_to", "payload": {"lights": ["r2_chess", "r2_schronk"], "pct": 100, "duration_ms": 8000}},
