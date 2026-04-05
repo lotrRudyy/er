@@ -166,10 +166,11 @@ class GameMaster:
     def _finalize_current_run(self) -> None:
         with self._lock:
             run = self.state.current_run
-        if run is None:
-            return
-        run.ended_at = iso_now()
-        run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
+            if run is None:
+                return
+            if run.ended_at is None:
+                run.ended_at = iso_now()
+                run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
         self.db.save_completed_run(run)
         self._write_run_json(run)
         self.publish_game_state()
@@ -277,12 +278,23 @@ class GameMaster:
             self.state.node_last_state[node_id] = self._merge_riddle_state(previous, payload)
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
-        node = str(payload.get("node", "")).strip()
+        node = self._normalize_riddle_id(payload.get("node", ""))
         event = str(payload.get("event", "")).strip().lower()
         if not node or not event:
             raise ValueError("game/event requires node and event")
         self._record_event("game_event", payload)
-        if event == "solved":
+
+        solved_events = {
+            "solved",
+            "solve",
+            "finished",
+            "complete",
+            "completed",
+            f"{node}_solved",
+            f"{node}_final",
+            f"{node}_completed",
+        }
+        if event in solved_events:
             self.handle_solve(node, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
@@ -405,6 +417,11 @@ class GameMaster:
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
+            current_phase = self.state.phase
+
+        if current_phase == 13 and riddle == "sissi":
+            self._enter_phase(14, event_name)
+            return
 
         required = set(spec.required_events)
         if required and required.issubset(completed):
@@ -550,6 +567,7 @@ class GameMaster:
             self.publish_debug("candles_solve_enabled", payload)
             return
         if kind == "save_game_to_db":
+            self._finalize_current_run()
             return
         self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
 
