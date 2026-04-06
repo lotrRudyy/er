@@ -146,10 +146,9 @@ class GameMaster:
             run = self.state.current_run
             now = utc_now()
             started_at = now.isoformat(timespec="seconds")
-            started_monotonic = time.monotonic()
             run.date = now.date().isoformat()
             run.started_at = started_at
-            run.started_monotonic = started_monotonic
+            run.started_monotonic = time.monotonic()
             run.ended_at = None
             run.duration_s = None
             run.events.clear()
@@ -159,10 +158,9 @@ class GameMaster:
             self.state.last_riddle_solved_at = None
             for node in config.RIDDLES:
                 run.riddle_timings[node] = RiddleTiming(riddle_key=node)
-
-            active_riddles = PHASES.get(self.state.phase).active_riddles if self.state.phase in PHASES else ()
-            for node in active_riddles:
-                run.riddle_timings[node].segment_started_monotonic = started_monotonic
+            for node in PHASES.get(self.state.phase, PHASES[3]).active_riddles:
+                if node in run.riddle_timings:
+                    run.riddle_timings[node].segment_started_monotonic = run.started_monotonic
         self.publish_game_state()
 
     def _finalize_current_run(self) -> None:
@@ -216,8 +214,7 @@ class GameMaster:
             for node in nodes:
                 timing = run.riddle_timings.get(node)
                 if timing is None:
-                    timing = RiddleTiming(riddle_key=node)
-                    run.riddle_timings[node] = timing
+                    continue
                 if float(timing.solve_time_s or 0) > 0:
                     continue
                 if timing.segment_started_monotonic is None:
@@ -230,22 +227,20 @@ class GameMaster:
                 return
             timing = run.riddle_timings.get(node)
             if timing is None:
-                timing = RiddleTiming(riddle_key=node)
-                run.riddle_timings[node] = timing
-
-            if float(timing.solve_time_s or 0) > 0:
+                return
+            if source == "phase" and float(timing.solve_time_s or 0) > 0:
                 return
 
-            now = time.monotonic()
-            start_monotonic = timing.segment_started_monotonic
-            if start_monotonic is None:
-                start_monotonic = run.started_monotonic
-                timing.segment_started_monotonic = start_monotonic
+            now_mono = time.monotonic()
+            segment_start = timing.segment_started_monotonic
+            if segment_start is None:
+                segment_start = run.started_monotonic
+                timing.segment_started_monotonic = segment_start
 
-            timing.solve_time_s = round(max(0.0, now - start_monotonic), 3)
+            timing.solve_time_s = round(max(0.0, now_mono - segment_start), 3)
             self.state.last_riddle_solved_at = iso_now()
 
-        self._record_event("solved", {"node": node, "source": source, "solve_time_s": timing.solve_time_s})
+        self._record_event("solved", {"node": node, "source": source})
         self.publish_game_state()
 
     @staticmethod
@@ -388,10 +383,6 @@ class GameMaster:
             return
 
         event_name = RIDDLE_SOLVE_EVENTS[riddle]
-        with self._lock:
-            run = self.state.current_run
-            if run is not None and riddle in run.riddle_timings:
-                run.riddle_timings[riddle].solve_time_s = round(time.monotonic() - run.started_monotonic, 3)
         self._mark_solved(riddle, source)
         with self._lock:
             self.state.completed_phase_events.add(event_name)
