@@ -128,8 +128,7 @@ class GameMaster:
             players_count=max(0, int(players_count or 0)),
         )
         for node in config.RIDDLES:
-            source = "manual" if node in config.MANUAL_RIDDLES else "node"
-            run.riddle_timings[node] = RiddleTiming(node=node, source=source)
+            run.riddle_timings[node] = RiddleTiming(riddle_key=node)
         return run
 
     def _prepare_new_run(self) -> None:
@@ -152,26 +151,21 @@ class GameMaster:
             run.started_monotonic = time.monotonic()
             run.ended_at = None
             run.duration_s = None
-            run.hints.clear()
             run.events.clear()
             run.riddle_timings.clear()
             self.state.completed_phase_events.clear()
             self.state.game_started_at = started_at
             self.state.last_riddle_solved_at = None
             for node in config.RIDDLES:
-                source = "manual" if node in config.MANUAL_RIDDLES else "node"
-                run.riddle_timings[node] = RiddleTiming(node=node, source=source)
+                run.riddle_timings[node] = RiddleTiming(riddle_key=node)
         self.publish_game_state()
 
     def _finalize_current_run(self) -> None:
         with self._lock:
             run = self.state.current_run
-            if run is None:
-                return
-            if run.ended_at is None:
-                run.ended_at = iso_now()
-            if run.duration_s is None:
-                run.duration_s = round(time.monotonic() - run.started_monotonic, 3)
+        if run is None:
+            return
+        self.db.recalc_run(run)
         self.db.save_completed_run(run)
         self._write_run_json(run)
         self.publish_game_state()
@@ -186,16 +180,12 @@ class GameMaster:
             "players_count": int(run.players_count or 0),
             "leaderboard_code": run.leaderboard_code,
             "hint_count": run.hint_count(),
-            "hints": list(run.hints),
             "riddle_timings": {
                 node: {
-                    "node": timing.node,
-                    "source": timing.source,
-                    "activated_at": timing.activated_at,
-                    "solved_at": timing.solved_at,
-                    "solve_time_from_run_start_s": timing.solve_time_from_run_start_s,
-                    "solve_time_from_activation_s": timing.solve_time_from_activation_s,
-                    "solved": timing.solved,
+                    "riddle_key": timing.riddle_key,
+                    "solve_time_s": timing.solve_time_s,
+                    "hint_count": timing.hint_count,
+                    "hints": timing.hints,
                 }
                 for node, timing in run.riddle_timings.items()
             },
@@ -211,16 +201,7 @@ class GameMaster:
             run.events.append({"ts": iso_now(), "event": event, **payload})
 
     def _mark_activations(self, nodes: tuple[str, ...]) -> None:
-        with self._lock:
-            run = self.state.current_run
-            if run is None:
-                return
-            now = iso_now()
-            for node in nodes:
-                timing = run.riddle_timings.get(node)
-                if timing and timing.activated_at is None:
-                    timing.activated_at = now
-                    run.events.append({"ts": now, "event": "activated", "node": node})
+        return
 
     def _mark_solved(self, node: str, source: str) -> None:
         changed = False
@@ -261,7 +242,7 @@ class GameMaster:
             if last_attempt and (not attempts or attempts[-1] != last_attempt):
                 attempts.append(last_attempt)
             merged["attempted_sequences"] = attempts
-        elif rid == "star_slider":
+        elif rid == "stars":
             attempts = list(merged.get("attempted_star_signs") or [])
             last_positions = payload.get("last_attempt_positions")
             if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
@@ -279,56 +260,13 @@ class GameMaster:
             self.state.node_last_state[node_id] = self._merge_riddle_state(previous, payload)
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
-        raw_node = str(payload.get("node", "")).strip()
-        raw_event = str(payload.get("event", "")).strip()
-        if not raw_node and not raw_event:
-            raise ValueError("game/event requires node and/or event")
-
-        node = self._normalize_riddle_id(raw_node)
-        event = raw_event.lower()
-        event_token = self._normalize_riddle_id(raw_event)
+        node = str(payload.get("node", "")).strip()
+        event = str(payload.get("event", "")).strip().lower()
+        if not node or not event:
+            raise ValueError("game/event requires node and event")
         self._record_event("game_event", payload)
-        self.publish_debug("GAME_EVENT_IN", {
-            "raw_node": raw_node,
-            "raw_event": raw_event,
-            "node": node,
-            "event": event,
-            "event_token": event_token,
-        })
-
-        solve_events = {
-            "solved",
-            "solve",
-            "completed",
-            "complete",
-            "finish",
-            "finished",
-            "success",
-            "successed",
-            "resolved",
-        }
-
-        # Accept both styles used by nodes:
-        # 1) {"node": "sissi", "event": "solved"}
-        # 2) {"node": "sissi_final", "event": "completed"}
-        # 3) {"event": "sissi_solved"} or {"event": "star_slider_solved"}
-        inferred_riddle = None
-        if node in config.RIDDLES:
-            inferred_riddle = node
-        elif event_token in config.RIDDLES:
-            inferred_riddle = event_token
-        elif event.endswith("_solved") or event.endswith("_final") or event.endswith("_completed"):
-            inferred_riddle = self._normalize_riddle_id(event)
-
-        should_treat_as_solve = bool(
-            inferred_riddle and (
-                event in solve_events
-                or event_token in config.RIDDLES
-                or event.endswith(("_solved", "_final", "_completed"))
-            )
-        )
-        if should_treat_as_solve:
-            self.handle_solve(inferred_riddle, source="node")
+        if event == "solved":
+            self.handle_solve(node, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
         cmd = str(payload.get("cmd", "")).strip().lower()
@@ -367,7 +305,7 @@ class GameMaster:
             self.add_hint(str(payload.get("riddle", "")).strip(), str(payload.get("hint_text", "")).strip())
             return
         if cmd == "solve":
-            riddle = self._normalize_riddle_id(payload.get("node", payload.get("riddle", "")))
+            riddle = str(payload.get("node", payload.get("riddle", ""))).strip()
             self.handle_solve(riddle, source="manual")
             return
         if cmd == "open_lock":
@@ -397,27 +335,6 @@ class GameMaster:
             return
         raise ValueError(f"Unknown command: {cmd}")
 
-
-
-    @staticmethod
-    def _normalize_riddle_id(riddle: str) -> str:
-        raw = str(riddle or '').strip().lower()
-        normalized = raw.replace('-', '_').replace(' ', '_')
-        aliases = {
-            'sisi': 'sissi',
-            'sissi_solved': 'sissi',
-            'sissi_final': 'sissi',
-            'sissi_completed': 'sissi',
-            'sissi_finished': 'sissi',
-            'star_slider_solved': 'star_slider',
-            'star_slider_completed': 'star_slider',
-            'star_slider_finished': 'star_slider',
-            'openprison': 'open_prison',
-            'mountwheel': 'mount_wheel',
-            'ropepaths': 'rope_paths',
-        }
-        return aliases.get(normalized, normalized)
-
     def set_players_count(self, players_count: int) -> None:
         cleaned_count = max(0, int(players_count or 0))
         with self._lock:
@@ -428,17 +345,21 @@ class GameMaster:
         self._record_event("players_count_updated", {"players_count": cleaned_count})
 
     def add_hint(self, riddle: str, hint_text: str) -> None:
-        if not riddle or not hint_text:
-            raise ValueError("add_hint requires riddle and hint_text")
+        if not riddle:
+            raise ValueError("add_hint requires riddle")
         with self._lock:
             run = self.state.current_run
             if run is None:
                 raise ValueError("No current run")
-            run.hints.append({"at": iso_now(), "riddle": riddle, "hint_text": hint_text})
+            timing = run.riddle_timings.get(riddle)
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            timing.hint_count = int(timing.hint_count or 0) + 1
+            if hint_text:
+                timing.hints = ((timing.hints + "\n---\n" + hint_text) if timing.hints else hint_text).strip()
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
 
     def handle_solve(self, riddle: str, source: str) -> None:
-        riddle = self._normalize_riddle_id(riddle)
         if riddle not in config.RIDDLES:
             raise ValueError(f"Unknown riddle node: {riddle}")
         spec = PHASES[self.state.phase]
@@ -450,15 +371,14 @@ class GameMaster:
             return
 
         event_name = RIDDLE_SOLVE_EVENTS[riddle]
+        with self._lock:
+            run = self.state.current_run
+            if run is not None and riddle in run.riddle_timings:
+                run.riddle_timings[riddle].solve_time_s = round(time.monotonic() - run.started_monotonic, 3)
         self._mark_solved(riddle, source)
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
-
-        if self.state.phase == 13 and riddle == "sissi":
-            self.publish_debug("SISSI_FORCE_FINISH", {"source": source, "completed": sorted(completed)})
-            self._enter_phase(14, event_name)
-            return
 
         required = set(spec.required_events)
         if required and required.issubset(completed):
@@ -604,7 +524,6 @@ class GameMaster:
             self.publish_debug("candles_solve_enabled", payload)
             return
         if kind == "save_game_to_db":
-            self._finalize_current_run()
             return
         self.publish_debug("UNKNOWN_TRANSITION_ACTION", {"kind": kind, "payload": payload})
 

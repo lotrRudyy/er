@@ -1,12 +1,27 @@
 from __future__ import annotations
 
-import json
 import random
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from models import CurrentRun
+
+RIDDLE_ORDER = [
+    "images",
+    "piano",
+    "prison",
+    "wheel",
+    "chains",
+    "tangram",
+    "magnet",
+    "chess",
+    "knocking",
+    "candles",
+    "stars",
+    "sissi",
+]
 
 
 class Database:
@@ -24,7 +39,7 @@ class Database:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(
-                '''
+                """
                 CREATE TABLE IF NOT EXISTS games (
                     id TEXT PRIMARY KEY,
                     date TEXT NOT NULL,
@@ -39,79 +54,20 @@ class Database:
                 CREATE TABLE IF NOT EXISTS game_riddles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     game_id TEXT NOT NULL,
-                    riddle TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    activated_at TEXT,
-                    solved_at TEXT,
-                    solve_time_from_run_start_s REAL,
-                    solve_time_from_activation_s REAL,
-                    solved INTEGER NOT NULL DEFAULT 0,
-                    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+                    riddle_key TEXT NOT NULL,
+                    solve_time_s REAL NOT NULL DEFAULT 0,
+                    hint_count INTEGER NOT NULL DEFAULT 0,
+                    hints TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
+                    UNIQUE(game_id, riddle_key)
                 );
-
-                CREATE TABLE IF NOT EXISTS game_hints (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id TEXT NOT NULL,
-                    at TEXT NOT NULL,
-                    riddle TEXT NOT NULL,
-                    hint_text TEXT NOT NULL,
-                    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
-                );
-                '''
+                """
             )
-            self._ensure_games_column(conn, "leaderboard_code", "TEXT")
-            self._normalize_games_schema(conn)
             conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL"
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL AND TRIM(leaderboard_code) != ''"
             )
-
-    def _ensure_games_column(self, conn: sqlite3.Connection, column_name: str, column_type: str) -> None:
-        existing_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(games)").fetchall()
-        }
-        if column_name not in existing_columns:
-            conn.execute(f"ALTER TABLE games ADD COLUMN {column_name} {column_type}")
-
-    def _normalize_games_schema(self, conn: sqlite3.Connection) -> None:
-        existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()]
-        needs_rebuild = (
-            "player_names_json" in existing_columns
-            or "player_names" in existing_columns
-            or ("players_count" not in existing_columns and "player_count" in existing_columns)
-        )
-
-        if not needs_rebuild:
-            if "players_count" not in existing_columns:
-                conn.execute("ALTER TABLE games ADD COLUMN players_count INTEGER NOT NULL DEFAULT 0")
-            return
-
-        players_expr = "COALESCE(players_count, player_count, 0)" if "player_count" in existing_columns else "COALESCE(players_count, 0)"
-        hint_expr = "COALESCE(hint_count, 0)"
-        leaderboard_expr = "leaderboard_code" if "leaderboard_code" in existing_columns else "NULL"
-
-        conn.executescript(
-            f"""
-            ALTER TABLE games RENAME TO games_old;
-
-            CREATE TABLE games (
-                id TEXT PRIMARY KEY,
-                date TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_s REAL,
-                players_count INTEGER NOT NULL DEFAULT 0,
-                hint_count INTEGER NOT NULL DEFAULT 0,
-                leaderboard_code TEXT
-            );
-
-            INSERT INTO games (id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code)
-            SELECT id, date, started_at, ended_at, duration_s, {players_expr}, {hint_expr}, {leaderboard_expr}
-            FROM games_old;
-
-            DROP TABLE games_old;
-            """
-        )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_game_riddles_game_id ON game_riddles(game_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_game_riddles_riddle_key ON game_riddles(riddle_key)")
 
     def generate_leaderboard_code(self) -> str:
         with self._connect() as conn:
@@ -125,17 +81,53 @@ class Database:
                     return code
         raise RuntimeError("Could not generate unique leaderboard code")
 
+    def _compute_effective_duration_s(self, run: CurrentRun) -> float:
+        times = {
+            key: float((run.riddle_timings.get(key).solve_time_s if run.riddle_timings.get(key) else 0) or 0)
+            for key in RIDDLE_ORDER
+        }
+        serial_before_parallel = (
+            times["images"]
+            + times["piano"]
+            + times["prison"]
+            + times["wheel"]
+            + times["chains"]
+        )
+        parallel_end_offset = max(times["tangram"], times["magnet"])
+        duration_s = (
+            serial_before_parallel
+            + parallel_end_offset
+            + times["chess"]
+            + times["knocking"]
+            + times["candles"]
+            + times["stars"]
+            + times["sissi"]
+        )
+        return round(max(0.0, duration_s), 3)
+
+    def recalc_run(self, run: CurrentRun) -> None:
+        duration_s = self._compute_effective_duration_s(run)
+        run.duration_s = duration_s
+        try:
+            started_dt = datetime.fromisoformat(run.started_at)
+            ended_dt = started_dt + timedelta(seconds=duration_s)
+            run.ended_at = ended_dt.isoformat(timespec="seconds")
+            run.date = started_dt.date().isoformat()
+        except Exception:
+            run.ended_at = None
+
     def save_completed_run(self, run: CurrentRun) -> None:
         leaderboard_code = run.leaderboard_code or self.generate_leaderboard_code()
         run.leaderboard_code = leaderboard_code
+        self.recalc_run(run)
 
         with self._connect() as conn:
             conn.execute(
-                '''
+                """
                 INSERT OR REPLACE INTO games (
                     id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''',
+                """,
                 (
                     run.run_id,
                     run.date,
@@ -151,60 +143,99 @@ class Database:
             conn.execute("DELETE FROM game_riddles WHERE game_id = ?", (run.run_id,))
             for timing in run.riddle_timings.values():
                 conn.execute(
-                    '''
+                    """
                     INSERT INTO game_riddles (
-                        game_id, riddle, source, activated_at, solved_at,
-                        solve_time_from_run_start_s, solve_time_from_activation_s, solved
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''',
+                        game_id, riddle_key, solve_time_s, hint_count, hints
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
                     (
                         run.run_id,
-                        timing.node,
-                        timing.source,
-                        timing.activated_at,
-                        timing.solved_at,
-                        timing.solve_time_from_run_start_s,
-                        timing.solve_time_from_activation_s,
-                        1 if timing.solved else 0,
-                    ),
-                )
-
-            conn.execute("DELETE FROM game_hints WHERE game_id = ?", (run.run_id,))
-            for hint in run.hints:
-                conn.execute(
-                    '''
-                    INSERT INTO game_hints (game_id, at, riddle, hint_text)
-                    VALUES (?, ?, ?, ?)
-                    ''',
-                    (
-                        run.run_id,
-                        hint["at"],
-                        hint["riddle"],
-                        hint["hint_text"],
+                        timing.riddle_key,
+                        round(float(timing.solve_time_s or 0), 3),
+                        int(timing.hint_count or 0),
+                        timing.hints or "",
                     ),
                 )
 
     def list_games(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                '''
+                """
                 SELECT id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code
                 FROM games
                 ORDER BY started_at DESC
-                '''
+                """
             ).fetchall()
-        out = []
-        for row in rows:
-            out.append(
-                {
-                    "id": row[0],
-                    "date": row[1],
-                    "started_at": row[2],
-                    "ended_at": row[3],
-                    "duration_s": row[4],
-                    "players_count": row[5],
-                    "hint_count": row[6],
-                    "leaderboard_code": row[7],
-                }
+        return [
+            {
+                "id": row[0],
+                "date": row[1],
+                "started_at": row[2],
+                "ended_at": row[3],
+                "duration_s": row[4],
+                "players_count": row[5],
+                "hint_count": row[6],
+                "leaderboard_code": row[7],
+            }
+            for row in rows
+        ]
+
+    def get_run_riddles(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT riddle_key, solve_time_s, hint_count, hints
+                FROM game_riddles
+                WHERE game_id = ?
+                ORDER BY id ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "riddle_key": row[0],
+                "solve_time_s": row[1],
+                "hint_count": row[2],
+                "hints": row[3],
+            }
+            for row in rows
+        ]
+
+    def recalc_run_by_id(self, run_id: str) -> None:
+        with self._connect() as conn:
+            game_row = conn.execute(
+                "SELECT id, date, started_at, players_count, leaderboard_code FROM games WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if not game_row:
+                raise ValueError("Run not found")
+
+            run = CurrentRun(
+                run_id=game_row[0],
+                date=game_row[1],
+                started_at=game_row[2],
+                started_monotonic=0.0,
+                players_count=game_row[3],
+                leaderboard_code=game_row[4],
             )
-        return out
+
+            rows = conn.execute(
+                "SELECT riddle_key, solve_time_s, hint_count, hints FROM game_riddles WHERE game_id = ?",
+                (run_id,),
+            ).fetchall()
+
+            for row in rows:
+                from models import RiddleTiming
+                run.riddle_timings[row[0]] = RiddleTiming(
+                    riddle_key=row[0],
+                    solve_time_s=float(row[1] or 0),
+                    hint_count=int(row[2] or 0),
+                    hints=row[3] or "",
+                )
+
+            self.recalc_run(run)
+
+            conn.execute(
+                "UPDATE games SET date = ?, ended_at = ?, duration_s = ?, hint_count = ? WHERE id = ?",
+                (run.date, run.ended_at, run.duration_s, run.hint_count(), run_id),
+            )

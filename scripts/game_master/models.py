@@ -12,13 +12,10 @@ class ScheduledAction:
 
 @dataclass(slots=True)
 class RiddleTiming:
-    node: str
-    source: str
-    activated_at: str | None = None
-    solved_at: str | None = None
-    solve_time_from_run_start_s: float | None = None
-    solve_time_from_activation_s: float | None = None
-    solved: bool = False
+    riddle_key: str
+    solve_time_s: float = 0.0
+    hint_count: int = 0
+    hints: str = ""
 
 @dataclass(slots=True)
 class CurrentRun:
@@ -28,14 +25,13 @@ class CurrentRun:
     started_monotonic: float
     players_count: int = 0
     leaderboard_code: str | None = None
-    hints: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     riddle_timings: dict[str, RiddleTiming] = field(default_factory=dict)
     ended_at: str | None = None
     duration_s: float | None = None
 
     def hint_count(self) -> int:
-        return len(self.hints)
+        return sum(max(0, int(t.hint_count or 0)) for t in self.riddle_timings.values())
 
 @dataclass(slots=True)
 class RuntimeState:
@@ -59,7 +55,6 @@ class RuntimeState:
         if self.last_riddle_solved_at:
             payload["last_riddle_solved_at"] = self.last_riddle_solved_at
         payload["timer_running"] = self.game_started_at is not None and self.phase >= 3 and self.phase < 14
-        payload["players_count"] = int(self.current_run.players_count) if self.current_run is not None else 0
         return payload
 
     def mark_hb(self, node_id: str) -> None:
