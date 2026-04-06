@@ -1879,5 +1879,432 @@ def api_delete_hint(riddle: str, hint_id: str) -> Any:
     return jsonify({"ok": True, "hints": items})
 
 
+# ---- ER1 v2 dashboard overrides (new game_master DB schema) ----
+RIDDLE_ALIASES = {
+    "open_prison": "prison",
+    "mount_wheel": "wheel",
+    "rope_paths": "chains",
+    "star_slider": "stars",
+    "prison": "prison",
+    "wheel": "wheel",
+    "chains": "chains",
+    "stars": "stars",
+}
+RIDDLE_ORDER_V2 = [
+    "images", "piano", "prison", "wheel", "chains",
+    "tangram", "magnet", "chess", "knocking", "candles", "stars", "sissi",
+]
+RIDDLE_LABELS_V2 = {
+    "images": "Images",
+    "piano": "Piano",
+    "prison": "Prison",
+    "wheel": "Wheel",
+    "chains": "Chains",
+    "tangram": "Tangram",
+    "magnet": "Magnet",
+    "chess": "Chess",
+    "knocking": "Knocking",
+    "candles": "Candles",
+    "stars": "Stars",
+    "sissi": "Sissi",
+}
+
+PHASE_META = {
+    0: {"name": "standby", "active": (), "solved": ()},
+    1: {"name": "maintenance", "active": tuple(RIDDLE_ORDER_V2), "solved": ()},
+    2: {"name": "prepare", "active": (), "solved": ()},
+    3: {"name": "start", "active": ("images",), "solved": ()},
+    4: {"name": "piano", "active": ("piano",), "solved": ("images",)},
+    5: {"name": "prison", "active": ("prison",), "solved": ("images", "piano")},
+    6: {"name": "wheel", "active": ("wheel",), "solved": ("images", "piano", "prison")},
+    7: {"name": "chains", "active": ("chains",), "solved": ("images", "piano", "prison", "wheel")},
+    8: {"name": "tangram_magnet", "active": ("tangram", "magnet"), "solved": ("images", "piano", "prison", "wheel", "chains")},
+    9: {"name": "chess", "active": ("chess",), "solved": ("images", "piano", "prison", "wheel", "chains", "tangram", "magnet")},
+    10: {"name": "knocking", "active": ("knocking",), "solved": ("images", "piano", "prison", "wheel", "chains", "tangram", "magnet", "chess")},
+    11: {"name": "candles", "active": ("candles",), "solved": ("images", "piano", "prison", "wheel", "chains", "tangram", "magnet", "chess", "knocking")},
+    12: {"name": "stars", "active": ("stars",), "solved": ("images", "piano", "prison", "wheel", "chains", "tangram", "magnet", "chess", "knocking", "candles")},
+    13: {"name": "sissi", "active": ("sissi",), "solved": ("images", "piano", "prison", "wheel", "chains", "tangram", "magnet", "chess", "knocking", "candles", "stars")},
+    14: {"name": "finished", "active": (), "solved": tuple(RIDDLE_ORDER_V2)},
+}
+
+RIDDLES = [
+    {"id": "images", "label": "Images", "node_id": "images_piano", "manual": False},
+    {"id": "piano", "label": "Piano", "node_id": "images_piano", "manual": False},
+    {"id": "prison", "label": "Prison", "node_id": None, "manual": True},
+    {"id": "wheel", "label": "Wheel", "node_id": None, "manual": True},
+    {"id": "chains", "label": "Chains", "node_id": None, "manual": True},
+    {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
+    {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
+    {"id": "chess", "label": "Chess", "node_id": "chess", "manual": False},
+    {"id": "knocking", "label": "Knocking", "node_id": "knocking", "manual": False},
+    {"id": "candles", "label": "Candles", "node_id": "candles", "manual": False},
+    {"id": "stars", "label": "Stars", "node_id": "stars", "manual": False},
+    {"id": "sissi", "label": "Sissi", "node_id": None, "manual": True},
+]
+NODE_LABELS = [
+    ("lighting", "Lighting Controller"),
+    ("maglock", "Maglock Controller"),
+    ("images_piano", "Images / Piano"),
+    ("chess", "Chess"),
+    ("knocking", "Knocking"),
+    ("candles", "Candles"),
+    ("stars", "Stars"),
+    ("star_sky", "Star Sky"),
+]
+
+EDITABLE_TABLES = {
+    "games": {"blocked_columns": {"id", "ended_at", "duration_s", "hint_count"}},
+    "game_riddles": {"blocked_columns": {"id", "game_id", "riddle_key"}},
+}
+
+
+def _canonical_riddle_name(name: Any) -> str:
+    return RIDDLE_ALIASES.get(str(name or "").strip(), str(name or "").strip())
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value or 0))
+    except Exception:
+        return default
+
+
+def _duration_and_progress_from_rows(rows: list[dict[str, Any]]) -> tuple[float, dict[str, float]]:
+    by_key = {_canonical_riddle_name(r.get('riddle_key')): max(0.0, _safe_float(r.get('solve_time_s'))) for r in rows}
+    progress = {}
+    elapsed = 0.0
+    for key in ["images", "piano", "prison", "wheel", "chains"]:
+        elapsed += by_key.get(key, 0.0)
+        progress[key] = elapsed
+    chain_end = progress.get("chains", elapsed)
+    tangram_end = chain_end + by_key.get("tangram", 0.0)
+    magnet_end = chain_end + by_key.get("magnet", 0.0)
+    progress["tangram"] = tangram_end
+    progress["magnet"] = magnet_end
+    elapsed = max(tangram_end, magnet_end)
+    for key in ["chess", "knocking", "candles", "stars", "sissi"]:
+        elapsed += by_key.get(key, 0.0)
+        progress[key] = elapsed
+    return round(max(0.0, elapsed), 3), progress
+
+
+def _refresh_game_hint_count(conn: sqlite3.Connection, game_id: str) -> int:
+    total_hints = conn.execute("SELECT COALESCE(SUM(hint_count), 0) FROM game_riddles WHERE game_id = ?", (game_id,)).fetchone()[0]
+    conn.execute("UPDATE games SET hint_count = ? WHERE id = ?", (int(total_hints or 0), game_id))
+    return int(total_hints or 0)
+
+
+def _refresh_game_duration_and_end(conn: sqlite3.Connection, game_id: str, explicit_duration_s: float | None = None) -> float | None:
+    rows = [_row_to_dict(r) or {} for r in conn.execute("SELECT riddle_key, solve_time_s FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()]
+    duration_s = float(explicit_duration_s) if explicit_duration_s is not None else _duration_and_progress_from_rows(rows)[0]
+    game_row = conn.execute("SELECT started_at, ended_at FROM games WHERE id = ?", (game_id,)).fetchone()
+    if game_row is None:
+        return duration_s
+    started_at = _parse_iso_datetime(game_row[0])
+    ended_at_value = game_row[1]
+    next_ended_at = ended_at_value
+    if started_at is not None:
+        next_ended_at = (started_at + timedelta(seconds=max(0.0, duration_s))).isoformat(timespec='seconds')
+        next_date = started_at.date().isoformat()
+        conn.execute("UPDATE games SET date = ?, duration_s = ?, ended_at = ? WHERE id = ?", (next_date, duration_s, next_ended_at, game_id))
+    else:
+        conn.execute("UPDATE games SET duration_s = ?, ended_at = ? WHERE id = ?", (duration_s, next_ended_at, game_id))
+    return duration_s
+
+
+def _calculate_riddle_timing_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    canonical = []
+    for source_row in rows:
+        row = dict(source_row)
+        row['riddle_key'] = _canonical_riddle_name(row.get('riddle_key') or row.get('riddle'))
+        canonical.append(row)
+    _, progress = _duration_and_progress_from_rows(canonical)
+    calculated = []
+    for row in canonical:
+        key = row.get('riddle_key')
+        direct = max(0.0, _safe_float(row.get('solve_time_s')))
+        if key in {'tangram', 'magnet'}:
+            anchor = progress.get('chains', 0.0)
+        elif key == 'chess':
+            anchor = max(progress.get('tangram', progress.get('chains', 0.0)), progress.get('magnet', progress.get('chains', 0.0)))
+        elif key == 'images':
+            anchor = 0.0
+        else:
+            idx = RIDDLE_ORDER_V2.index(key) if key in RIDDLE_ORDER_V2 else -1
+            prev_key = RIDDLE_ORDER_V2[idx - 1] if idx > 0 else None
+            anchor = progress.get(prev_key, 0.0) if prev_key else 0.0
+        row['_anchor_seconds'] = anchor
+        row['_riddle_seconds'] = direct
+        row['_solve_seconds'] = progress.get(key, direct)
+        calculated.append(row)
+    return calculated
+
+
+def _recalculate_game_riddle_solve_times(conn: sqlite3.Connection, game_id: str, *, row_name_overrides=None, solve_overrides=None, duration_overrides=None):
+    row_name_overrides = dict(row_name_overrides or {})
+    solve_overrides = dict(solve_overrides or {})
+    duration_overrides = dict(duration_overrides or {})
+    rows = [_row_to_dict(r) or {} for r in conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()]
+    if not rows:
+        return []
+    for row in rows:
+        rid = int(row.get('_rowid_') or 0)
+        if rid in row_name_overrides:
+            row['riddle_key'] = _canonical_riddle_name(row_name_overrides[rid])
+        if rid in solve_overrides:
+            row['solve_time_s'] = max(0.0, _safe_float(solve_overrides[rid])) if solve_overrides[rid] is not None else 0.0
+        elif rid in duration_overrides:
+            row['solve_time_s'] = max(0.0, _safe_float(duration_overrides[rid])) if duration_overrides[rid] is not None else 0.0
+        row['riddle_key'] = _canonical_riddle_name(row.get('riddle_key'))
+    for row in rows:
+        conn.execute("UPDATE game_riddles SET riddle_key = ?, solve_time_s = ? WHERE rowid = ?", (row.get('riddle_key'), round(max(0.0, _safe_float(row.get('solve_time_s'))), 3), int(row.get('_rowid_') or 0)))
+    _refresh_game_duration_and_end(conn, game_id)
+    _refresh_game_hint_count(conn, game_id)
+    return _calculate_riddle_timing_rows(rows)
+
+
+def build_game_view_state(game_id: str) -> dict[str, Any]:
+    loaded = load_game_from_db(game_id)
+    game = loaded['game']
+    riddles = loaded['riddles']
+    if game is None:
+        return {"game": None, "riddles": [], "hints": [], "hint_columns": [], "raw_rows": []}
+    game['started_at_display'] = format_datetime_readable(game.get('started_at') or game.get('date'))
+    game['ended_at_display'] = format_datetime_readable(game.get('ended_at'))
+    game['duration_mmss'] = format_mmss(game.get('duration_s'))
+    game['players_count_display'] = display_players_count(game.get('players_count'))
+    game['hint_count_display'] = int(game.get('hint_count') or 0)
+    game['leaderboard_code_display'] = serialize_db_value(game.get('leaderboard_code')) or ''
+    rendered_riddles = []
+    for row in _calculate_riddle_timing_rows(riddles):
+        rendered = dict(row)
+        rendered['riddle_label'] = RIDDLE_LABELS_V2.get(rendered.get('riddle_key'), rendered.get('riddle_key'))
+        rendered['riddle_time_mmss'] = format_mmss(rendered.get('_riddle_seconds'))
+        rendered['hint_count_display'] = int(rendered.get('hint_count') or 0)
+        rendered['hints_display'] = serialize_db_value(rendered.get('hints')) or ''
+        rendered_riddles.append(rendered)
+    raw_rows = [
+        {"table": "games", "rowid": game.get('_rowid_'), "raw_json": json.dumps({k: v for k, v in game.items() if not str(k).startswith('_') and not str(k).endswith('_display') and not str(k).endswith('_mmss')}, ensure_ascii=False, indent=2, default=str)}
+    ] + [
+        {"table": "game_riddles", "rowid": row.get('_rowid_'), "raw_json": json.dumps({k: v for k, v in row.items() if not str(k).startswith('_') and not str(k).endswith('_display') and not str(k).endswith('_mmss')}, ensure_ascii=False, indent=2, default=str)}
+        for row in rendered_riddles
+    ]
+    return {"game": game, "riddles": rendered_riddles, "hints": [], "hint_columns": [], "raw_rows": raw_rows}
+
+
+def move_game_to_removed(game_id: str) -> None:
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+    REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(GAME_DB_PATH) as src, sqlite3.connect(REMOVED_GAME_DB_PATH) as dst:
+        src.row_factory = sqlite3.Row
+        dst.row_factory = sqlite3.Row
+        game_row = src.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if game_row is None:
+            raise ValueError(f"No game found for id {game_id}.")
+        riddle_rows = src.execute("SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
+        for table_name in ("games", "game_riddles"):
+            _ensure_table_schema(src, dst, table_name)
+            _ensure_missing_columns(src, dst, table_name)
+        dst.execute("DELETE FROM games WHERE id = ?", (game_id,))
+        dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
+        game_values = dict(game_row)
+        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
+        dst.execute(f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})", tuple(game_params))
+        for row in riddle_rows:
+            values = dict(row)
+            cols, params = _build_insert_payload_for_dst(values, dst, "game_riddles")
+            dst.execute(f"INSERT INTO game_riddles ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})", tuple(params))
+        src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
+        src.execute("DELETE FROM games WHERE id = ?", (game_id,))
+        dst.commit()
+        src.commit()
+
+
+def load_game_from_db(game_id: str) -> dict[str, Any]:
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+    with sqlite3.connect(GAME_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        game = _row_to_dict(conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone())
+        if game is None:
+            return {"game": None, "riddles": [], "hints": []}
+        riddles = [_row_to_dict(row) for row in conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()]
+    if 'players_count' in game:
+        game['players_count'] = parse_players_count_input(game.get('players_count'))
+    for row in riddles:
+        for key in list(row.keys()):
+            row[key] = _maybe_json(row[key])
+        row['riddle_key'] = _canonical_riddle_name(row.get('riddle_key') or row.get('riddle'))
+    return {"game": game, "riddles": riddles, "hints": []}
+
+
+def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
+    config = EDITABLE_TABLES.get(table_name)
+    if config is None:
+        raise ValueError(f"Table {table_name} is not editable.")
+    if not updates:
+        return
+    if not GAME_DB_PATH.exists():
+        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+    with sqlite3.connect(GAME_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        columns_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        editable_columns = {str(col[1]) for col in columns_info if str(col[1]) not in set(config.get('blocked_columns') or set())}
+        if table_name == 'games':
+            current = conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE rowid = ?", (rowid,)).fetchone()
+            if current is None:
+                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+            current_row = _row_to_dict(current) or {}
+            game_id = str(current_row.get('id') or '').strip()
+            normalized_updates = {}
+            for key, value in updates.items():
+                column = str(key or '').strip()
+                if column == 'players_count_display':
+                    normalized_updates['players_count'] = parse_players_count_input(value)
+                elif column in {'leaderboard_code', 'leaderboard_code_display'}:
+                    normalized_updates['leaderboard_code'] = str(value or '').strip() or None
+                elif column in {'date_display', 'started_at_display'}:
+                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+                elif column in editable_columns:
+                    normalized_updates[column] = value
+                else:
+                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+            if normalized_updates:
+                set_clause = ', '.join(f"{column} = ?" for column in normalized_updates.keys())
+                values = list(normalized_updates.values()) + [rowid]
+                conn.execute(f"UPDATE games SET {set_clause} WHERE rowid = ?", values)
+                if 'started_at' in normalized_updates:
+                    _refresh_game_duration_and_end(conn, game_id)
+            conn.commit()
+            return
+        if table_name == 'game_riddles':
+            current = conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE rowid = ?", (rowid,)).fetchone()
+            if current is None:
+                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+            current_row = _row_to_dict(current) or {}
+            game_id = str(current_row.get('game_id') or '').strip()
+            direct_updates = {}
+            solve_overrides = {}
+            for key, value in updates.items():
+                column = str(key or '').strip()
+                if column in {'riddle_time_mmss', 'solve_time_s'}:
+                    solve_overrides[int(rowid)] = parse_mmss_input(value) if column == 'riddle_time_mmss' else max(0.0, _safe_float(value))
+                elif column in {'hint_count_display', 'hint_count'}:
+                    direct_updates['hint_count'] = max(0, _safe_int(value))
+                elif column == 'hints':
+                    direct_updates['hints'] = str(value or '')
+                elif column in editable_columns:
+                    direct_updates[column] = value
+                else:
+                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+            if direct_updates:
+                set_clause = ', '.join(f"{column} = ?" for column in direct_updates.keys())
+                values = list(direct_updates.values()) + [rowid]
+                conn.execute(f"UPDATE game_riddles SET {set_clause} WHERE rowid = ?", values)
+            if solve_overrides:
+                _recalculate_game_riddle_solve_times(conn, game_id, solve_overrides=solve_overrides)
+            else:
+                _refresh_game_duration_and_end(conn, game_id)
+                _refresh_game_hint_count(conn, game_id)
+            conn.commit()
+            return
+        raise ValueError(f"Table {table_name} is not editable.")
+
+
+def _reset_riddle_display_state_locked_v2(self):
+    for node_id in ["images_piano", "chess", "knocking", "candles", "stars"]:
+        self._clear_node_payload_locked(node_id)
+    self.riddle_states["images"] = {"id": "images", "buttons": {}}
+    self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
+    self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
+    self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
+    self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
+    self.riddle_states["stars"] = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+
+
+def _update_node_state_v2(self, node_id: str, payload: dict[str, Any]) -> None:
+    with self.lock:
+        previous_node = self.node_states.get(node_id, {}) if isinstance(self.node_states.get(node_id), dict) else {}
+        merged_node = dict(previous_node)
+        merged_node.update(payload)
+        self.node_states[node_id] = merged_node
+        if node_id == 'images_piano':
+            if self._is_images_payload(payload):
+                prev = self.riddle_states.get('images', {}) if isinstance(self.riddle_states.get('images'), dict) else {}
+                merged = dict(prev); merged.update(payload); merged['id'] = 'images'; self.riddle_states['images'] = merged; return
+            if self._is_piano_payload(payload):
+                prev = self.riddle_states.get('piano', {}) if isinstance(self.riddle_states.get('piano'), dict) else {}
+                merged = dict(prev); merged.update(payload); merged['id'] = 'piano'
+                played_notes = list(prev.get('played_notes') or [])
+                encoded = str(payload.get('encoded') or '').strip()
+                if encoded:
+                    played_notes.append({'encoded': encoded, 'accepted': bool(payload.get('accepted', False))})
+                merged['played_notes'] = played_notes[-40:]
+                self.riddle_states['piano'] = merged; return
+        riddle_id = _canonical_riddle_name(payload.get('id') or node_id)
+        if riddle_id:
+            prev = self.riddle_states.get(riddle_id, {}) if isinstance(self.riddle_states.get(riddle_id), dict) else {}
+            merged = dict(prev); merged.update(payload); merged['id'] = riddle_id
+            if riddle_id in {'knocking', 'candles'}:
+                attempts = list(merged.get('attempted_sequences') or [])
+                last_attempt = str(payload.get('last_attempt') or '').strip()
+                if last_attempt and (not attempts or attempts[-1] != last_attempt):
+                    attempts.append(last_attempt)
+                merged['attempted_sequences'] = attempts
+            elif riddle_id == 'stars':
+                attempts = list(merged.get('attempted_star_signs') or [])
+                last_positions = payload.get('last_attempt_positions')
+                if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
+                    attempts.append(last_positions)
+                merged['attempted_star_signs'] = attempts
+            self.riddle_states[riddle_id] = merged
+
+
+DashboardStore._reset_riddle_display_state_locked = _reset_riddle_display_state_locked_v2
+DashboardStore.update_node_state = _update_node_state_v2
+
+@classmethod
+def _extract_star_slider_summary_any(cls, riddle_id: str, state_payload: dict[str, Any]):
+    if riddle_id not in {'stars', 'star_slider'} or not state_payload:
+        return None
+    positions = state_payload.get('reader_positions') or {}
+    current = cls._extract_star_slider_values(positions)
+    if not current:
+        current = cls._extract_star_slider_values(state_payload.get('reader_labels'))
+    attempts = []
+    for item in state_payload.get('attempted_star_signs') or []:
+        if not isinstance(item, dict):
+            continue
+        vals = cls._extract_star_slider_values(item.get('positions') or item)
+        if vals:
+            attempts.append(vals)
+    return {'current': current, 'attempts': attempts}
+DashboardStore._extract_star_slider_summary = _extract_star_slider_summary_any
+
+@staticmethod
+def _extract_info_any(riddle_id: str, state_payload: dict[str, Any]) -> str:
+    if not state_payload or riddle_id in {'images', 'piano', 'chess', 'knocking', 'candles', 'stars', 'star_slider'}:
+        return ''
+    generic = []
+    for key, value in state_payload.items():
+        if key in {'id', 'fw', 'up', 'ts', 'time_valid', 'buttons'}:
+            continue
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        generic.append(f"{key}: {value}")
+        if len(generic) >= 4:
+            break
+    return '   '.join(generic)
+DashboardStore._extract_info = _extract_info_any
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("ER1_DASHBOARD_PORT", "8080")), debug=False)

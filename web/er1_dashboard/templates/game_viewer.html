@@ -96,26 +96,14 @@
         <tbody>
           <tr data-table="games" data-rowid="{{ game._rowid_ }}">
             <td class="readonly-cell">{{ game.id }}</td>
-            <td
-              class="editable-cell"
-              data-column="date"
-              data-value="{{ serialize_db_value(game.get('date')) }}"
-            >{{ serialize_db_value(game.get('date')) or '—' }}</td>
+            <td class="readonly-cell">{{ serialize_db_value(game.get('date')) or '—' }}</td>
             <td
               class="editable-cell"
               data-column="started_at"
               data-value="{{ serialize_db_value(game.get('started_at')) }}"
             >{{ game.started_at_display }}</td>
-            <td
-              class="editable-cell"
-              data-column="ended_at"
-              data-value="{{ serialize_db_value(game.get('ended_at')) }}"
-            >{{ game.ended_at_display }}</td>
-            <td
-              class="editable-cell"
-              data-column="duration_mmss"
-              data-value="{{ '' if game.duration_mmss == '—' else game.duration_mmss }}"
-            >{{ game.duration_mmss }}</td>
+            <td class="readonly-cell">{{ game.ended_at_display }}</td>
+            <td class="readonly-cell">{{ game.duration_mmss }}</td>
             <td
               class="editable-cell"
               data-column="players_count_display"
@@ -140,7 +128,8 @@
         <thead>
           <tr>
             <th>Riddle</th>
-                        <th>Riddle Time</th>
+            <th>Riddle Time</th>
+            <th>Hint Count</th>
             <th>Hints</th>
             <th>Save</th>
           </tr>
@@ -148,21 +137,10 @@
         <tbody>
           {% for row in riddles %}
           <tr data-table="game_riddles" data-rowid="{{ row._rowid_ }}">
-            <td
-              class="editable-cell"
-              data-column="riddle"
-              data-value="{{ serialize_db_value(row.get('riddle')) }}"
-            >{{ serialize_db_value(row.get('riddle')) or '—' }}</td>
-            <td
-              class="editable-cell"
-              data-column="riddle_time_mmss"
-              data-value="{{ '' if row.riddle_time_mmss == '—' else row.riddle_time_mmss }}"
-            >{{ row.riddle_time_mmss }}</td>
-            <td
-              class="editable-cell"
-              data-column="hint_count_display"
-              data-value="{{ row.hint_count_display }}"
-            >{{ row.hint_count_display }}</td>
+            <td class="readonly-cell">{{ row.riddle_label or row.riddle_key or '—' }}</td>
+            <td class="editable-cell" data-column="riddle_time_mmss" data-value="{{ '' if row.riddle_time_mmss == '—' else row.riddle_time_mmss }}">{{ row.riddle_time_mmss }}</td>
+            <td class="editable-cell" data-column="hint_count" data-value="{{ row.hint_count_display }}">{{ row.hint_count_display }}</td>
+            <td class="editable-cell" data-column="hints" data-value="{{ row.hints_display }}">{{ row.hints_display or '—' }}</td>
             <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
           </tr>
           {% endfor %}
@@ -170,41 +148,6 @@
       </table>
       {% else %}
       <div class="viewer-message">No riddles stored for this game.</div>
-      {% endif %}
-    </section>
-
-    <section id="hintsSection" class="panel game-viewer-panel compact-viewer-panel">
-      <h2>Hints</h2>
-      {% if hints %}
-      <table class="simple-table viewer-table editable-table compact-table">
-        <thead>
-          <tr>
-            {% for col in hint_columns %}
-            <th>{{ col }}</th>
-            {% endfor %}
-            <th>Save</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in hints %}
-          <tr data-table="game_hints" data-rowid="{{ row._rowid_ }}">
-            {% for col in hint_columns %}
-            {% set raw_value = serialize_db_value(row.get(col)) %}
-            {% set is_blocked = col in editable_tables['game_hints']['blocked_columns'] %}
-            <td
-              class="{% if not is_blocked %}editable-cell{% else %}readonly-cell{% endif %}"
-              data-column="{{ col }}"
-              data-value="{{ raw_value }}"
-              {% if is_blocked %}data-readonly="true"{% endif %}
-            >{{ raw_value or '—' }}</td>
-            {% endfor %}
-            <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div class="viewer-message">No hints stored for this game.</div>
       {% endif %}
     </section>
 
