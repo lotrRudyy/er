@@ -204,32 +204,19 @@ class GameMaster:
         return
 
     def _mark_solved(self, node: str, source: str) -> None:
-        changed = False
         with self._lock:
             run = self.state.current_run
             if run is None:
                 return
             timing = run.riddle_timings.get(node)
-            if timing is None or timing.solved:
+            if timing is None:
                 return
-            now_iso = iso_now()
-            timing.solved = True
-            timing.solved_at = now_iso
-            timing.source = source
-            timing.solve_time_from_run_start_s = round(time.monotonic() - run.started_monotonic, 3)
-            self.state.last_riddle_solved_at = now_iso
-            changed = True
-            if timing.activated_at:
-                try:
-                    activated_dt = datetime.fromisoformat(timing.activated_at)
-                    solved_dt = datetime.fromisoformat(now_iso)
-                    timing.solve_time_from_activation_s = round((solved_dt - activated_dt).total_seconds(), 3)
-                except Exception:
-                    timing.solve_time_from_activation_s = None
-        self._record_event("solved", {"node": node, "source": source})
-        if changed:
-            self.publish_game_state()
 
+            timing.solve_time_s = round(time.monotonic() - run.started_monotonic, 3)
+            self.state.last_riddle_solved_at = iso_now()
+
+        self._record_event("solved", {"node": node, "source": source})
+        self.publish_game_state()
 
     @staticmethod
     def _merge_riddle_state(previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
