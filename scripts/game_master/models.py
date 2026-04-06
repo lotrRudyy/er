@@ -16,6 +16,7 @@ class RiddleTiming:
     solve_time_s: float = 0.0
     hint_count: int = 0
     hints: str = ""
+    segment_started_monotonic: float | None = None
 
 @dataclass(slots=True)
 class CurrentRun:

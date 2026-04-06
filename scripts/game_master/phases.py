@@ -411,7 +411,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         lighting_phase_on_enter=12,
         on_enter=(
             TransitionAction("pulse_open", {"lock": "slider", "max_open_ms": 1000}),
-            TransitionAction("log_solve_time", {"riddle": "star_slider"}),
+            TransitionAction("log_solve_time", {"riddle": "stars"}),
             TransitionAction("delay", {
                 "seconds": 0,
                 "then": [
