@@ -1948,7 +1948,7 @@ NODE_LABELS = [
     ("chess", "Chess"),
     ("knocking", "Knocking"),
     ("candles", "Candles"),
-    ("stars", "Stars"),
+    ("star_slider", "Star Slider"),
     ("star_sky", "Star Sky"),
 ]
 
@@ -2090,6 +2090,7 @@ def build_game_view_state(game_id: str) -> dict[str, Any]:
         rendered['hint_count_display'] = int(rendered.get('hint_count') or 0)
         rendered['hints_display'] = serialize_db_value(rendered.get('hints')) or ''
         rendered_riddles.append(rendered)
+    rendered_riddles.sort(key=lambda row: RIDDLE_ORDER_V2.index(row.get('riddle_key')) if row.get('riddle_key') in RIDDLE_ORDER_V2 else 999)
     raw_rows = [
         {"table": "games", "rowid": game.get('_rowid_'), "raw_json": json.dumps({k: v for k, v in game.items() if not str(k).startswith('_') and not str(k).endswith('_display') and not str(k).endswith('_mmss')}, ensure_ascii=False, indent=2, default=str)}
     ] + [
