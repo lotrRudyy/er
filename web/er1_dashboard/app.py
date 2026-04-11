@@ -2228,7 +2228,7 @@ def _reset_riddle_display_state_locked_v2(self):
     self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
     self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
     self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-    self.riddle_states["stars"] = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
 
 
 def _update_node_state_v2(self, node_id: str, payload: dict[str, Any]) -> None:
@@ -2260,7 +2260,7 @@ def _update_node_state_v2(self, node_id: str, payload: dict[str, Any]) -> None:
                 if last_attempt and (not attempts or attempts[-1] != last_attempt):
                     attempts.append(last_attempt)
                 merged['attempted_sequences'] = attempts
-            elif riddle_id == 'stars':
+            elif riddle_id in {'stars', 'star_slider'}:
                 attempts = list(merged.get('attempted_star_signs') or [])
                 last_positions = payload.get('last_attempt_positions')
                 if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):

@@ -244,36 +244,31 @@ class GameMaster:
         self.publish_game_state()
 
     @staticmethod
-    def _canonical_riddle_name(name: str) -> str:
-        aliases = {
-            "star_slider": "stars",
-            "stars": "stars",
-        }
-        return aliases.get(str(name or "").strip(), str(name or "").strip())
-
-    @classmethod
-    def _merge_riddle_state(cls, previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
+    def _merge_riddle_state(previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(previous or {})
         merged.update(payload)
-        rid = cls._canonical_riddle_name(str(payload.get("id") or payload.get("node") or ""))
+        rid = str(payload.get("id") or "")
         if rid in {"knocking", "candles"}:
             attempts = list(merged.get("attempted_sequences") or [])
             last_attempt = str(payload.get("last_attempt") or "").strip()
             if last_attempt and (not attempts or attempts[-1] != last_attempt):
                 attempts.append(last_attempt)
             merged["attempted_sequences"] = attempts
-        elif rid == "stars":
+        elif rid in {"stars", "star_slider"}:
             attempts = list(merged.get("attempted_star_signs") or [])
             last_positions = payload.get("last_attempt_positions")
             if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
                 attempts.append(last_positions)
             merged["attempted_star_signs"] = attempts
-        merged["id"] = rid or str(payload.get("id") or "")
         return merged
 
     def handle_heartbeat(self, node_id: str) -> None:
         with self._lock:
             self.state.mark_hb(node_id)
+
+    @staticmethod
+    def _canonical_riddle_name(name: str) -> str:
+        return "stars" if str(name).strip() == "star_slider" else str(name).strip()
 
     def handle_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
@@ -286,7 +281,7 @@ class GameMaster:
         if not node or not event:
             raise ValueError("game/event requires node and event")
         self._record_event("game_event", payload)
-        if event == "solved" and node in config.RIDDLES:
+        if event == "solved":
             self.handle_solve(node, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
