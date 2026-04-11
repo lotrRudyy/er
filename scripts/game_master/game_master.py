@@ -244,10 +244,18 @@ class GameMaster:
         self.publish_game_state()
 
     @staticmethod
-    def _merge_riddle_state(previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
+    def _canonical_riddle_name(name: str) -> str:
+        aliases = {
+            "star_slider": "stars",
+            "stars": "stars",
+        }
+        return aliases.get(str(name or "").strip(), str(name or "").strip())
+
+    @classmethod
+    def _merge_riddle_state(cls, previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(previous or {})
         merged.update(payload)
-        rid = str(payload.get("id") or "")
+        rid = cls._canonical_riddle_name(str(payload.get("id") or payload.get("node") or ""))
         if rid in {"knocking", "candles"}:
             attempts = list(merged.get("attempted_sequences") or [])
             last_attempt = str(payload.get("last_attempt") or "").strip()
@@ -260,6 +268,7 @@ class GameMaster:
             if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
                 attempts.append(last_positions)
             merged["attempted_star_signs"] = attempts
+        merged["id"] = rid or str(payload.get("id") or "")
         return merged
 
     def handle_heartbeat(self, node_id: str) -> None:
@@ -272,12 +281,12 @@ class GameMaster:
             self.state.node_last_state[node_id] = self._merge_riddle_state(previous, payload)
 
     def handle_game_event(self, payload: dict[str, Any]) -> None:
-        node = str(payload.get("node", "")).strip()
+        node = self._canonical_riddle_name(str(payload.get("node", "")).strip())
         event = str(payload.get("event", "")).strip().lower()
         if not node or not event:
             raise ValueError("game/event requires node and event")
         self._record_event("game_event", payload)
-        if event == "solved":
+        if event == "solved" and node in config.RIDDLES:
             self.handle_solve(node, source="node")
 
     def handle_game_cmd(self, payload: dict[str, Any]) -> None:
@@ -317,7 +326,7 @@ class GameMaster:
             self.add_hint(str(payload.get("riddle", "")).strip(), str(payload.get("hint_text", "")).strip())
             return
         if cmd == "solve":
-            riddle = str(payload.get("node", payload.get("riddle", ""))).strip()
+            riddle = self._canonical_riddle_name(str(payload.get("node", payload.get("riddle", ""))).strip())
             self.handle_solve(riddle, source="manual")
             return
         if cmd == "open_lock":

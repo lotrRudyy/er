@@ -1938,7 +1938,7 @@ RIDDLES = [
     {"id": "chess", "label": "Chess", "node_id": "chess", "manual": False},
     {"id": "knocking", "label": "Knocking", "node_id": "knocking", "manual": False},
     {"id": "candles", "label": "Candles", "node_id": "candles", "manual": False},
-    {"id": "stars", "label": "Stars", "node_id": "stars", "manual": False},
+    {"id": "stars", "label": "Stars", "node_id": "star_slider", "manual": False},
     {"id": "sissi", "label": "Sissi", "node_id": None, "manual": True},
 ]
 NODE_LABELS = [
@@ -2221,7 +2221,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
 
 
 def _reset_riddle_display_state_locked_v2(self):
-    for node_id in ["images_piano", "chess", "knocking", "candles", "stars"]:
+    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
         self._clear_node_payload_locked(node_id)
     self.riddle_states["images"] = {"id": "images", "buttons": {}}
     self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
