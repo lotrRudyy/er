@@ -314,7 +314,7 @@ function buildRiddleRow(riddle) {
     btn.addEventListener('click', async () => {
       const delta = parseInt(btn.dataset.delta || '0', 10) || 0;
       if (!delta) return;
-      await api('/api/hints-count', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, delta }) });
+      await api('/api/hints', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, delta }) });
       await fetchAndPatch();
     });
   });
