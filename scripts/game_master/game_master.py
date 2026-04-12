@@ -188,7 +188,7 @@ class GameMaster:
                     "riddle_key": timing.riddle_key,
                     "solve_time_s": timing.solve_time_s,
                     "hint_count": timing.hint_count,
-                    "hints": timing.hints,
+                    "hints": "",
                 }
                 for node, timing in run.riddle_timings.items()
             },
@@ -345,6 +345,9 @@ class GameMaster:
                 if k not in {"cmd", "action"}:
                     out[k] = v
             self.publish_maglock_cmd(out)
+            return
+        if cmd == "set_hint_count":
+            self.set_hint_count(str(payload.get("riddle", "")).strip(), int(payload.get("count", 0) or 0))
             return
         if cmd == "list_games":
             self.publish_debug("GAMES", {"games": self.db.list_games()})
