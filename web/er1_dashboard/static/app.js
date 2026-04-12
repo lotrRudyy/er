@@ -1,4 +1,3 @@
-
 const state = {
   game: { phase: 0, last_phase: null, phase_name: 'standby', phase_display: '0 standby', last_phase_name: '', elapsed_s: 0, current_riddle_elapsed_s: 0, current_riddle_name: '', timer_running: false, players_count: 0 },
   nodes: [],
@@ -16,7 +15,6 @@ let localRiddleTimerStartedAt = 0;
 const dimDrafts = {};
 const dimEditing = {};
 let playersCountEditing = false;
-const hintEditing = new Set();
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -154,43 +152,45 @@ function renderLights() {
     const buttonClass = light.on ? 'is-on' : 'is-off';
 
     if (light.dimmable) {
-      const dimValue = resolveDimValue(light);
+      const pct = resolveDimValue(light);
       card.innerHTML = `
         <div class="control-stack">
           <button class="control-button ${buttonClass}">
             ${light.label}
-            <span class="state-line">${light.on ? `ON (${light.pct}%)` : `OFF (${light.pct}%)`}</span>
+            <span class="state-line">${light.on ? 'ON' : 'OFF'} (${light.pct}%)</span>
           </button>
           <div class="dim-row">
-            <button class="control-button ${buttonClass}">${light.on ? 'Off' : 'On'}</button>
-            <input class="dim-input" type="number" min="0" max="100" value="${dimValue}" />
+            <button class="control-button ${buttonClass}">${light.on ? 'On' : 'Off'}</button>
+            <input class="dim-input" type="text" inputmode="numeric" value="${pct}" />
           </div>
         </div>
       `;
-      const buttons = card.querySelectorAll('button');
-      for (const btn of buttons) {
-        btn.addEventListener('click', async () => {
-          const input = card.querySelector('.dim-input');
-          let pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
-          const action = light.on ? 'off' : 'on';
-          if (!light.on && pct <= 0) pct = 100;
-          dimDrafts[light.id] = action === 'off' ? 0 : pct;
-          await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action, pct }) });
-          await fetchAndPatch();
-        });
-      }
-
+      const [toggleBtn, setBtn] = card.querySelectorAll('button');
+      toggleBtn.addEventListener('click', async () => {
+        const action = light.on ? 'off' : 'on';
+        const nextPct = action === 'off' ? 0 : Math.max(0, Math.min(100, parseInt(resolveDimValue(light) || '0', 10) || 0));
+        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action, pct: nextPct }) });
+        await fetchAndPatch();
+      });
+      setBtn.addEventListener('click', async () => {
+        const pctValue = Math.max(0, Math.min(100, parseInt(card.querySelector('.dim-input').value || '0', 10) || 0));
+        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action: 'set_pct', pct: pctValue }) });
+        await fetchAndPatch();
+      });
       const input = card.querySelector('.dim-input');
       input.addEventListener('focus', () => { dimEditing[light.id] = true; });
       input.addEventListener('blur', () => { dimEditing[light.id] = false; });
-      input.addEventListener('input', () => { dimDrafts[light.id] = input.value; });
+      input.addEventListener('input', () => {
+        input.value = input.value.replace(/[^0-9]/g, '');
+        dimDrafts[light.id] = input.value;
+      });
       input.addEventListener('keydown', async (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        const pct = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
-        dimDrafts[light.id] = pct;
+        const pctValue = Math.max(0, Math.min(100, parseInt(input.value || '0', 10) || 0));
+        dimDrafts[light.id] = pctValue;
         dimEditing[light.id] = false;
-        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action: 'set_pct', pct }) });
+        await api('/api/light', { method: 'POST', body: JSON.stringify({ group: light.id, action: 'set_pct', pct: pctValue }) });
         await fetchAndPatch();
       });
     } else {
@@ -273,80 +273,67 @@ function renderRiddleInfo(riddle) {
   if (riddle.id === 'piano') return renderPianoSummary(riddle.piano_summary);
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
   if (riddle.id === 'knocking' || riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
-  if (riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
+  if (riddle.id === 'star_slider' || riddle.id === 'stars') return renderStarSliderSummary(riddle.star_slider_summary);
   return riddle.info || '';
 }
 
-function hintCellHtml(riddle, inputValue='') {
-  const items = (riddle.hints || []).map(h => `
-    <div class="hint-item">
-      <span>${h.text}</span>
-      <button class="hint-remove" data-hint-id="${h.id}">x</button>
-    </div>
-  `).join('');
+function hintCellHtml(riddle) {
+  const count = Math.max(0, parseInt(riddle.hint_count || 0, 10) || 0);
   return `
-    <div class="hint-wrap">
-      <input class="hint-input" type="text" placeholder="Type hint and press Enter" value="${inputValue}" />
-      <div class="hint-list">${items}</div>
+    <div class="hint-counter-wrap">
+      <span class="hint-counter-label">Hints</span>
+      <div class="hint-counter-row">
+        <button class="hint-adjust hint-minus" data-delta="-1">-</button>
+        <span class="hint-counter-value">${count}</span>
+        <button class="hint-adjust hint-plus" data-delta="1">+</button>
+      </div>
     </div>
   `;
 }
 
-function renderRiddles() {
-  const body = document.getElementById('riddlesBody');
-  const activeHintValues = {};
-  document.querySelectorAll('#riddlesBody tr[data-riddle-id]').forEach(row => {
-    const rid = row.dataset.riddleId;
-    const input = row.querySelector('.hint-input');
-    if (input && document.activeElement === input) {
-      activeHintValues[rid] = input.value;
-      hintEditing.add(rid);
-    }
-  });
+function buildRiddleRow(riddle) {
+  const infoHtml = renderRiddleInfo(riddle);
+  const currentPhaseName = (state.game.phase_name || '').trim();
+  const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending' || (riddle.manual && currentPhaseName === riddle.id && riddle.phase_state !== 'solved');
+  const tr = document.createElement('tr');
+  tr.dataset.riddleId = riddle.id;
+  tr.innerHTML = `
+    <td>${riddle.label}</td>
+    <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state_label || riddle.phase_state}</span></td>
+    <td><button class="solve-btn ${canSolve ? 'active' : 'inactive'}" ${canSolve ? '' : 'disabled'}>Solve</button></td>
+    <td>${infoHtml}</td>
+    <td>${hintCellHtml(riddle)}</td>
+  `;
 
-  body.innerHTML = '';
-  for (const riddle of state.riddles || []) {
-    const infoHtml = renderRiddleInfo(riddle);
-    const currentPhaseName = (state.game.phase_name || '').trim();
-    const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending' || (riddle.manual && currentPhaseName === riddle.id && riddle.phase_state !== 'solved');
-    const tr = document.createElement('tr');
-    tr.dataset.riddleId = riddle.id;
-    tr.innerHTML = `
-      <td>${riddle.label}</td>
-      <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state_label || riddle.phase_state}</span></td>
-      <td><button class="solve-btn ${canSolve ? 'active' : 'inactive'}" ${canSolve ? '' : 'disabled'}>Solve</button></td>
-      <td>${infoHtml}</td>
-      <td>${hintCellHtml(riddle, activeHintValues[riddle.id] || '')}</td>
-    `;
-    const solveBtn = tr.querySelector('.solve-btn');
-    if (canSolve && riddle.phase_state !== 'solved') {
-      solveBtn.addEventListener('click', async () => {
-        await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
-        await fetchAndPatch();
-      });
-    }
-
-    const hintInput = tr.querySelector('.hint-input');
-    hintInput.addEventListener('focus', () => hintEditing.add(riddle.id));
-    hintInput.addEventListener('blur', () => hintEditing.delete(riddle.id));
-    hintInput.addEventListener('keydown', async (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      const text = hintInput.value.trim();
-      if (!text) return;
-      await api('/api/hints', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, text }) });
-      hintInput.value = '';
-      hintEditing.delete(riddle.id);
+  const solveBtn = tr.querySelector('.solve-btn');
+  if (canSolve && riddle.phase_state !== 'solved') {
+    solveBtn.addEventListener('click', async () => {
+      await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
       await fetchAndPatch();
     });
-    tr.querySelectorAll('.hint-remove').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        await api(`/api/hints/${riddle.id}/${btn.dataset.hintId}`, { method: 'DELETE' });
-        await fetchAndPatch();
-      });
-    });
-    body.appendChild(tr);
   }
+
+  tr.querySelectorAll('.hint-adjust').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const delta = parseInt(btn.dataset.delta || '0', 10) || 0;
+      if (!delta) return;
+      await api('/api/hints', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, delta }) });
+      await fetchAndPatch();
+    });
+  });
+
+  return tr;
+}
+
+function renderRiddles() {
+  const leftBody = document.getElementById('riddlesBodyLeft');
+  const rightBody = document.getElementById('riddlesBodyRight');
+  leftBody.innerHTML = '';
+  rightBody.innerHTML = '';
+  const riddles = state.riddles || [];
+  const splitIndex = Math.ceil(riddles.length / 2);
+  riddles.slice(0, splitIndex).forEach(r => leftBody.appendChild(buildRiddleRow(r)));
+  riddles.slice(splitIndex).forEach(r => rightBody.appendChild(buildRiddleRow(r)));
 }
 
 function patchState(data) {
@@ -402,7 +389,6 @@ function wireTopControls() {
 
   const input = document.getElementById('playersCountInput');
   const saveButton = document.getElementById('playersCountSave');
-
   const getDraftCount = () => Math.max(0, parseInt(String(input?.value ?? state.game.players_count ?? 0).replace(/[^0-9-]/g, ''), 10) || 0, 0);
 
   const savePlayersCount = async (nextCount) => {
@@ -416,12 +402,8 @@ function wireTopControls() {
 
   if (input) {
     input.addEventListener('focus', () => { playersCountEditing = true; });
-    input.addEventListener('blur', () => {
-      playersCountEditing = false;
-    });
-    input.addEventListener('input', () => {
-      input.value = input.value.replace(/[^0-9]/g, '');
-    });
+    input.addEventListener('blur', () => { playersCountEditing = false; });
+    input.addEventListener('input', () => { input.value = input.value.replace(/[^0-9]/g, ''); });
     input.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
@@ -429,13 +411,8 @@ function wireTopControls() {
     });
   }
 
-  saveButton?.addEventListener('mousedown', () => {
-    playersCountEditing = true;
-  });
-
-  saveButton?.addEventListener('click', async () => {
-    await savePlayersCount(getDraftCount());
-  });
+  saveButton?.addEventListener('mousedown', () => { playersCountEditing = true; });
+  saveButton?.addEventListener('click', async () => { await savePlayersCount(getDraftCount()); });
 }
 
 setInterval(() => {
