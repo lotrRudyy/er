@@ -211,7 +211,10 @@ class GameMaster:
             if run is None:
                 return
             now = time.monotonic()
+            current_phase = int(self.state.phase)
             for node in nodes:
+                if node == "candles" and current_phase < 11:
+                    continue
                 timing = run.riddle_timings.get(node)
                 if timing is None:
                     continue
@@ -364,6 +367,7 @@ class GameMaster:
         self._record_event("players_count_updated", {"players_count": cleaned_count})
 
     def add_hint(self, riddle: str, hint_text: str) -> None:
+        riddle = self._canonical_riddle_name(riddle)
         if not riddle:
             raise ValueError("add_hint requires riddle")
         with self._lock:
@@ -377,6 +381,20 @@ class GameMaster:
             if hint_text:
                 timing.hints = ((timing.hints + "\n---\n" + hint_text) if timing.hints else hint_text).strip()
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
+
+    def set_hint_count(self, riddle: str, count: int) -> None:
+        riddle = self._canonical_riddle_name(riddle)
+        if not riddle:
+            raise ValueError("set_hint_count requires riddle")
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                raise ValueError("No current run")
+            timing = run.riddle_timings.get(riddle)
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            timing.hint_count = max(0, int(count or 0))
+        self._record_event("hint_count_set", {"riddle": riddle, "count": max(0, int(count or 0))})
 
     def handle_solve(self, riddle: str, source: str) -> None:
         if riddle not in config.RIDDLES:
