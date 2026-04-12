@@ -160,18 +160,33 @@ LIGHT_NAME_BY_ID = {
 }
 
 
-def load_hint_store() -> dict[str, list[dict[str, Any]]]:
+def load_hint_store() -> dict[str, int]:
     if not HINTS_PATH.exists():
         return {}
     try:
         data = json.loads(HINTS_PATH.read_text())
-        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+    if not isinstance(data, dict):
+        return {}
+    normalized: dict[str, int] = {}
+    for key, value in data.items():
+        name = str(key or '').strip()
+        if not name:
+            continue
+        if isinstance(value, list):
+            normalized[name] = max(len(value), 0)
+            continue
+        try:
+            normalized[name] = max(int(value), 0)
+        except Exception:
+            normalized[name] = 0
+    return normalized
 
 
-def save_hint_store(data: dict[str, list[dict[str, Any]]]) -> None:
-    HINTS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+def save_hint_store(data: dict[str, int]) -> None:
+    normalized = {str(key): max(int(value), 0) for key, value in (data or {}).items()}
+    HINTS_PATH.write_text(json.dumps(normalized, ensure_ascii=False, indent=2))
 
 
 def pretty_phase_name(name: str) -> str:
@@ -191,7 +206,7 @@ class DashboardStore:
     node_last_hb: dict[str, float] = field(default_factory=dict)
     locks: dict[str, dict[str, Any]] = field(default_factory=dict)
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
-    local_hints: dict[str, list[dict[str, Any]]] = field(default_factory=load_hint_store)
+    local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
@@ -255,6 +270,8 @@ class DashboardStore:
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
         self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        self.local_hint_counts = {item["id"]: 0 for item in RIDDLES}
+        save_hint_store(self.local_hint_counts)
 
     def update_node_hb(self, node_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -333,20 +350,13 @@ class DashboardStore:
         with self.lock:
             self.lights[light_name] = payload
 
-    def add_hint(self, riddle_id: str, hint_text: str) -> list[dict[str, Any]]:
-        hint = {"id": f"{int(time.time() * 1000)}", "text": hint_text.strip()}
+    def update_hint_count(self, riddle_id: str, delta: int) -> int:
         with self.lock:
-            items = self.local_hints.setdefault(riddle_id, [])
-            items.append(hint)
-            save_hint_store(self.local_hints)
-            return list(items)
-
-    def remove_hint(self, riddle_id: str, hint_id: str) -> list[dict[str, Any]]:
-        with self.lock:
-            items = self.local_hints.setdefault(riddle_id, [])
-            self.local_hints[riddle_id] = [x for x in items if str(x.get("id")) != str(hint_id)]
-            save_hint_store(self.local_hints)
-            return list(self.local_hints[riddle_id])
+            current = max(int(self.local_hint_counts.get(riddle_id, 0) or 0), 0)
+            next_count = max(current + int(delta), 0)
+            self.local_hint_counts[riddle_id] = next_count
+            save_hint_store(self.local_hint_counts)
+            return next_count
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -356,14 +366,14 @@ class DashboardStore:
             lights = json.loads(json.dumps(self.lights))
             riddle_states = json.loads(json.dumps(self.riddle_states))
             node_last_hb = dict(self.node_last_hb)
-            local_hints = json.loads(json.dumps(self.local_hints))
+            local_hint_counts = json.loads(json.dumps(self.local_hint_counts))
 
         return {
             "game": self._build_game_summary(game),
             "nodes": self._build_node_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
-            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hints),
+            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
             "meta": {"broker": BROKER_HOST},
         }
 
@@ -415,6 +425,25 @@ class DashboardStore:
             "current_riddle_started_at": current_riddle_started_at,
         }
 
+    @staticmethod
+    def _format_uptime(value: Any) -> str:
+        try:
+            total = max(int(float(value)), 0)
+        except Exception:
+            return ''
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, seconds = divmod(rem, 60)
+        parts = []
+        if days:
+            parts.append(f'{days}d')
+        if days or hours:
+            parts.append(f'{hours}h')
+        if days or hours or minutes:
+            parts.append(f'{minutes}m')
+        parts.append(f'{seconds}s')
+        return ' '.join(parts)
+
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         now_mono = time.monotonic()
         out = []
@@ -423,9 +452,9 @@ class DashboardStore:
             online = (last is not None) and (now_mono - last <= 15.0)
             hb = node_states.get(node_id, {}).get("hb", {})
             uptime = hb.get("up") if isinstance(hb, dict) else None
-            status = "online" if online else "offline"
+            status = 'online' if online else 'offline'
             if online and isinstance(uptime, (int, float)):
-                status = f"online ({int(uptime)}s)"
+                status = f'online ({self._format_uptime(uptime)})'
             out.append({"id": node_id, "label": label, "online": online, "status": status})
         return out
 
@@ -485,7 +514,7 @@ class DashboardStore:
             })
         return out
 
-    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hints: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hint_counts: dict[str, int]) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = set(meta.get("active", ()))
@@ -540,7 +569,7 @@ class DashboardStore:
                 "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
                 "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
                 "piano_summary": self._extract_piano_summary(riddle_id, state_payload),
-                "hints": list(local_hints.get(riddle_id, [])),
+                "hint_count": max(int(local_hint_counts.get(riddle_id, 0) or 0), 0),
             })
         return out
 
@@ -682,7 +711,7 @@ class DashboardStore:
 
     @classmethod
     def _extract_star_slider_summary(cls, riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
-        if riddle_id != "star_slider" or not state_payload:
+        if riddle_id not in {"star_slider", "stars"} or not state_payload:
             return None
         positions = state_payload.get("reader_positions") or {}
         current = cls._extract_star_slider_values(positions)
@@ -716,7 +745,7 @@ class DashboardStore:
 
     @staticmethod
     def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
-        if not state_payload or riddle_id in {"images", "piano", "chess", "knocking", "candles", "star_slider"}:
+        if not state_payload or riddle_id in {"images", "piano", "chess", "knocking", "candles", "star_slider", "stars"}:
             return ""
         generic = []
         for key, value in state_payload.items():
@@ -1861,22 +1890,21 @@ def api_light() -> Any:
     return jsonify({"ok": True})
 
 
-@app.post("/api/hints")
-def api_add_hint() -> Any:
-    data = request.get_json(force=True)
-    riddle = str(data.get("riddle", "")).strip()
-    hint_text = str(data.get("text", "")).strip()
-    if not riddle or not hint_text:
-        return jsonify({"ok": False, "error": "riddle and text required"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "add_hint", "riddle": riddle, "hint_text": hint_text})
-    items = store.add_hint(riddle, hint_text)
-    return jsonify({"ok": True, "hints": items})
-
-
-@app.delete("/api/hints/<riddle>/<hint_id>")
-def api_delete_hint(riddle: str, hint_id: str) -> Any:
-    items = store.remove_hint(riddle, hint_id)
-    return jsonify({"ok": True, "hints": items})
+@app.post("/api/hints-count")
+def api_hints_count() -> Any:
+    data = request.get_json(force=True) or {}
+    riddle = _canonical_riddle_name(data.get("riddle", ""))
+    if riddle not in {item["id"] for item in RIDDLES}:
+        return jsonify({"ok": False, "error": "invalid riddle"}), 400
+    try:
+        delta = int(data.get("delta", 0))
+    except Exception:
+        return jsonify({"ok": False, "error": "delta must be an integer"}), 400
+    if delta == 0:
+        return jsonify({"ok": False, "error": "delta required"}), 400
+    hint_count = store.update_hint_count(riddle, delta)
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_hint_count", "riddle": riddle, "hint_count": hint_count})
+    return jsonify({"ok": True, "riddle": riddle, "hint_count": hint_count})
 
 
 # ---- ER1 v2 dashboard overrides (new game_master DB schema) ----

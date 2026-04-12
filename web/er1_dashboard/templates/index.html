@@ -49,26 +49,40 @@
 
         <div class="nodes-panel">
           <div class="label">Controllers / Nodes</div>
-          <div id="nodesList" class="nodes-list"></div>
+          <div id="nodesList" class="nodes-list nodes-two-col"></div>
         </div>
-
       </div>
     </section>
 
     <section class="panel riddles-panel">
       <h2>Riddles</h2>
-      <table class="simple-table riddles-table">
-        <thead>
-          <tr>
-            <th>Riddle</th>
-            <th>Phase</th>
-            <th>Solve</th>
-            <th>Info</th>
-            <th>Hints</th>
-          </tr>
-        </thead>
-        <tbody id="riddlesBody"></tbody>
-      </table>
+      <div class="riddles-halves">
+        <table class="simple-table riddles-table compact-riddles-table">
+          <thead>
+            <tr>
+              <th>Riddle</th>
+              <th>Phase</th>
+              <th>Solve</th>
+              <th>Info</th>
+              <th>Hints</th>
+            </tr>
+          </thead>
+          <tbody id="riddlesBodyLeft"></tbody>
+        </table>
+
+        <table class="simple-table riddles-table compact-riddles-table">
+          <thead>
+            <tr>
+              <th>Riddle</th>
+              <th>Phase</th>
+              <th>Solve</th>
+              <th>Info</th>
+              <th>Hints</th>
+            </tr>
+          </thead>
+          <tbody id="riddlesBodyRight"></tbody>
+        </table>
+      </div>
     </section>
   </div>
 

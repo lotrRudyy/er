@@ -56,7 +56,7 @@ body { padding: 12px; }
 
 .unified-grid {
   display: grid;
-  grid-template-columns: 520px 180px 860px 1fr;
+  grid-template-columns: 520px 170px 790px 1fr;
   gap: 10px;
   align-items: start;
 }
@@ -125,7 +125,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
 }
 .control-card {
@@ -134,23 +134,23 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   background: transparent;
   padding: 0;
 }
-#locksGrid .control-card { width: 92px; }
-#lightsGrid .control-card { width: 92px; }
+#locksGrid .control-card { width: 82px; }
+#lightsGrid .control-card { width: 82px; }
 
 .control-stack { display: grid; gap: 6px; }
 .control-button {
   width: 100%;
-  min-height: 62px;
+  min-height: 56px;
   border-width: 2px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
   text-align: center;
 }
 .control-button .state-line {
   display: block;
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: 4px;
+  font-size: 10px;
   font-weight: 700;
 }
 .control-button.is-open, .control-button.is-on {
@@ -166,23 +166,24 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 
 .dim-row {
   display: grid;
-  grid-template-columns: 1fr 42px;
-  gap: 6px;
+  grid-template-columns: 1fr 38px;
+  gap: 4px;
 }
-.dim-row .control-button { min-height: 38px; font-size: 12px; }
+.dim-row .control-button { min-height: 34px; font-size: 11px; }
 .dim-input {
   width: 42px;
   padding: 5px 4px;
   min-height: 38px;
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .nodes-list { display: grid; gap: 6px; align-content: start; }
+.nodes-two-col { grid-template-columns: 1fr 1fr; gap: 6px 8px; }
 .node-line {
   padding: 6px 8px;
   border: 1px solid var(--line);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 .node-on { background: var(--green-bg); border-color: var(--green-line); color: var(--green-text); }
@@ -195,15 +196,15 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 }
 .simple-table th, .simple-table td {
   border: 1px solid var(--line);
-  padding: 8px 10px;
-  vertical-align: top;
-  font-size: 15px;
+  padding: 6px 8px;
+  vertical-align: middle;
+  font-size: 14px;
 }
 .simple-table th { text-align: left; background: #f0f0f0; }
 .riddles-table th:nth-child(1) { width: 140px; }
 .riddles-table th:nth-child(2) { width: 90px; }
 .riddles-table th:nth-child(3) { width: 80px; }
-.riddles-table th:nth-child(5) { width: 300px; }
+.riddles-table th:nth-child(5) { width: 120px; }
 
 .status-badge {
   display: inline-block;
@@ -211,7 +212,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   border: 1px solid var(--gray-line);
   background: var(--gray-bg);
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
   width: fit-content;
 }
@@ -243,7 +244,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   color: var(--red-text);
 }
 
-.hint-list { margin-top: 4px; }
+
 
 
 .inline-info {
@@ -664,4 +665,50 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .all-games-table .nav-button,
 .all-games-table .danger-button {
   min-width: 72px;
+}
+
+
+.riddles-halves {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.compact-riddles-table th:nth-child(1) { width: 90px; }
+.compact-riddles-table th:nth-child(2) { width: 74px; }
+.compact-riddles-table th:nth-child(3) { width: 64px; }
+.compact-riddles-table th:nth-child(5) { width: 86px; }
+.compact-riddles-table td { height: 46px; }
+.compact-riddles-table .solve-btn { padding: 5px 8px; font-size: 13px; }
+.compact-riddles-table .status-badge { font-size: 11px; padding: 3px 7px; }
+.compact-riddles-table .images-buttons { gap: 4px; }
+.compact-riddles-table .images-buttons .status-badge { margin: 0; }
+.compact-riddles-table .inline-info { gap: 5px; font-size: 13px; }
+.compact-riddles-table .inline-status { padding: 1px 6px; }
+
+.hint-counter-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.hint-counter-value {
+  min-width: 22px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.hint-counter-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.hint-counter-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
 }
