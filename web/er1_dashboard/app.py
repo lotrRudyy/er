@@ -2047,15 +2047,19 @@ def _refresh_game_duration_and_end(conn: sqlite3.Connection, game_id: str, expli
 
 def _calculate_riddle_timing_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     canonical = []
+    has_run_start_times = False
     for source_row in rows:
         row = dict(source_row)
         row['riddle_key'] = _canonical_riddle_name(row.get('riddle_key') or row.get('riddle'))
+        solve_from_run_start = _seconds_or_none(row.get('solve_time_from_run_start_s'))
+        row['_solve_from_run_start_seconds'] = solve_from_run_start
+        if solve_from_run_start is not None:
+            has_run_start_times = True
         canonical.append(row)
     _, progress = _duration_and_progress_from_rows(canonical)
     calculated = []
     for row in canonical:
         key = row.get('riddle_key')
-        direct = max(0.0, _safe_float(row.get('solve_time_s')))
         if key in {'tangram', 'magnet'}:
             anchor = progress.get('chains', 0.0)
         elif key == 'chess':
@@ -2066,9 +2070,16 @@ def _calculate_riddle_timing_rows(rows: list[dict[str, Any]]) -> list[dict[str, 
             idx = RIDDLE_ORDER_V2.index(key) if key in RIDDLE_ORDER_V2 else -1
             prev_key = RIDDLE_ORDER_V2[idx - 1] if idx > 0 else None
             anchor = progress.get(prev_key, 0.0) if prev_key else 0.0
+        solve_from_run_start = row.get('_solve_from_run_start_seconds')
+        if has_run_start_times and solve_from_run_start is not None:
+            solve_total = max(0.0, float(solve_from_run_start))
+            direct = max(0.0, solve_total - anchor)
+        else:
+            direct = max(0.0, _safe_float(row.get('solve_time_s')))
+            solve_total = progress.get(key, direct)
         row['_anchor_seconds'] = anchor
         row['_riddle_seconds'] = direct
-        row['_solve_seconds'] = progress.get(key, direct)
+        row['_solve_seconds'] = solve_total
         calculated.append(row)
     return calculated
 
@@ -2255,6 +2266,8 @@ def _reset_riddle_display_state_locked_v2(self):
     self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
     self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
     self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    self.local_hint_counts = {}
+    save_hint_store(self.local_hint_counts)
 
 
 def _update_node_state_v2(self, node_id: str, payload: dict[str, Any]) -> None:
