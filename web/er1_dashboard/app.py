@@ -226,7 +226,7 @@ class DashboardStore:
                 phase = int(next_payload.get("phase", 0))
             except Exception:
                 phase = 0
-            if phase in {1, 2}:
+            if phase in {0, 1, 2}:
                 self._reset_riddle_display_state_locked()
 
     def set_local_phase(self, mode: str) -> None:
@@ -246,7 +246,7 @@ class DashboardStore:
             current["current_riddle_name"] = ""
             current["current_riddle_started_at"] = None
             self.game_state = current
-            if phase in {1, 2}:
+            if phase in {0, 1, 2}:
                 self._reset_riddle_display_state_locked()
 
     def set_local_players_count(self, players_count: int) -> None:
