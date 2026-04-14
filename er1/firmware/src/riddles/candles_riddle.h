@@ -16,7 +16,7 @@ public:
 
 private:
   static constexpr bool kDevLog = false;
-  static constexpr uint32_t kMetricIntervalMs = 500;
+  static constexpr uint32_t kMetricIntervalMs = 1000;
   static constexpr uint32_t kSeqTimeoutMs = 4500;
   static constexpr size_t kAttemptStringMax = 24;
 

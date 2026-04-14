@@ -112,15 +112,12 @@ void CandlesRiddle::tick(uint32_t nowMs) {
       for (int i = 0; i < 4; i++) {
         if (!lit_[i]) continue;
 
-        // Threshold is per-mic: effBase + delta (delta is your 120).
         const int thrAbs = effBase_[i] + delta_[i];
         const int v0 = analogRead(kMicPins[i]);
-        const int overNow = (v0 > thrAbs) ? 1 : 0;
-        // Live telemetry (so candles_mic always shows current values even before first blow)
         lastRaw_[i] = (uint16_t)v0;
         lastAvgWin_[i] = (uint16_t)v0;
         lastMaxWin_[i] = (uint16_t)v0;
-        lastOver_[i] = overNow;
+        lastOver_[i] = 0;
         lastNeeded_[i] = 0;
         lastHit_[i] = 0;
 
@@ -130,17 +127,6 @@ void CandlesRiddle::tick(uint32_t nowMs) {
         mmLive.samples++;
         mmLive.lastRaw = (uint16_t)v0;
         if ((uint16_t)v0 > mmLive.maxVal) mmLive.maxVal = (uint16_t)v0;
-
-        if (v0 > thrAbs) {
-          String probe = String("{\"i\":") + i +
-                         ",\"raw\":" + v0 +
-                         ",\"thr_abs\":" + thrAbs +
-                         ",\"base_eff\":" + effBase_[i] +
-                         ",\"delta\":" + delta_[i] +
-                         ",\"lit\":" + (lit_[i] ? "1" : "0") +
-                         "}";
-          log("INF", "candles_probe", probe);
-        }
 
         if (detectBlow(i, thrAbs)) {
           lastAction_ = nowMs;
@@ -339,18 +325,17 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   lastHit_[idx] = hit ? 1 : 0;
 
   const int baseEff = effBase_[idx];
-  String payload = String("{\"i\":") + idx +
-                   ",\"hit\":" + (hit ? "1" : "0") +
-                   ",\"base_eff\":" + baseEff +
-                   ",\"delta\":" + delta_[idx] +
-                   ",\"thr_abs\":" + thrAbs +
-                   ",\"samples\":" + samples +
-                   ",\"needed\":" + needed +
-                   ",\"over\":" + over +
-                   ",\"avg\":" + lastAvgWin_[idx] +
-                   ",\"min\":" + minV +
-                   ",\"max\":" + maxV +
-                   ",\"last_raw\":" + lastRaw_[idx] +
+  String payload = String("{"i":") + idx +
+                   ","hit":" + (hit ? 1 : 0) +
+                   ","base_eff":" + baseEff +
+                   ","delta":" + delta_[idx] +
+                   ","thr_abs":" + thrAbs +
+                   ","samples":" + samples +
+                   ","needed":" + needed +
+                   ","over":" + over +
+                   ","avg":" + lastAvgWin_[idx] +
+                   ","min":" + minV +
+                   ","max":" + maxV +
                    "}";
   log(hit ? "INF" : "DBG", "candles_blow", payload);
 
@@ -466,27 +451,46 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
     else mm.avg = 0;
   }
 
-  for (int i = 0; i < 4; i++) {
-    MicMetric& mm = metrics_[i];
-
-    String d;
-    d.reserve(160);
-    d = String("{\"i\":") + i +
-        ",\"lit\":" + (lit_[i] ? "1" : "0") +
-        ",\"raw\":" + lastRaw_[i] +
-        ",\"aw\":" + lastAvgWin_[i] +
-        ",\"mw\":" + lastMaxWin_[i] +
-        ",\"ov\":" + lastOver_[i] +
-        ",\"need\":" + lastNeeded_[i] +
-        ",\"hit\":" + lastHit_[i] +
-        ",\"avg\":" + mm.avg +
-        ",\"max\":" + mm.maxVal +
-        ",\"base\":" + effBase_[i] +
-        ",\"sat\":" + micSaturated_[i] +
-        ",\"thr\":" + delta_[i] +
-        "}";
-    log("INF", "candles_mic", d);
-  }
+  String d;
+  d.reserve(320);
+  d = String("{\"c0\":\"") +
+      "L" + (lit_[0] ? String("1") : String("0")) +
+      " r" + lastRaw_[0] +
+      " a" + metrics_[0].avg +
+      " m" + metrics_[0].maxVal +
+      " t" + (effBase_[0] + delta_[0]) +
+      " o" + lastOver_[0] + "/" + lastNeeded_[0] +
+      " h" + lastHit_[0] +
+      (micSaturated_[0] ? " S1" : "") +
+      "\",\"c1\":\"" +
+      "L" + (lit_[1] ? String("1") : String("0")) +
+      " r" + lastRaw_[1] +
+      " a" + metrics_[1].avg +
+      " m" + metrics_[1].maxVal +
+      " t" + (effBase_[1] + delta_[1]) +
+      " o" + lastOver_[1] + "/" + lastNeeded_[1] +
+      " h" + lastHit_[1] +
+      (micSaturated_[1] ? " S1" : "") +
+      "\",\"c2\":\"" +
+      "L" + (lit_[2] ? String("1") : String("0")) +
+      " r" + lastRaw_[2] +
+      " a" + metrics_[2].avg +
+      " m" + metrics_[2].maxVal +
+      " t" + (effBase_[2] + delta_[2]) +
+      " o" + lastOver_[2] + "/" + lastNeeded_[2] +
+      " h" + lastHit_[2] +
+      (micSaturated_[2] ? " S1" : "") +
+      "\",\"c3\":\"" +
+      "L" + (lit_[3] ? String("1") : String("0")) +
+      " r" + lastRaw_[3] +
+      " a" + metrics_[3].avg +
+      " m" + metrics_[3].maxVal +
+      " t" + (effBase_[3] + delta_[3]) +
+      " o" + lastOver_[3] + "/" + lastNeeded_[3] +
+      " h" + lastHit_[3] +
+      (micSaturated_[3] ? " S1" : "") +
+      "\"}";
+  log("INF", "candles_1s", d);
 
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];
