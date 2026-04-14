@@ -59,12 +59,6 @@ static constexpr PhaseCfg kPhaseCfg[15] = {
 static void applyTarget(KnockingRiddle* module, bool enabled, bool solved) {
   if (!module) return;
 
-  if (enabled != s_gameEnabled) {
-    s_gameEnabled = enabled;
-    module->setGameMode(enabled);
-    s_gameSolved = false;  // setGameMode() resets state
-  }
-
   if (solved != s_gameSolved) {
     if (solved) {
       module->onCmd("SOLVE", "");
@@ -72,6 +66,14 @@ static void applyTarget(KnockingRiddle* module, bool enabled, bool solved) {
       module->onCmd("RESET", "");
     }
     s_gameSolved = solved;
+  }
+
+  if (enabled != s_gameEnabled) {
+    s_gameEnabled = enabled;
+    module->setGameMode(enabled);
+    if (!module->isSolved()) {
+      s_gameSolved = false;
+    }
   }
 }
 

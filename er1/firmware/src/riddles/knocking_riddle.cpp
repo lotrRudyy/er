@@ -69,13 +69,32 @@ void KnockingRiddle::begin(Core::NodeContext& ctx) {
 
 void KnockingRiddle::setGameMode(bool inGame) {
   gameActive_ = inGame;
-  resetState(inGame ? "game_enable" : "game_standby");
+  if (inGame) {
+    resetState("game_enable");
+  } else if (solved_) {
+    knockWindowActive_ = false;
+    stopEmbeddedSound();
+    soundHead_ = soundTail_ = 0;
+    soundPlaying_ = false;
+    lastSoundStartMs_ = 0;
+    currentTrack_ = 0;
+    resetSequence();
+  } else {
+    resetState("game_standby");
+  }
   publishState();
 }
 
 void KnockingRiddle::tick(uint32_t nowMs) {
   if (!ctx_) return;
   if (!gameActive_) return;
+
+  if (solved_) {
+    if (embeddedPlaying_) {
+      serviceEmbeddedSound(nowMs);
+    }
+    return;
+  }
 
   if (moduleEnabled_ && ctx_->enabled()) {
     updatePiezoSamples(nowMs);
@@ -100,6 +119,13 @@ bool KnockingRiddle::onCmd(const char* cmd, const char* payload) {
   }
 
   if (strcasecmp(cmd, "SOLVE") == 0 || strcasecmp(cmd, "SOLVE_KNOCKING") == 0) {
+    knockWindowActive_ = false;
+    stopEmbeddedSound();
+    soundHead_ = soundTail_ = 0;
+    soundPlaying_ = false;
+    lastSoundStartMs_ = 0;
+    currentTrack_ = 0;
+    resetSequence();
     publishSolvedEvent();
     return true;
   }

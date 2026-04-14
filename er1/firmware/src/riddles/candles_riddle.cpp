@@ -132,7 +132,7 @@ void CandlesRiddle::tick(uint32_t nowMs) {
         mmLive.lastRaw = (uint16_t)v0;
         if ((uint16_t)v0 > mmLive.maxVal) mmLive.maxVal = (uint16_t)v0;
 
-        if (v0 > thrAbs && detectBlow(i, thrAbs)) {
+        if (detectBlow(i, thrAbs)) {
           lastAction_ = nowMs;
           lastSeqActivityMs_ = nowMs;
           setLed(i, false);

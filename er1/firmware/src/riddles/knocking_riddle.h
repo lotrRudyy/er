@@ -15,6 +15,7 @@ public:
   void setGameMode(bool inGame);
 
   bool dfReady() const { return audioOk_; }
+  bool isSolved() const { return solved_; }
 
   uint32_t errorCount() const { return errorCount_; }
   bool shouldAllowLog(const char* level);
