@@ -112,16 +112,15 @@ void CandlesRiddle::tick(uint32_t nowMs) {
       for (int i = 0; i < 4; i++) {
         if (!lit_[i]) continue;
 
-        // --- NEW FLOW ---
-        // Only call detectBlow() AFTER we saw threshold exceeded once.
         // Threshold is per-mic: effBase + delta (delta is your 120).
         const int thrAbs = effBase_[i] + delta_[i];
         const int v0 = analogRead(kMicPins[i]);
+        const int overNow = (v0 > thrAbs) ? 1 : 0;
         // Live telemetry (so candles_mic always shows current values even before first blow)
         lastRaw_[i] = (uint16_t)v0;
         lastAvgWin_[i] = (uint16_t)v0;
         lastMaxWin_[i] = (uint16_t)v0;
-        lastOver_[i] = 0;
+        lastOver_[i] = overNow;
         lastNeeded_[i] = 0;
         lastHit_[i] = 0;
 
@@ -131,6 +130,17 @@ void CandlesRiddle::tick(uint32_t nowMs) {
         mmLive.samples++;
         mmLive.lastRaw = (uint16_t)v0;
         if ((uint16_t)v0 > mmLive.maxVal) mmLive.maxVal = (uint16_t)v0;
+
+        if (v0 > thrAbs) {
+          String probe = String("{\"i\":") + i +
+                         ",\"raw\":" + v0 +
+                         ",\"thr_abs\":" + thrAbs +
+                         ",\"base_eff\":" + effBase_[i] +
+                         ",\"delta\":" + delta_[i] +
+                         ",\"lit\":" + (lit_[i] ? "1" : "0") +
+                         "}";
+          log("INF", "candles_probe", probe);
+        }
 
         if (detectBlow(i, thrAbs)) {
           lastAction_ = nowMs;
@@ -328,21 +338,21 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
   lastNeeded_[idx] = (uint8_t)needed;
   lastHit_[idx] = hit ? 1 : 0;
 
-  if (hit) {
-    const int baseEff = effBase_[idx];
-    String payload = String("{\"i\":") + idx +
-                     ",\"base_eff\":" + baseEff +
-                     ",\"delta\":" + delta_[idx] +
-                     ",\"thr_abs\":" + thrAbs +
-                     ",\"samples\":" + samples +
-                     ",\"needed\":" + needed +
-                     ",\"over\":" + over +
-                     ",\"avg\":" + lastAvgWin_[idx] +
-                     ",\"min\":" + minV +
-                     ",\"max\":" + maxV +
-                     "}";
-    log("INF", "candles_blow", payload);
-  }
+  const int baseEff = effBase_[idx];
+  String payload = String("{\"i\":") + idx +
+                   ",\"hit\":" + (hit ? "1" : "0") +
+                   ",\"base_eff\":" + baseEff +
+                   ",\"delta\":" + delta_[idx] +
+                   ",\"thr_abs\":" + thrAbs +
+                   ",\"samples\":" + samples +
+                   ",\"needed\":" + needed +
+                   ",\"over\":" + over +
+                   ",\"avg\":" + lastAvgWin_[idx] +
+                   ",\"min\":" + minV +
+                   ",\"max\":" + maxV +
+                   ",\"last_raw\":" + lastRaw_[idx] +
+                   "}";
+  log(hit ? "INF" : "DBG", "candles_blow", payload);
 
   return hit;
 }
@@ -475,7 +485,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
         ",\"sat\":" + micSaturated_[i] +
         ",\"thr\":" + delta_[i] +
         "}";
-    log("DBG", "candles_mic", d);
+    log("INF", "candles_mic", d);
   }
 
   for (int i = 0; i < 4; i++) {
