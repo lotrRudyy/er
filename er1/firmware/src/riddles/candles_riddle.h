@@ -47,6 +47,7 @@ private:
   void setAllLeds(bool on);
   void initState();
   void calibrateBases();
+  void clearBlowState(int idx);
   bool detectBlow(int idx, int thrAbs, uint32_t nowMs);
   void pushRollingSample(int idx, uint16_t raw, int thrAbs);
   void evaluateSequence(uint32_t nowMs);

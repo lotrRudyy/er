@@ -250,8 +250,10 @@ bool CandlesRiddle::publish(const char* topic, const String& payload, bool retai
 }
 
 void CandlesRiddle::setLed(int idx, bool on) {
+  const bool prev = lit_[idx];
   digitalWrite(kLedPins[idx], on ? HIGH : LOW);
   lit_[idx] = on;
+  if (prev != on) clearBlowState(idx);
 }
 
 void CandlesRiddle::setAllLeds(bool on) {
@@ -266,19 +268,7 @@ void CandlesRiddle::initState() {
     metrics_[i].base = 0;
     metrics_[i].maxVal = 0;
     metrics_[i].lastRaw = 0;
-    lastRaw_[i] = 0;
-    lastAvgWin_[i] = 0;
-    lastMaxWin_[i] = 0;
-    lastOver_[i] = 0;
-    lastNeeded_[i] = kBlowNeededSamples;
-    lastHit_[i] = 0;
-    samplePos_[i] = 0;
-    sampleCount_[i] = 0;
-    overCount_[i] = 0;
-    windowSum_[i] = 0;
-    windowMax_[i] = 0;
-    lastTrigMs_[i] = 0;
-    memset(sampleBuf_[i], 0, sizeof(sampleBuf_[i]));
+    clearBlowState(i);
     progress_[i] = -1;
   }
   progressed_ = 0;
@@ -289,6 +279,22 @@ void CandlesRiddle::initState() {
   resetArmed_ = false;
   tries_ = 0;
   lastAttempt_ = "";
+}
+
+void CandlesRiddle::clearBlowState(int idx) {
+  lastRaw_[idx] = 0;
+  lastAvgWin_[idx] = 0;
+  lastMaxWin_[idx] = 0;
+  lastOver_[idx] = 0;
+  lastNeeded_[idx] = kBlowNeededSamples;
+  lastHit_[idx] = 0;
+  samplePos_[idx] = 0;
+  sampleCount_[idx] = 0;
+  overCount_[idx] = 0;
+  windowSum_[idx] = 0;
+  windowMax_[idx] = 0;
+  lastTrigMs_[idx] = 0;
+  memset(sampleBuf_[idx], 0, sizeof(sampleBuf_[idx]));
 }
 
 void CandlesRiddle::pushRollingSample(int idx, uint16_t raw, int thrAbs) {
@@ -462,14 +468,15 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
     if (i > 0) d += ",";
     MicMetric& mm = metrics_[i];
     const int thrAbs = effBase_[i] + delta_[i];
+    const bool lit = lit_[i];
     d += String("\"c") + i + "\":\"" +
-         "L" + (lit_[i] ? String("1") : String("0")) +
-         " r" + String(lastRaw_[i]) +
-         " a" + String(mm.avg) +
-         " m" + String(mm.maxVal) +
+         "L" + (lit ? String("1") : String("0")) +
+         " r" + String(lit ? lastRaw_[i] : 0) +
+         " a" + String(lit ? mm.avg : 0) +
+         " m" + String(lit ? mm.maxVal : 0) +
          " t" + String(thrAbs) +
-         " o" + String(lastOver_[i]) + "/" + String(lastNeeded_[i]) +
-         " h" + String(lastHit_[i]) +
+         " o" + String(lit ? lastOver_[i] : 0) + "/" + String(lastNeeded_[i]) +
+         " h" + String(lit ? lastHit_[i] : 0) +
          "\"";
   }
   d += "}";
