@@ -329,7 +329,6 @@ void CandlesRiddle::pushRollingSample(int idx, uint16_t raw, int thrAbs) {
 
 bool CandlesRiddle::detectBlow(int idx, int thrAbs, uint32_t nowMs) {
   if (sampleCount_[idx] < kBlowWindowSamples) return false;
-  if (nowMs - lastTrigMs_[idx] < kBlowRefractMs) return false;
 
   const uint16_t over = overCount_[idx];
   const bool hit = (over >= kBlowNeededSamples);

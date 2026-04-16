@@ -35,7 +35,6 @@ private:
 
   static constexpr uint16_t kBlowWindowSamples = 250;
   static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 60 + 99) / 100;
-  static constexpr uint32_t kBlowRefractMs = 150;
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
@@ -87,11 +86,11 @@ private:
   uint32_t windowSum_[4] = {0, 0, 0, 0};
   uint16_t windowMax_[4] = {0, 0, 0, 0};
   uint32_t lastTrigMs_[4] = {0, 0, 0, 0};
-  int base_[4] = {1500, 1500, 1500, 1500};
-  static constexpr int kBaseMin[4] = {1500, 1500, 1500, 1500};
-  int effBase_[4] = {1500, 1500, 1500, 1500};
+  int base_[4] = {1367, 1463, 1498, 1735};
+  static constexpr int kBaseMin[4] = {1367, 1463, 1498, 1735};
+  int effBase_[4] = {1367, 1463, 1498, 1735};
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
-  int delta_[4] = {120, 120, 120, 120};
+  int delta_[4] = {80, 80, 80, 80};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
