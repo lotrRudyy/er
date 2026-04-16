@@ -330,16 +330,16 @@ bool CandlesRiddle::detectBlow(int idx, int thrAbs, uint32_t nowMs) {
   if (hit) {
     lastTrigMs_[idx] = nowMs;
     lastHit_[idx] = 1;
-    const String payload = String("{"i":") + idx +
-                           ","hit":1" +
-                           ","base_eff":" + effBase_[idx] +
-                           ","delta":" + delta_[idx] +
-                           ","thr_abs":" + thrAbs +
-                           ","samples":" + kBlowWindowSamples +
-                           ","needed":" + kBlowNeededSamples +
-                           ","over":" + over +
-                           ","avg":" + lastAvgWin_[idx] +
-                           ","max":" + lastMaxWin_[idx] +
+    const String payload = String("{\"i\":") + idx +
+                           ",\"hit\":1" +
+                           ",\"base_eff\":" + effBase_[idx] +
+                           ",\"delta\":" + delta_[idx] +
+                           ",\"thr_abs\":" + thrAbs +
+                           ",\"samples\":" + kBlowWindowSamples +
+                           ",\"needed\":" + kBlowNeededSamples +
+                           ",\"over\":" + over +
+                           ",\"avg\":" + lastAvgWin_[idx] +
+                           ",\"max\":" + lastMaxWin_[idx] +
                            "}";
     log("INF", "candles_blow", payload);
   }
