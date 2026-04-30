@@ -90,7 +90,7 @@ private:
   static constexpr int kBaseMin[4] = {1367, 1463, 1498, 1735};
   int effBase_[4] = {1367, 1463, 1498, 1735};
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
-  int delta_[4] = {80, 80, 80, 80};
+  int delta_[4] = {80, 20, 80, 10};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
