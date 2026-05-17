@@ -60,6 +60,11 @@ static void heartbeatBuilder(String& out, const NodeContext& ctx, void* user) {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  Serial.println("[lighting][INF] SERIAL_READY");
+  Serial.println(String("[lighting][INF] BOOT FW=") + FW_DESC + " ver=" + FW_VERSION +
+                 " node=" + NODE_ID);
+  Serial.println(String("[lighting][INF] NET ip=") + NET_IP.toString() +
+                 " mqtt=" + MQTT_SERVER.toString() + ":" + MQTT_PORT);
 
   NodeCoreConfig cfg;
   cfg.nodeId = NODE_ID;

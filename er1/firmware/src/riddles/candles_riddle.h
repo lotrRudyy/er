@@ -33,6 +33,9 @@ private:
     uint16_t lastRaw;
   };
 
+  static constexpr uint16_t kBlowWindowSamples = 250;
+  static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 60 + 99) / 100;
+
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
   bool publish(const char* topic, const char* type, uint32_t version, const String& dataJson,
@@ -43,7 +46,9 @@ private:
   void setAllLeds(bool on);
   void initState();
   void calibrateBases();
-  bool detectBlow(int idx, int thrAbs);
+  void clearBlowState(int idx);
+  bool detectBlow(int idx, int thrAbs, uint32_t nowMs);
+  void pushRollingSample(int idx, uint16_t raw, int thrAbs);
   void evaluateSequence(uint32_t nowMs);
   void evaluateSequenceIfDue(uint32_t nowMs);
   void resetPuzzleState();
@@ -71,14 +76,21 @@ private:
   uint16_t lastRaw_[4] = {0, 0, 0, 0};
   uint16_t lastAvgWin_[4] = {0, 0, 0, 0};
   uint16_t lastMaxWin_[4] = {0, 0, 0, 0};
-  uint8_t lastOver_[4] = {0, 0, 0, 0};
-  uint8_t lastNeeded_[4] = {0, 0, 0, 0};
+  uint16_t lastOver_[4] = {0, 0, 0, 0};
+  uint16_t lastNeeded_[4] = {0, 0, 0, 0};
   uint8_t lastHit_[4] = {0, 0, 0, 0};
-  int base_[4] = {1500, 1500, 1500, 1500};
-  static constexpr int kBaseMin[4] = {1500, 1500, 1500, 1500};
-  int effBase_[4] = {1500, 1500, 1500, 1500};
+  uint16_t sampleBuf_[4][kBlowWindowSamples] = {};
+  uint16_t samplePos_[4] = {0, 0, 0, 0};
+  uint16_t sampleCount_[4] = {0, 0, 0, 0};
+  uint16_t overCount_[4] = {0, 0, 0, 0};
+  uint32_t windowSum_[4] = {0, 0, 0, 0};
+  uint16_t windowMax_[4] = {0, 0, 0, 0};
+  uint32_t lastTrigMs_[4] = {0, 0, 0, 0};
+  int base_[4] = {1367, 1463, 1498, 1735};
+  static constexpr int kBaseMin[4] = {1367, 1463, 1498, 1735};
+  int effBase_[4] = {1367, 1463, 1498, 1735};
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
-  int delta_[4] = {120, 120, 120, 120};
+  int delta_[4] = {80, 20, 80, 10};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;

@@ -112,25 +112,18 @@ void CandlesRiddle::tick(uint32_t nowMs) {
       for (int i = 0; i < 4; i++) {
         if (!lit_[i]) continue;
 
-        // Threshold is per-mic: effBase + delta (delta is your 120).
         const int thrAbs = effBase_[i] + delta_[i];
-        const int v0 = analogRead(kMicPins[i]);
-        // Live telemetry (so candles_mic always shows current values even before first blow)
-        lastRaw_[i] = (uint16_t)v0;
-        lastAvgWin_[i] = (uint16_t)v0;
-        lastMaxWin_[i] = (uint16_t)v0;
-        lastOver_[i] = 0;
-        lastNeeded_[i] = 0;
-        lastHit_[i] = 0;
+        const uint16_t raw = (uint16_t)analogRead(kMicPins[i]);
 
-        // Keep rolling metrics meaningful even when no blow windows run
         MicMetric& mmLive = metrics_[i];
-        mmLive.sum += (uint32_t)v0;
+        mmLive.sum += (uint32_t)raw;
         mmLive.samples++;
-        mmLive.lastRaw = (uint16_t)v0;
-        if ((uint16_t)v0 > mmLive.maxVal) mmLive.maxVal = (uint16_t)v0;
+        mmLive.lastRaw = raw;
+        if (raw > mmLive.maxVal) mmLive.maxVal = raw;
 
-        if (detectBlow(i, thrAbs)) {
+        pushRollingSample(i, raw, thrAbs);
+
+        if (detectBlow(i, thrAbs, nowMs)) {
           lastAction_ = nowMs;
           lastSeqActivityMs_ = nowMs;
           setLed(i, false);
@@ -257,8 +250,10 @@ bool CandlesRiddle::publish(const char* topic, const String& payload, bool retai
 }
 
 void CandlesRiddle::setLed(int idx, bool on) {
+  const bool prev = lit_[idx];
   digitalWrite(kLedPins[idx], on ? HIGH : LOW);
   lit_[idx] = on;
+  if (prev != on) clearBlowState(idx);
 }
 
 void CandlesRiddle::setAllLeds(bool on) {
@@ -273,6 +268,7 @@ void CandlesRiddle::initState() {
     metrics_[i].base = 0;
     metrics_[i].maxVal = 0;
     metrics_[i].lastRaw = 0;
+    clearBlowState(i);
     progress_[i] = -1;
   }
   progressed_ = 0;
@@ -285,64 +281,73 @@ void CandlesRiddle::initState() {
   lastAttempt_ = "";
 }
 
-bool CandlesRiddle::detectBlow(int idx, int thrAbs) {
-  static uint32_t lastTrig[4] = {0, 0, 0, 0};
-  static constexpr uint32_t kRefractMs = 250;
+void CandlesRiddle::clearBlowState(int idx) {
+  lastRaw_[idx] = 0;
+  lastAvgWin_[idx] = 0;
+  lastMaxWin_[idx] = 0;
+  lastOver_[idx] = 0;
+  lastNeeded_[idx] = kBlowNeededSamples;
+  lastHit_[idx] = 0;
+  samplePos_[idx] = 0;
+  sampleCount_[idx] = 0;
+  overCount_[idx] = 0;
+  windowSum_[idx] = 0;
+  windowMax_[idx] = 0;
+  lastTrigMs_[idx] = 0;
+  memset(sampleBuf_[idx], 0, sizeof(sampleBuf_[idx]));
+}
 
-  uint32_t now = millis();
-  if (now - lastTrig[idx] < kRefractMs) return false;
+void CandlesRiddle::pushRollingSample(int idx, uint16_t raw, int thrAbs) {
+  uint16_t old = 0;
+  if (sampleCount_[idx] >= kBlowWindowSamples) {
+    old = sampleBuf_[idx][samplePos_[idx]];
+    windowSum_[idx] -= old;
+    if (old > (uint16_t)thrAbs && overCount_[idx] > 0) overCount_[idx]--;
+  } else {
+    sampleCount_[idx]++;
+  }
 
-  static constexpr int samples = 500;
-  static constexpr int needed = (samples * 60 + 99) / 100;
+  sampleBuf_[idx][samplePos_[idx]] = raw;
+  samplePos_[idx] = (samplePos_[idx] + 1) % kBlowWindowSamples;
+  windowSum_[idx] += raw;
+  if (raw > (uint16_t)thrAbs) overCount_[idx]++;
 
-  int over = 0;
-  int minV = 4096;
-  int maxV = 0;
-  uint32_t sum = 0;
-  int lastRaw = 0;
-
-  for (int k = 0; k < samples; k++) {
-    int v = analogRead(kMicPins[idx]);
-    lastRaw = v;
-    sum += (uint32_t)v;
-    if (v < minV) minV = v;
+  uint16_t maxV = 0;
+  const uint16_t count = sampleCount_[idx];
+  for (uint16_t j = 0; j < count; ++j) {
+    uint16_t v = sampleBuf_[idx][j];
     if (v > maxV) maxV = v;
-    if (v > thrAbs) over++;
-
-    MicMetric& mm = metrics_[idx];
-    mm.sum += (uint32_t)v;
-    mm.samples++;
-    mm.lastRaw = (uint16_t)v;
-    if ((uint16_t)v > mm.maxVal) mm.maxVal = (uint16_t)v;
   }
+  windowMax_[idx] = maxV;
+  lastRaw_[idx] = raw;
+  lastAvgWin_[idx] = count ? (uint16_t)(windowSum_[idx] / count) : 0;
+  lastMaxWin_[idx] = maxV;
+  lastOver_[idx] = overCount_[idx];
+  lastNeeded_[idx] = kBlowNeededSamples;
+  lastHit_[idx] = 0;
+}
 
-  bool hit = (over >= needed);
-  if (hit) lastTrig[idx] = now;
+bool CandlesRiddle::detectBlow(int idx, int thrAbs, uint32_t nowMs) {
+  if (sampleCount_[idx] < kBlowWindowSamples) return false;
 
-  lastRaw_[idx] = (uint16_t)lastRaw;
-  lastAvgWin_[idx] = (uint16_t)(sum / (uint32_t)samples);
-  lastMaxWin_[idx] = (uint16_t)maxV;
-  lastOver_[idx] = (uint8_t)min(over, 255);
-  lastNeeded_[idx] = (uint8_t)needed;
-  lastHit_[idx] = hit ? 1 : 0;
-
-  {
-    const int baseEff = effBase_[idx];
-    String payload = String("{\"i\":") + idx +
-                     ",\"hit\":" + (hit ? 1 : 0) +
-                     ",\"base_eff\":" + baseEff +
-                     ",\"delta\":" + delta_[idx] +
-                     ",\"thr_abs\":" + thrAbs +
-                     ",\"samples\":" + samples +
-                     ",\"needed\":" + needed +
-                     ",\"over\":" + over +
-                     ",\"avg\":" + lastAvgWin_[idx] +
-                     ",\"min\":" + minV +
-                     ",\"max\":" + maxV +
-                     "}";
-    log(hit ? "INF" : "DBG", "candles_blow", payload);
+  const uint16_t over = overCount_[idx];
+  const bool hit = (over >= kBlowNeededSamples);
+  if (hit) {
+    lastTrigMs_[idx] = nowMs;
+    lastHit_[idx] = 1;
+    const String payload = String("{\"i\":") + idx +
+                           ",\"hit\":1" +
+                           ",\"base_eff\":" + effBase_[idx] +
+                           ",\"delta\":" + delta_[idx] +
+                           ",\"thr_abs\":" + thrAbs +
+                           ",\"samples\":" + kBlowWindowSamples +
+                           ",\"needed\":" + kBlowNeededSamples +
+                           ",\"over\":" + over +
+                           ",\"avg\":" + lastAvgWin_[idx] +
+                           ",\"max\":" + lastMaxWin_[idx] +
+                           "}";
+    log("INF", "candles_blow", payload);
   }
-
   return hit;
 }
 
@@ -462,14 +467,15 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
     if (i > 0) d += ",";
     MicMetric& mm = metrics_[i];
     const int thrAbs = effBase_[i] + delta_[i];
+    const bool lit = lit_[i];
     d += String("\"c") + i + "\":\"" +
-         "L" + (lit_[i] ? String("1") : String("0")) +
-         " r" + String(lastRaw_[i]) +
-         " a" + String(mm.avg) +
-         " m" + String(mm.maxVal) +
+         "L" + (lit ? String("1") : String("0")) +
+         " r" + String(lit ? lastRaw_[i] : 0) +
+         " a" + String(lit ? mm.avg : 0) +
+         " m" + String(lit ? mm.maxVal : 0) +
          " t" + String(thrAbs) +
-         " o" + String(lastOver_[i]) + "/" + String(lastNeeded_[i]) +
-         " h" + String(lastHit_[i]) +
+         " o" + String(lit ? lastOver_[i] : 0) + "/" + String(lastNeeded_[i]) +
+         " h" + String(lit ? lastHit_[i] : 0) +
          "\"";
   }
   d += "}";

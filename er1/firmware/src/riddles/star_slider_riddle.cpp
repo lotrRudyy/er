@@ -390,26 +390,31 @@ void StarSliderRiddle::evaluateSolveAttempt() {
 
 void StarSliderRiddle::handleButton(uint32_t nowMs) {
   bool raw = digitalRead(kButtonPin);
+
+  // Button is active-low. Trigger the solve check immediately on the press edge
+  // instead of waiting for a stable LOW period or for button release.
   if (raw != btnPrevState_) {
     btnPrevState_ = raw;
     btnLastChangeMs_ = nowMs;
+
+    if (raw == LOW && !btnWasPressed_) {
+      btnWasPressed_ = true;
+      if (gameActive_ && moduleEnabled_ && ctx_ && ctx_->enabled()) {
+        evaluateSolveAttempt();
+      } else {
+        log("WRN", "button press while DISABLED");
+      }
+    } else if (raw == HIGH && btnWasPressed_) {
+      // Release only arms the next press; it no longer triggers evaluation.
+      btnWasPressed_ = false;
+    }
     return;
   }
+
+  // Keep a small debounce guard only for long-running stable states; the solve
+  // attempt itself already happened on the press edge above.
   if (nowMs - btnLastChangeMs_ < kBtnDebounceMs) return;
-
-  // Evaluate on PRESS (active-low), not release.
-  if (raw == LOW && !btnWasPressed_) {
-    btnWasPressed_ = true;
-    if (gameActive_ && moduleEnabled_ && ctx_ && ctx_->enabled()) {
-      evaluateSolveAttempt();
-    } else {
-      log("WRN", "button press while DISABLED");
-    }
-  } else if (raw == HIGH && btnWasPressed_) {
-    btnWasPressed_ = false;
-  }
 }
-
 void StarSliderRiddle::publishSolvedEvent(uint32_t attemptIdx) {
   if (!ctx_) return;
 
