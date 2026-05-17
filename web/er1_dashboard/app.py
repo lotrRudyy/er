@@ -264,14 +264,16 @@ class DashboardStore:
         self.node_states[node_id] = {"hb": hb} if hb is not None else {}
 
     def _reset_riddle_display_state_locked(self) -> None:
-        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
+        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
             self._clear_node_payload_locked(node_id)
         self.riddle_states["images"] = {"id": "images", "buttons": {}}
         self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-        self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        self.riddle_states["stars"] = dict(empty_stars_state)
+        self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
         self.local_hint_counts = {}
         save_hint_store(self.local_hint_counts)
 
@@ -2258,14 +2260,16 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
 
 
 def _reset_riddle_display_state_locked_v2(self):
-    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
+    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
         self._clear_node_payload_locked(node_id)
     self.riddle_states["images"] = {"id": "images", "buttons": {}}
     self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
     self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
     self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
     self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-    self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    self.riddle_states["stars"] = dict(empty_stars_state)
+    self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
     self.local_hint_counts = {}
     save_hint_store(self.local_hint_counts)
 
