@@ -7,7 +7,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,7 +76,26 @@ def _normalize_existing_games_db_schema(db_path: Path) -> None:
         """)
 
 
+
+def _ensure_game_riddles_outcome_columns(db_path: Path) -> None:
+    if not db_path.exists():
+        return
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+        if "game_riddles" not in tables:
+            return
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(game_riddles)").fetchall()}
+        if "skipped" not in columns:
+            conn.execute("ALTER TABLE game_riddles ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
+        if "not_solved" not in columns:
+            conn.execute("ALTER TABLE game_riddles ADD COLUMN not_solved INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE game_riddles SET skipped = 0 WHERE skipped IS NULL")
+        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE not_solved IS NULL")
+        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE skipped = 1 AND not_solved = 1")
+
+
 _normalize_existing_games_db_schema(GAME_DB_PATH)
+_ensure_game_riddles_outcome_columns(GAME_DB_PATH)
 
 TOPIC_GAME_STATE = "game/state"
 TOPIC_GAME_CMD = "game/cmd"
@@ -404,12 +423,35 @@ class DashboardStore:
         phase_name_pretty = pretty_phase_name(phase_meta["name"])
         last_name_pretty = pretty_phase_name(last_name)
         timer_running = bool(game.get("timer_running", False))
-        started_at = game.get("game_started_at") or game.get("started_at")
+
+        run = game.get("run") if isinstance(game.get("run"), dict) else {}
+        started_at = run.get("started_at") or game.get("game_started_at") or game.get("started_at")
         last_riddle_solved_at = game.get("last_riddle_solved_at")
-        current_riddle_name = ""
         active_riddles = tuple(phase_meta.get("active", ()) or ())
-        if timer_running and active_riddles:
-            current_riddle_name = str(active_riddles[0])
+
+        raw_timings = run.get("riddle_timings") if isinstance(run, dict) else {}
+        timing_map: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_timings, dict):
+            for key, value in raw_timings.items():
+                if isinstance(value, dict):
+                    timing_map[_canonical_riddle_name(key)] = value
+        elif isinstance(raw_timings, list):
+            for value in raw_timings:
+                if isinstance(value, dict):
+                    key = _canonical_riddle_name(value.get("riddle_key") or value.get("id") or value.get("riddle"))
+                    if key:
+                        timing_map[key] = value
+
+        current_riddle_name = _canonical_riddle_name(game.get("current_riddle_name") or game.get("current_riddle") or "")
+        if not current_riddle_name and timer_running:
+            for candidate in active_riddles:
+                timing = timing_map.get(_canonical_riddle_name(candidate), {})
+                if str(timing.get("status") or "").lower() == "active" or bool(timing.get("active")):
+                    current_riddle_name = _canonical_riddle_name(candidate)
+                    break
+        if not current_riddle_name and timer_running and active_riddles:
+            current_riddle_name = _canonical_riddle_name(active_riddles[0])
+
         current_riddle_started_at = None
         if current_riddle_name:
             current_riddle_started_at = last_riddle_solved_at or started_at
@@ -418,11 +460,30 @@ class DashboardStore:
             if not value:
                 return 0
             try:
-                from datetime import datetime, timezone
                 dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0, int((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()))
             except Exception:
                 return 0
+
+        def _numeric_seconds(*values: Any) -> int | None:
+            for value in values:
+                if value in {None, ""}:
+                    continue
+                try:
+                    return max(0, int(round(float(value))))
+                except Exception:
+                    continue
+            return None
+
+        current_timing = timing_map.get(current_riddle_name, {}) if current_riddle_name else {}
+        live_elapsed = _numeric_seconds(run.get("live_duration_s"), run.get("duration_s"), game.get("duration_s"))
+        current_elapsed = _numeric_seconds(
+            current_timing.get("display_time_s"),
+            current_timing.get("live_time_s"),
+            current_timing.get("solve_time_s"),
+        )
 
         return {
             "phase": phase,
@@ -432,12 +493,12 @@ class DashboardStore:
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
-            "players_count": int(game.get("players_count") or 0),
+            "players_count": int(run.get("players_count") if run.get("players_count") is not None else (game.get("players_count") or 0)),
             "timer_running": timer_running,
-            "elapsed_s": _seconds_since(started_at) if timer_running else 0,
+            "elapsed_s": live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0),
             "started_at": started_at,
             "last_riddle_solved_at": last_riddle_solved_at,
-            "current_riddle_elapsed_s": _seconds_since(current_riddle_started_at) if timer_running else 0,
+            "current_riddle_elapsed_s": current_elapsed if current_elapsed is not None else (_seconds_since(current_riddle_started_at) if timer_running else 0),
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
         }
@@ -515,25 +576,44 @@ class DashboardStore:
     def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hint_counts: dict[str, int]) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
-        active = set(meta.get("active", ()))
-        solved = set(meta.get("solved", ()))
-        run = game.get("run") or {}
-        riddle_timings = run.get("riddle_timings") or {}
+        active = {_canonical_riddle_name(item) for item in (meta.get("active", ()) or ())}
+        solved = {_canonical_riddle_name(item) for item in (meta.get("solved", ()) or ())}
+
+        run = game.get("run") if isinstance(game.get("run"), dict) else {}
+        raw_timings = run.get("riddle_timings") if isinstance(run, dict) else {}
+        riddle_timings: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_timings, dict):
+            for key, value in raw_timings.items():
+                if isinstance(value, dict):
+                    riddle_timings[_canonical_riddle_name(key)] = value
+        elif isinstance(raw_timings, list):
+            for value in raw_timings:
+                if isinstance(value, dict):
+                    key = _canonical_riddle_name(value.get("riddle_key") or value.get("id") or value.get("riddle"))
+                    if key:
+                        riddle_timings[key] = value
+
         now_mono = time.monotonic()
         out = []
         for row in RIDDLES:
-            riddle_id = row["id"]
+            riddle_id = _canonical_riddle_name(row["id"])
             node_id = row["node_id"]
             state_payload = riddle_states.get(riddle_id) or (node_states.get(node_id, {}) if node_id else {})
-
             timing = riddle_timings.get(riddle_id) or {}
-            if riddle_id in solved:
+            timing_status = str(timing.get("status") or "").strip().lower().replace(" ", "_")
+
+            skipped = bool(timing.get("skipped", False)) or timing_status == "skipped"
+            not_solved = bool(timing.get("not_solved", False)) or timing_status == "not_solved"
+            solved_by_timing = bool(timing.get("solved", False)) or timing_status == "solved"
+            active_by_timing = bool(timing.get("active", False)) or timing_status == "active"
+
+            if skipped:
+                phase_state = "skipped"
+            elif not_solved:
+                phase_state = "not_solved"
+            elif riddle_id in solved or solved_by_timing:
                 phase_state = "solved"
-            elif riddle_id in active and bool(timing.get("solved")):
-                phase_state = "solved_pending"
-            elif bool(timing.get("solved")):
-                phase_state = "solved"
-            elif riddle_id in active:
+            elif riddle_id in active or active_by_timing:
                 phase_state = "active"
             else:
                 phase_state = "pending"
@@ -550,14 +630,31 @@ class DashboardStore:
                 if online and isinstance(uptime, (int, float)):
                     node_status = f"online ({int(uptime)}s)"
 
-            phase_state_label = "solved" if phase_state == "solved_pending" else phase_state
+            def _first_seconds(*values: Any) -> int:
+                for value in values:
+                    if value in {None, ""}:
+                        continue
+                    try:
+                        return max(0, int(round(float(value))))
+                    except Exception:
+                        continue
+                return 0
+
+            display_seconds = _first_seconds(
+                timing.get("display_time_s"),
+                timing.get("live_time_s"),
+                timing.get("solve_time_s"),
+            )
+            hint_count = int(timing.get("hint_count") if timing.get("hint_count") is not None else local_hint_counts.get(riddle_id, 0) or 0)
+            phase_state_label = "not solved" if phase_state == "not_solved" else phase_state
+
             out.append({
                 "id": riddle_id,
                 "label": row["label"],
                 "manual": row["manual"],
                 "phase_state": phase_state,
                 "phase_state_label": phase_state_label,
-                "phase_state_class": f"phase-{phase_state}",
+                "phase_state_class": f"phase-{phase_state.replace('_', '-')}",
                 "node_status": node_status,
                 "node_status_class": "node-manual" if row["manual"] else ("node-online" if online else "node-offline"),
                 "tries": self._extract_tries(state_payload),
@@ -567,7 +664,14 @@ class DashboardStore:
                 "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
                 "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
                 "piano_summary": self._extract_piano_summary(riddle_id, state_payload),
-                "hint_count": int(local_hint_counts.get(riddle_id, 0) or 0),
+                "hint_count": hint_count,
+                "time_s": display_seconds,
+                "display_time_s": display_seconds,
+                "solve_time_s": _first_seconds(timing.get("solve_time_s")),
+                "live_time_s": _first_seconds(timing.get("live_time_s")),
+                "skipped": skipped,
+                "not_solved": not_solved,
+                "can_solve": phase_state == "active",
             })
         return out
 
@@ -1740,7 +1844,7 @@ def game_viewer() -> str:
                 error = f"No game found for id {game_id}."
             else:
                 summary_columns = [col for col in ["id", "date", "players_count", "hint_count", "leaderboard_code"] if col in game]
-                riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display"]
+                riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display", "skipped", "not_solved"]
         except Exception as exc:
             error = str(exc)
 
@@ -1907,6 +2011,50 @@ def api_set_hint_count() -> Any:
     return jsonify({"ok": True, "hint_count": count})
 
 
+
+
+@app.post("/api/riddle-time")
+def api_riddle_time() -> Any:
+    data = request.get_json(force=True) or {}
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return jsonify({"ok": False, "error": "riddle required"}), 400
+    raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
+    try:
+        seconds = parse_mmss_input(raw_value)
+        seconds = max(0.0, float(seconds or 0.0))
+    except Exception:
+        return jsonify({"ok": False, "error": "time must be seconds, mm:ss, or hh:mm:ss"}), 400
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_time", "riddle": riddle, "solve_time_s": round(seconds, 3)})
+    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3)})
+
+
+@app.post("/api/riddle-outcome")
+def api_riddle_outcome() -> Any:
+    data = request.get_json(force=True) or {}
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return jsonify({"ok": False, "error": "riddle required"}), 400
+    outcome = str(data.get("outcome") or data.get("status") or "").strip().lower().replace(" ", "_")
+    if outcome in {"skip", "skipped"}:
+        advance = bool(data.get("advance", True))
+        if advance:
+            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "skip_riddle", "riddle": riddle})
+        else:
+            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "skipped", "advance": False})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "skipped", "advance": advance})
+    if outcome in {"not_solved", "failed", "fail"}:
+        advance = bool(data.get("advance", False))
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "mark_not_solved", "riddle": riddle, "advance": advance})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "not_solved", "advance": advance})
+    if outcome in {"clear", "reset", "pending", ""}:
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "clear_riddle_outcome", "riddle": riddle})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "clear"})
+    if outcome == "solved":
+        advance = bool(data.get("advance", False))
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "solved", "advance": advance})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "solved", "advance": advance})
+    return jsonify({"ok": False, "error": "outcome must be skipped, not_solved, solved, or clear"}), 400
 # ---- ER1 v2 dashboard overrides (new game_master DB schema) ----
 RIDDLE_ALIASES = {
     "open_prison": "prison",
@@ -2002,6 +2150,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value or 0))
     except Exception:
         return default
+
+
+def _safe_bool_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    text = str(value or '').strip().lower()
+    if text in {'1', 'true', 'yes', 'y', 'on', 'checked', 'skipped', 'not_solved', 'not solved'}:
+        return 1
+    return 0
 
 
 def _duration_and_progress_from_rows(rows: list[dict[str, Any]]) -> tuple[float, dict[str, float]]:
@@ -2128,6 +2285,8 @@ def build_game_view_state(game_id: str) -> dict[str, Any]:
         rendered['riddle_time_mmss'] = format_mmss(rendered.get('_riddle_seconds'))
         rendered['hint_count_display'] = int(rendered.get('hint_count') or 0)
         rendered['hints_display'] = serialize_db_value(rendered.get('hints')) or ''
+        rendered['skipped_display'] = '1' if _safe_bool_int(rendered.get('skipped')) else '0'
+        rendered['not_solved_display'] = '1' if _safe_bool_int(rendered.get('not_solved')) else '0'
         rendered_riddles.append(rendered)
     rendered_riddles.sort(key=lambda row: RIDDLE_ORDER_V2.index(row.get('riddle_key')) if row.get('riddle_key') in RIDDLE_ORDER_V2 else 999)
     raw_rows = [
@@ -2239,6 +2398,10 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                     solve_overrides[int(rowid)] = parse_mmss_input(value) if column == 'riddle_time_mmss' else max(0.0, _safe_float(value))
                 elif column in {'hint_count_display', 'hint_count'}:
                     direct_updates['hint_count'] = max(0, _safe_int(value))
+                elif column in {'skipped', 'skipped_display'}:
+                    direct_updates['skipped'] = _safe_bool_int(value)
+                elif column in {'not_solved', 'not_solved_display'}:
+                    direct_updates['not_solved'] = _safe_bool_int(value)
                 elif column == 'hints':
                     direct_updates['hints'] = str(value or '')
                 elif column in editable_columns:
@@ -2246,6 +2409,10 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 else:
                     raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
             if direct_updates:
+                if direct_updates.get('skipped'):
+                    direct_updates['not_solved'] = 0
+                elif direct_updates.get('not_solved'):
+                    direct_updates['skipped'] = 0
                 set_clause = ', '.join(f"{column} = ?" for column in direct_updates.keys())
                 values = list(direct_updates.values()) + [rowid]
                 conn.execute(f"UPDATE game_riddles SET {set_clause} WHERE rowid = ?", values)

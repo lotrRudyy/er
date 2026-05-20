@@ -14,6 +14,8 @@ let localRiddleTimerStartedAt = 0;
 
 const dimDrafts = {};
 const dimEditing = {};
+const riddleTimeDrafts = {};
+const riddleTimeEditing = {};
 let playersCountEditing = false;
 
 async function api(path, options = {}) {
@@ -34,6 +36,25 @@ function fmtTime(total) {
   const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const s = String(total % 60).padStart(2, '0');
   return `${h}:${m}:${s}`;
+}
+
+function escapeAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function anyRiddleTimeEditing() {
+  return Object.values(riddleTimeEditing).some(Boolean);
+}
+
+function riddleTimeText(riddle) {
+  if (riddleTimeEditing[riddle.id] || riddleTimeDrafts[riddle.id] != null) {
+    return String(riddleTimeDrafts[riddle.id] ?? '');
+  }
+  return fmtTime(riddle.display_time_s ?? riddle.time_s ?? riddle.live_time_s ?? riddle.solve_time_s ?? 0);
 }
 
 function stableStringify(value) {
@@ -290,22 +311,81 @@ function hintCellHtml(riddle) {
 
 function buildRiddleRow(riddle) {
   const infoHtml = renderRiddleInfo(riddle);
-  const currentPhaseName = (state.game.phase_name || '').trim();
-  const canSolve = riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending' || (riddle.manual && currentPhaseName === riddle.id && riddle.phase_state !== 'solved');
+  const canSolve = Boolean(riddle.can_solve) || riddle.phase_state === 'active' || riddle.phase_state === 'solved_pending';
+  const isFinal = ['solved', 'skipped', 'not_solved'].includes(riddle.phase_state);
+  const timeValue = riddleTimeText(riddle);
   const tr = document.createElement('tr');
   tr.dataset.riddleId = riddle.id;
   tr.innerHTML = `
     <td>${riddle.label}</td>
     <td><span class="status-badge ${riddle.phase_state_class}">${riddle.phase_state_label || riddle.phase_state}</span></td>
-    <td><button class="solve-btn ${canSolve ? 'active' : 'inactive'}" ${canSolve ? '' : 'disabled'}>Solve</button></td>
+    <td>
+      <div class="riddle-time-edit">
+        <input class="riddle-time-input" type="text" inputmode="numeric" value="${escapeAttr(timeValue)}" placeholder="00:00:00" />
+        <button class="riddle-time-save" type="button">Save</button>
+      </div>
+    </td>
+    <td>
+      <div class="riddle-actions">
+        <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" ${canSolve ? '' : 'disabled'}>Solve</button>
+        <button class="skip-btn" type="button">Skip</button>
+        <button class="not-solved-btn" type="button">Not solved</button>
+        <button class="clear-outcome-btn" type="button" ${isFinal ? '' : 'disabled'}>Clear</button>
+      </div>
+    </td>
     <td>${infoHtml}</td>
     <td>${hintCellHtml(riddle)}</td>
   `;
+
+  const timeInput = tr.querySelector('.riddle-time-input');
+  const timeSave = tr.querySelector('.riddle-time-save');
+  timeInput.addEventListener('focus', () => { riddleTimeEditing[riddle.id] = true; });
+  timeInput.addEventListener('input', () => { riddleTimeDrafts[riddle.id] = timeInput.value; });
+  timeInput.addEventListener('blur', () => {
+    window.setTimeout(() => { riddleTimeEditing[riddle.id] = false; }, 150);
+  });
+  timeInput.addEventListener('keydown', async (event) => {
+    if (event.key === 'Escape') {
+      delete riddleTimeDrafts[riddle.id];
+      riddleTimeEditing[riddle.id] = false;
+      await fetchAndPatch();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    timeSave.click();
+  });
+  timeSave.addEventListener('mousedown', () => { riddleTimeEditing[riddle.id] = true; });
+  timeSave.addEventListener('click', async () => {
+    const value = timeInput.value.trim();
+    await api('/api/riddle-time', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, time_text: value }) });
+    delete riddleTimeDrafts[riddle.id];
+    riddleTimeEditing[riddle.id] = false;
+    await fetchAndPatch();
+  });
 
   const solveBtn = tr.querySelector('.solve-btn');
   if (canSolve && riddle.phase_state !== 'solved') {
     solveBtn.addEventListener('click', async () => {
       await api('/api/solve', { method: 'POST', body: JSON.stringify({ node: riddle.id }) });
+      await fetchAndPatch();
+    });
+  }
+
+  tr.querySelector('.skip-btn').addEventListener('click', async () => {
+    await api('/api/riddle-outcome', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, outcome: 'skipped', advance: true }) });
+    await fetchAndPatch();
+  });
+
+  tr.querySelector('.not-solved-btn').addEventListener('click', async () => {
+    await api('/api/riddle-outcome', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, outcome: 'not_solved', advance: false }) });
+    await fetchAndPatch();
+  });
+
+  const clearBtn = tr.querySelector('.clear-outcome-btn');
+  if (!clearBtn.disabled) {
+    clearBtn.addEventListener('click', async () => {
+      await api('/api/riddle-outcome', { method: 'POST', body: JSON.stringify({ riddle: riddle.id, outcome: 'clear' }) });
       await fetchAndPatch();
     });
   }
@@ -359,7 +439,7 @@ function patchState(data) {
   if (rerenderNodes) renderNodes();
   if (rerenderLocks) renderLocks();
   if (rerenderLights) renderLights();
-  if (rerenderRiddles) renderRiddles();
+  if (rerenderRiddles && !anyRiddleTimeEditing()) renderRiddles();
 
   if (!lastSnapshot) {
     renderTop();

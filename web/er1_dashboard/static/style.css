@@ -1,24 +1,28 @@
 
 :root {
-  --bg: #f4f4f4;
-  --panel: #ffffff;
-  --line: #cfcfcf;
-  --text: #111111;
-  --muted: #666666;
-  --accent: #1f4de3;
-  --btn: #f8f8f8;
-  --green-bg: #ddf6e2;
-  --green-line: #198f3d;
-  --green-text: #0f5b26;
-  --red-bg: #ffe0e0;
-  --red-line: #d63a3a;
-  --red-text: #8f1c1c;
-  --blue-bg: #edf3ff;
-  --blue-line: #3564e8;
-  --yellow-bg: #fff7e6;
-  --yellow-line: #d98a00;
-  --gray-bg: #f0f0f0;
-  --gray-line: #888;
+  --bg: #0c0908;
+  --panel: rgba(24, 19, 16, 0.92);
+  --panel-2: rgba(35, 27, 22, 0.94);
+  --line: rgba(255, 236, 214, 0.14);
+  --text: #f5ebde;
+  --muted: #c7b8a5;
+  --accent: #dfb172;
+  --accent-soft: rgba(223, 177, 114, 0.18);
+  --btn: #1d1714;
+  --green-bg: rgba(47, 99, 68, 0.28);
+  --green-line: #6fd08c;
+  --green-text: #d8ffe1;
+  --red-bg: rgba(125, 43, 37, 0.30);
+  --red-line: #e27667;
+  --red-text: #ffd8d1;
+  --blue-bg: rgba(58, 84, 126, 0.30);
+  --blue-line: #8bb6ff;
+  --blue-text: #d9e8ff;
+  --yellow-bg: rgba(151, 101, 34, 0.28);
+  --yellow-line: #dfb172;
+  --yellow-text: #ffe8bd;
+  --gray-bg: rgba(255, 236, 214, 0.08);
+  --gray-line: rgba(255, 236, 214, 0.30);
 }
 
 * { box-sizing: border-box; }
@@ -711,4 +715,190 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   padding: 0;
   font-size: 16px;
   line-height: 1;
+}
+
+
+/* Dark website-aligned refinements */
+html, body {
+  background:
+    radial-gradient(circle at top left, rgba(223, 177, 114, 0.10), transparent 34rem),
+    radial-gradient(circle at bottom right, rgba(255, 236, 214, 0.06), transparent 30rem),
+    var(--bg);
+}
+
+.panel, .subpanel {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+
+button,
+.nav-button,
+.players-count-save,
+.danger-button {
+  border-color: var(--line);
+  background: linear-gradient(180deg, rgba(255, 236, 214, 0.08), rgba(255, 236, 214, 0.03));
+  color: var(--text);
+  border-radius: 10px;
+}
+
+button:hover,
+.nav-button:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.players-count-input,
+.player-input,
+.hint-input,
+.dim-input,
+.cell-editor,
+.riddle-time-input {
+  background: rgba(12, 9, 8, 0.72);
+  border: 1px solid var(--line);
+  color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  border-radius: 10px;
+}
+
+.players-count-input:focus,
+.dim-input:focus,
+.cell-editor:focus,
+.riddle-time-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.simple-table th {
+  background: rgba(255, 236, 214, 0.08);
+  color: var(--text);
+}
+
+.simple-table th,
+.simple-table td {
+  border-color: var(--line);
+}
+
+.editable-cell {
+  background: rgba(223, 177, 114, 0.08);
+}
+
+.editable-cell.is-editing {
+  background: rgba(12, 9, 8, 0.86);
+}
+
+.readonly-cell,
+.viewer-message,
+.viewer-summary-card,
+.player-chip,
+.hint-item {
+  background: rgba(255, 236, 214, 0.06);
+  color: var(--muted);
+}
+
+.players-count-stored,
+.subline,
+.inline-sep {
+  color: var(--muted);
+}
+
+.phase-active {
+  border-color: var(--blue-line);
+  background: var(--blue-bg);
+  color: var(--blue-text);
+}
+
+.phase-pending {
+  border-color: var(--yellow-line);
+  background: var(--yellow-bg);
+  color: var(--yellow-text);
+}
+
+.phase-solved,
+.phase-solved-pending {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+
+.phase-skipped {
+  border-color: var(--yellow-line);
+  background: var(--yellow-bg);
+  color: var(--yellow-text);
+}
+
+.phase-not-solved {
+  border-color: var(--red-line);
+  background: var(--red-bg);
+  color: var(--red-text);
+}
+
+.solve-btn.active,
+.skip-btn,
+.riddle-time-save {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.not-solved-btn {
+  border-color: var(--red-line);
+  background: var(--red-bg);
+  color: var(--red-text);
+}
+
+.clear-outcome-btn {
+  border-color: var(--gray-line);
+  background: var(--gray-bg);
+}
+
+.riddle-time-edit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.riddle-time-input {
+  width: 86px;
+  padding: 6px 7px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.riddle-time-save {
+  padding: 6px 7px;
+  font-size: 12px;
+}
+
+.riddle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.riddle-actions button {
+  padding: 6px 7px;
+  font-size: 12px;
+}
+
+.compact-riddles-table th:nth-child(1) { width: 86px; }
+.compact-riddles-table th:nth-child(2) { width: 78px; }
+.compact-riddles-table th:nth-child(3) { width: 142px; }
+.compact-riddles-table th:nth-child(4) { width: 220px; }
+.compact-riddles-table th:nth-child(6) { width: 86px; }
+.compact-riddles-table td { height: 54px; }
+
+.riddles-compact-table th:nth-child(1) { width: 22%; }
+.riddles-compact-table th:nth-child(2) { width: 13%; }
+.riddles-compact-table th:nth-child(3) { width: 10%; }
+.riddles-compact-table th:nth-child(4) { width: 9%; }
+.riddles-compact-table th:nth-child(5) { width: 32%; }
+.riddles-compact-table th:nth-child(6) { width: 14%; }
+
+.raw-json-cell pre,
+.json-block {
+  color: var(--text);
 }
