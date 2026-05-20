@@ -16,7 +16,23 @@ class RiddleTiming:
     solve_time_s: float = 0.0
     hint_count: int = 0
     hints: str = ""
+    skipped: bool = False
+    not_solved: bool = False
     segment_started_monotonic: float | None = None
+
+    def is_final(self) -> bool:
+        return bool(self.skipped or self.not_solved or float(self.solve_time_s or 0) > 0)
+
+    def status(self) -> str:
+        if self.skipped:
+            return "skipped"
+        if self.not_solved:
+            return "not_solved"
+        if float(self.solve_time_s or 0) > 0:
+            return "solved"
+        if self.segment_started_monotonic is not None:
+            return "active"
+        return "pending"
 
 @dataclass(slots=True)
 class CurrentRun:

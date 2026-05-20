@@ -104,7 +104,87 @@ class GameMaster:
     def publish_game_state(self) -> None:
         with self._lock:
             payload = self.state.to_game_state_payload()
+            self._enrich_game_state_payload_locked(payload)
         self._publish_json(config.TOPIC_GAME_STATE, payload, retained=True)
+
+    def _enrich_game_state_payload_locked(self, payload: dict[str, Any]) -> None:
+        run = self.state.current_run
+        if run is None:
+            payload.setdefault("players_count", 0)
+            payload["run"] = None
+            return
+
+        now_mono = time.monotonic()
+        timer_running = bool(payload.get("timer_running"))
+        riddle_payloads: dict[str, dict[str, Any]] = {}
+        for key, timing in run.riddle_timings.items():
+            status = timing.status()
+            final_time = float(timing.solve_time_s or 0)
+            if status == "active" and timing.segment_started_monotonic is not None:
+                live_time = round(max(0.0, now_mono - timing.segment_started_monotonic), 3)
+            else:
+                live_time = round(max(0.0, final_time), 3)
+            riddle_payloads[key] = {
+                "riddle_key": timing.riddle_key,
+                "solve_time_s": round(max(0.0, final_time), 3),
+                "live_time_s": live_time,
+                "display_time_s": live_time if status == "active" else round(max(0.0, final_time), 3),
+                "hint_count": int(timing.hint_count or 0),
+                "hints": timing.hints or "",
+                "skipped": bool(timing.skipped),
+                "not_solved": bool(timing.not_solved),
+                "status": status,
+                "solved": status == "solved",
+                "final": status in {"solved", "skipped", "not_solved"},
+                "active": status == "active",
+            }
+
+        active_riddles = tuple(PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE]).active_riddles or ())
+        current_riddle_name = ""
+        current_riddle_elapsed_s = 0.0
+        for key in active_riddles:
+            item = riddle_payloads.get(key)
+            if item and item.get("status") == "active":
+                current_riddle_name = key
+                current_riddle_elapsed_s = float(item.get("live_time_s") or 0)
+                break
+
+        live_duration_s = self._compute_live_effective_duration_s(riddle_payloads)
+        payload["players_count"] = int(run.players_count or 0)
+        payload["current_riddle_name"] = current_riddle_name
+        payload["current_riddle_elapsed_s"] = round(max(0.0, current_riddle_elapsed_s), 3)
+        payload["run"] = {
+            "id": run.run_id,
+            "run_id": run.run_id,
+            "date": run.date,
+            "started_at": run.started_at,
+            "ended_at": run.ended_at,
+            "duration_s": run.duration_s if run.duration_s is not None else live_duration_s,
+            "live_duration_s": live_duration_s,
+            "players_count": int(run.players_count or 0),
+            "leaderboard_code": run.leaderboard_code,
+            "hint_count": run.hint_count(),
+            "riddle_timings": riddle_payloads,
+        }
+
+    @staticmethod
+    def _compute_live_effective_duration_s(riddle_payloads: dict[str, dict[str, Any]]) -> float:
+        order = [
+            "images", "piano", "prison", "wheel", "chains",
+            "tangram", "magnet", "chess", "knocking", "candles", "stars", "sissi",
+        ]
+        times = {key: float((riddle_payloads.get(key) or {}).get("display_time_s") or 0) for key in order}
+        serial_before_parallel = times["images"] + times["piano"] + times["prison"] + times["wheel"] + times["chains"]
+        duration_s = (
+            serial_before_parallel
+            + max(times["tangram"], times["magnet"])
+            + times["chess"]
+            + times["knocking"]
+            + times["candles"]
+            + times["stars"]
+            + times["sissi"]
+        )
+        return round(max(0.0, duration_s), 3)
 
     def publish_lighting_cmd(self, payload: dict[str, Any]) -> None:
         self._publish_json(config.TOPIC_LIGHTING_CMD, payload, retained=False)
@@ -188,7 +268,10 @@ class GameMaster:
                     "riddle_key": timing.riddle_key,
                     "solve_time_s": timing.solve_time_s,
                     "hint_count": timing.hint_count,
-                    "hints": "",
+                    "hints": timing.hints or "",
+                    "skipped": bool(timing.skipped),
+                    "not_solved": bool(timing.not_solved),
+                    "status": timing.status(),
                 }
                 for node, timing in run.riddle_timings.items()
             },
@@ -218,12 +301,15 @@ class GameMaster:
                 timing = run.riddle_timings.get(node)
                 if timing is None:
                     continue
-                if float(timing.solve_time_s or 0) > 0:
+                if timing.is_final():
                     continue
                 if timing.segment_started_monotonic is None:
                     timing.segment_started_monotonic = now
 
-    def _mark_solved(self, node: str, source: str) -> None:
+    def _mark_solved(self, node: str, source: str, outcome: str = "solved") -> None:
+        outcome = str(outcome or "solved").strip().lower()
+        if outcome not in {"solved", "skipped", "not_solved"}:
+            outcome = "solved"
         with self._lock:
             run = self.state.current_run
             if run is None:
@@ -231,19 +317,24 @@ class GameMaster:
             timing = run.riddle_timings.get(node)
             if timing is None:
                 return
-            if source == "phase" and float(timing.solve_time_s or 0) > 0:
+            if source == "phase" and timing.is_final():
                 return
 
             now_mono = time.monotonic()
             segment_start = timing.segment_started_monotonic
             if segment_start is None:
                 segment_start = run.started_monotonic
-                timing.segment_started_monotonic = segment_start
 
-            timing.solve_time_s = round(max(0.0, now_mono - segment_start), 3)
+            if not timing.is_final() or float(timing.solve_time_s or 0) <= 0:
+                timing.solve_time_s = round(max(0.0, now_mono - segment_start), 3)
+            timing.segment_started_monotonic = None
+            timing.skipped = outcome == "skipped"
+            timing.not_solved = outcome == "not_solved"
+            if timing.skipped and timing.not_solved:
+                timing.not_solved = False
             self.state.last_riddle_solved_at = iso_now()
 
-        self._record_event("solved", {"node": node, "source": source})
+        self._record_event(outcome, {"node": node, "source": source})
         self.publish_game_state()
 
     @staticmethod
@@ -352,6 +443,28 @@ class GameMaster:
         if cmd == "set_hint_count":
             self.set_hint_count(str(payload.get("riddle", "")).strip(), int(payload.get("count", 0) or 0))
             return
+        if cmd in {"set_riddle_time", "set_solve_time"}:
+            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            raw_seconds = payload.get("solve_time_s", payload.get("time_s", payload.get("seconds", 0)))
+            self.set_riddle_time(riddle, float(raw_seconds or 0))
+            return
+        if cmd in {"set_riddle_outcome", "set_outcome"}:
+            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            outcome = str(payload.get("outcome", payload.get("status", ""))).strip()
+            self.set_riddle_outcome(riddle, outcome, advance=bool(payload.get("advance", False)))
+            return
+        if cmd in {"skip_riddle", "skip"}:
+            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            self.set_riddle_outcome(riddle, "skipped", advance=True)
+            return
+        if cmd in {"mark_not_solved", "not_solved"}:
+            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            self.set_riddle_outcome(riddle, "not_solved", advance=bool(payload.get("advance", False)))
+            return
+        if cmd in {"clear_riddle_outcome", "clear_outcome"}:
+            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            self.set_riddle_outcome(riddle, "clear")
+            return
         if cmd == "list_games":
             self.publish_debug("GAMES", {"games": self.db.list_games()})
             return
@@ -365,6 +478,7 @@ class GameMaster:
             else:
                 self.state.current_run.players_count = cleaned_count
         self._record_event("players_count_updated", {"players_count": cleaned_count})
+        self.publish_game_state()
 
     def add_hint(self, riddle: str, hint_text: str) -> None:
         riddle = self._canonical_riddle_name(riddle)
@@ -381,6 +495,7 @@ class GameMaster:
             if hint_text:
                 timing.hints = ((timing.hints + "\n---\n" + hint_text) if timing.hints else hint_text).strip()
         self._record_event("hint_added", {"riddle": riddle, "hint_text": hint_text})
+        self.publish_game_state()
 
     def set_hint_count(self, riddle: str, count: int) -> None:
         riddle = self._canonical_riddle_name(riddle)
@@ -395,20 +510,101 @@ class GameMaster:
                 raise ValueError(f"Unknown riddle: {riddle}")
             timing.hint_count = max(0, int(count or 0))
         self._record_event("hint_count_set", {"riddle": riddle, "count": max(0, int(count or 0))})
+        self.publish_game_state()
+
+    def set_riddle_time(self, riddle: str, solve_time_s: float) -> None:
+        riddle = self._canonical_riddle_name(riddle)
+        if not riddle:
+            raise ValueError("set_riddle_time requires riddle")
+        seconds = round(max(0.0, float(solve_time_s or 0)), 3)
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                raise ValueError("No current run")
+            timing = run.riddle_timings.get(riddle)
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            if timing.status() == "active" and not timing.is_final():
+                timing.segment_started_monotonic = time.monotonic() - seconds
+                timing.solve_time_s = 0.0
+            else:
+                timing.solve_time_s = seconds
+                if seconds <= 0 and not (timing.skipped or timing.not_solved):
+                    spec = PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE])
+                    if riddle not in spec.active_riddles:
+                        timing.segment_started_monotonic = None
+            run.duration_s = self.db._compute_effective_duration_s(run)
+        self._record_event("riddle_time_set", {"riddle": riddle, "solve_time_s": seconds})
+        self.publish_game_state()
+
+    def set_riddle_outcome(self, riddle: str, outcome: str, *, advance: bool = False) -> None:
+        riddle = self._canonical_riddle_name(riddle)
+        outcome = str(outcome or "").strip().lower().replace("-", "_")
+        if outcome in {"skip", "skipped"}:
+            outcome = "skipped"
+        elif outcome in {"not_solved", "not solved", "failed", "fail"}:
+            outcome = "not_solved"
+        elif outcome in {"clear", "reset", "pending"}:
+            outcome = "clear"
+        elif outcome == "solved":
+            outcome = "solved"
+        else:
+            raise ValueError(f"Unknown riddle outcome: {outcome}")
+
+        if advance and outcome in {"skipped", "not_solved", "solved"}:
+            self._complete_active_riddle(riddle, source=f"admin_{outcome}", outcome=outcome)
+            return
+
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                raise ValueError("No current run")
+            timing = run.riddle_timings.get(riddle)
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            if outcome == "clear":
+                timing.skipped = False
+                timing.not_solved = False
+                if float(timing.solve_time_s or 0) <= 0:
+                    spec = PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE])
+                    if riddle in spec.active_riddles and timing.segment_started_monotonic is None:
+                        timing.segment_started_monotonic = time.monotonic()
+            elif outcome == "solved":
+                timing.skipped = False
+                timing.not_solved = False
+                if float(timing.solve_time_s or 0) <= 0:
+                    segment_start = timing.segment_started_monotonic or run.started_monotonic
+                    timing.solve_time_s = round(max(0.0, time.monotonic() - segment_start), 3)
+                timing.segment_started_monotonic = None
+            else:
+                if float(timing.solve_time_s or 0) <= 0:
+                    segment_start = timing.segment_started_monotonic or run.started_monotonic
+                    timing.solve_time_s = round(max(0.0, time.monotonic() - segment_start), 3)
+                timing.skipped = outcome == "skipped"
+                timing.not_solved = outcome == "not_solved"
+                if timing.skipped and timing.not_solved:
+                    timing.not_solved = False
+                timing.segment_started_monotonic = None
+            run.duration_s = self.db._compute_effective_duration_s(run)
+        self._record_event("riddle_outcome_set", {"riddle": riddle, "outcome": outcome, "advance": bool(advance)})
+        self.publish_game_state()
 
     def handle_solve(self, riddle: str, source: str) -> None:
+        self._complete_active_riddle(riddle, source=source, outcome="solved")
+
+    def _complete_active_riddle(self, riddle: str, source: str, outcome: str) -> None:
         if riddle not in config.RIDDLES:
             raise ValueError(f"Unknown riddle node: {riddle}")
         spec = PHASES[self.state.phase]
         if riddle not in spec.active_riddles:
-            self.publish_debug("SOLVE_IGNORED_NOT_ACTIVE", {"phase": self.state.phase, "riddle": riddle, "source": source})
+            self.publish_debug("SOLVE_IGNORED_NOT_ACTIVE", {"phase": self.state.phase, "riddle": riddle, "source": source, "outcome": outcome})
             return
         if self.state.phase == 10 and riddle == "candles":
-            self.publish_debug("SOLVE_BLOCKED_CANDLES_NOT_YET_ALLOWED", {"phase": self.state.phase})
+            self.publish_debug("SOLVE_BLOCKED_CANDLES_NOT_YET_ALLOWED", {"phase": self.state.phase, "outcome": outcome})
             return
 
         event_name = RIDDLE_SOLVE_EVENTS[riddle]
-        self._mark_solved(riddle, source)
+        self._mark_solved(riddle, source, outcome=outcome)
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
