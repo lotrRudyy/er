@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
@@ -18,6 +19,33 @@ from flask import Flask, jsonify, redirect, render_template, request, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def _load_env_files() -> None:
+    """Small .env loader so the Pi dashboard works without an extra dependency."""
+    for env_path in (BASE_DIR / ".env", BASE_DIR.parent / ".env"):
+        if not env_path.exists():
+            continue
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key or key in os.environ:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            os.environ[key] = value
+
+
+_load_env_files()
+
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
@@ -34,6 +62,58 @@ GAME_DB_PATH = Path(
 REMOVED_GAMES_DIR = GAME_DB_PATH.parent / "removed"
 REMOVED_GAME_DB_PATH = REMOVED_GAMES_DIR / GAME_DB_PATH.name
 RUN_JSON_DIR = GAME_DB_PATH.parent / "game_runs"
+
+TEST_BOOKING_DEFAULT = {
+    "id": "__test__",
+    "kind": "test",
+    "bookingCode": "",
+    "date": "",
+    "slot": "",
+    "players": 2,
+    "customerEmail": "rudolf.dosser@gmail.com",
+    "customerName": "Test booking",
+    "label": "Test booking",
+}
+
+
+def _safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(str(value).strip() or str(fallback)))
+    except Exception:
+        return int(fallback)
+
+
+def normalize_booking_selection(raw: Any | None) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+    raw_id = str(raw.get("id") or raw.get("bookingCode") or raw.get("booking_code") or "").strip()
+    is_test = kind == "test" or raw_id == "__test__"
+    players = max(1, _safe_int(raw.get("players", raw.get("players_count", raw.get("playerCount", 2 if is_test else 1))), 2 if is_test else 1))
+    booking_code = str(raw.get("bookingCode") or raw.get("booking_code") or "").strip()
+    email = str(raw.get("customerEmail") or raw.get("customer_email") or raw.get("email") or "").strip()
+    if is_test and not email:
+        email = TEST_BOOKING_DEFAULT["customerEmail"]
+    label = str(raw.get("label") or "").strip()
+    if not label:
+        if is_test:
+            label = "Test booking"
+        else:
+            label = " · ".join(part for part in [str(raw.get("date") or "").strip(), str(raw.get("slot") or "").strip(), f"{players}P", email or booking_code] if part)
+    return {
+        "id": "__test__" if is_test else str(raw.get("id") or booking_code or f"{raw.get('date','')}-{raw.get('slot','')}-{email}").strip(),
+        "kind": "test" if is_test else "booking",
+        "bookingCode": "" if is_test else booking_code,
+        "date": str(raw.get("date") or "").strip(),
+        "slot": str(raw.get("slot") or "").strip(),
+        "players": players,
+        "customerEmail": email,
+        "customerName": str(raw.get("customerName") or raw.get("customer_name") or raw.get("name") or "").strip(),
+        "language": str(raw.get("language") or "de").strip() or "de",
+        "bookingStatus": str(raw.get("bookingStatus") or raw.get("booking_status") or "").strip(),
+        "paymentStatus": str(raw.get("paymentStatus") or raw.get("payment_status") or "").strip(),
+        "label": label,
+    }
 
 
 def _normalize_existing_games_db_schema(db_path: Path) -> None:
@@ -233,6 +313,7 @@ class DashboardStore:
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
+    selected_booking: dict[str, Any] = field(default_factory=lambda: dict(TEST_BOOKING_DEFAULT))
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -278,8 +359,24 @@ class DashboardStore:
         with self.lock:
             current = dict(self.game_state)
             current["players_count"] = int(players_count)
+            run = current.get("run") if isinstance(current.get("run"), dict) else None
+            if run is not None:
+                run = dict(run)
+                run["players_count"] = int(players_count)
+                current["run"] = run
             self.local_players_count_override = int(players_count)
             self.game_state = current
+
+    def set_selected_booking(self, booking: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_booking_selection(booking)
+        with self.lock:
+            self.selected_booking = normalized
+        self.set_local_players_count(int(normalized.get("players") or 0))
+        return normalized
+
+    def get_selected_booking(self) -> dict[str, Any]:
+        with self.lock:
+            return json.loads(json.dumps(self.selected_booking or TEST_BOOKING_DEFAULT))
 
     def _clear_node_payload_locked(self, node_id: str) -> None:
         existing = self.node_states.get(node_id, {}) or {}
@@ -414,7 +511,8 @@ class DashboardStore:
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
-            "meta": {"broker": BROKER_HOST},
+            "booking": self.get_selected_booking(),
+            "meta": {"broker": BROKER_HOST, "website_api_configured": bool(WEBSITE_API_BASE)},
         }
 
     def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
@@ -1822,15 +1920,19 @@ def current_raw_run_payload() -> dict[str, Any]:
     return run
 
 
-def post_website_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None) -> dict[str, Any]:
     if not WEBSITE_API_BASE:
         raise RuntimeError("ER1_WEBSITE_API_BASE is not configured on the dashboard.")
     url = f"{WEBSITE_API_BASE}{path if path.startswith('/') else '/' + path}"
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    headers = {"Accept": "application/json"}
+    body = None
+    request_method = method or ("POST" if payload is not None else "GET")
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     if WEBSITE_API_TOKEN:
         headers["X-Game-Summary-Token"] = WEBSITE_API_TOKEN
-    request_obj = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    request_obj = urllib.request.Request(url, data=body, headers=headers, method=request_method)
     try:
         with urllib.request.urlopen(request_obj, timeout=20) as response:
             text = response.read().decode("utf-8", errors="replace")
@@ -1838,10 +1940,20 @@ def post_website_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
         try:
-            payload = json.loads(text or "{}")
+            error_payload = json.loads(text or "{}")
         except Exception:
-            payload = {"error": text or str(exc)}
-        raise RuntimeError(str(payload.get("error") or payload.get("message") or f"Website HTTP {exc.code}")) from exc
+            error_payload = {"error": text or str(exc)}
+        raise RuntimeError(str(error_payload.get("error") or error_payload.get("message") or f"Website HTTP {exc.code}")) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(str(exc.reason or exc)) from exc
+
+
+def post_website_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return website_json(path, payload, method="POST")
+
+
+def get_website_json(path: str) -> dict[str, Any]:
+    return website_json(path, None, method="GET")
 
 
 @app.get("/")
@@ -1957,6 +2069,30 @@ def api_phase() -> Any:
     return jsonify({"ok": False, "error": "invalid phase action"}), 400
 
 
+
+
+@app.get("/api/bookings")
+def api_bookings() -> Any:
+    bookings = [normalize_booking_selection(TEST_BOOKING_DEFAULT)]
+    try:
+        query = urllib.parse.urlencode({"limit": 500})
+        result = get_website_json(f"/api/game-dashboard/bookings?{query}")
+        remote = result.get("bookings") if isinstance(result, dict) else []
+        if isinstance(remote, list):
+            bookings.extend(normalize_booking_selection(item) for item in remote if isinstance(item, dict))
+        return jsonify({"ok": True, "bookings": bookings})
+    except Exception as exc:
+        return jsonify({"ok": True, "bookings": bookings, "warning": str(exc)})
+
+
+@app.post("/api/select-booking")
+def api_select_booking() -> Any:
+    data = request.get_json(force=True) or {}
+    booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
+    selected = store.set_selected_booking(booking)
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": int(selected.get("players") or 0)})
+    return jsonify({"ok": True, "booking": selected, "players_count": int(selected.get("players") or 0)})
+
 @app.post("/api/finish-game")
 def api_finish_game() -> Any:
     mqtt_publish(TOPIC_GAME_CMD, {"cmd": "finish_game"})
@@ -1971,10 +2107,18 @@ def api_send_summary_email() -> Any:
         code = str(run.get("leaderboard_code") or run.get("leaderboardCode") or "").strip()
         if not code:
             return jsonify({"ok": False, "error": "The game has no leaderboard code yet. Finish the game first, then try again."}), 400
+        selected_booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else store.get_selected_booking())
+        if selected_booking.get("players"):
+            run = dict(run)
+            run["players_count"] = int(selected_booking.get("players") or 0)
         payload = {
             "run": run,
             "leaderboardCode": code,
-            "bookingCode": str(data.get("bookingCode") or data.get("booking_code") or "").strip(),
+            "bookingCode": str(data.get("bookingCode") or data.get("booking_code") or selected_booking.get("bookingCode") or "").strip(),
+            "booking": selected_booking,
+            "bookingEmail": str(selected_booking.get("customerEmail") or "").strip(),
+            "players": int(selected_booking.get("players") or 0),
+            "testBooking": selected_booking.get("kind") == "test",
         }
         result = post_website_json("/api/game-summary/send", payload)
         return jsonify(result)

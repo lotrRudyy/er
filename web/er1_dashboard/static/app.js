@@ -3,7 +3,8 @@ const state = {
   nodes: [],
   locks: [],
   lights: [],
-  riddles: []
+  riddles: [],
+  booking: { kind: 'test', bookingCode: '', customerEmail: 'rudolf.dosser@gmail.com', players: 2, label: 'Test booking' }
 };
 
 let lastSnapshot = null;
@@ -16,8 +17,11 @@ const dimDrafts = {};
 const dimEditing = {};
 const riddleTimeDrafts = {};
 const riddleTimeEditing = {};
-let playersCountEditing = false;
 let summaryEmailBusy = false;
+let bookingOptions = [];
+let bookingOptionsLoaded = false;
+let bookingBusy = false;
+const TEST_BOOKING_ID = '__test__';
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -103,14 +107,145 @@ function readLocalRiddleTimer() {
   return Math.max(0, Math.floor((Date.now() - localRiddleTimerStartedAt) / 1000));
 }
 
-function renderPlayersCountControls() {
-  const input = document.getElementById('playersCountInput');
-  const stored = document.getElementById('playersCountStored');
-  const currentValue = Math.max(0, parseInt(state.game.players_count || 0, 10) || 0);
-  if (stored) stored.textContent = `(gespeichert: ${currentValue})`;
-  if (!input) return;
-  if (!playersCountEditing && document.activeElement !== input) {
-    input.value = String(currentValue);
+function safeInt(value, fallback = 0) {
+  const parsed = parseInt(String(value ?? '').replace(/[^0-9-]/g, ''), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeBooking(raw = {}) {
+  const kind = String(raw.kind || raw.type || '').toLowerCase() === 'test' || String(raw.id || raw.bookingCode || raw.booking_code || '') === TEST_BOOKING_ID
+    ? 'test'
+    : 'booking';
+  const players = Math.max(1, safeInt(raw.players ?? raw.players_count ?? raw.playerCount, kind === 'test' ? 2 : 1));
+  const customerEmail = String(raw.customerEmail || raw.customer_email || raw.email || '').trim();
+  const bookingCode = String(raw.bookingCode || raw.booking_code || '').trim();
+  const id = kind === 'test' ? TEST_BOOKING_ID : String(raw.id || bookingCode || `${raw.date || ''}-${raw.slot || ''}-${customerEmail}`);
+  return {
+    ...raw,
+    id,
+    kind,
+    bookingCode,
+    customerEmail,
+    customerName: String(raw.customerName || raw.customer_name || raw.name || '').trim(),
+    date: String(raw.date || '').trim(),
+    slot: String(raw.slot || '').trim(),
+    players,
+    label: String(raw.label || '').trim()
+  };
+}
+
+function bookingKey(booking = {}) {
+  const normalized = normalizeBooking(booking);
+  return normalized.kind === 'test' ? TEST_BOOKING_ID : String(normalized.id || normalized.bookingCode || '');
+}
+
+function selectedBookingDraft() {
+  const selected = normalizeBooking(state.booking || {});
+  if (selected.kind !== 'test') return selected;
+  const emailInput = document.getElementById('testBookingEmail');
+  const playersInput = document.getElementById('testBookingPlayers');
+  return normalizeBooking({
+    ...selected,
+    kind: 'test',
+    id: TEST_BOOKING_ID,
+    customerEmail: emailInput?.value || selected.customerEmail || 'rudolf.dosser@gmail.com',
+    players: Math.max(1, safeInt(playersInput?.value, selected.players || 2)),
+    label: 'Test booking'
+  });
+}
+
+function bookingOptionLabel(booking) {
+  const item = normalizeBooking(booking);
+  if (item.kind === 'test') return 'Test booking';
+  const main = [item.date, item.slot].filter(Boolean).join(' ');
+  const who = item.customerName || item.customerEmail || item.bookingCode || `Booking ${item.id}`;
+  const pieces = [];
+  if (main) pieces.push(main);
+  pieces.push(`${item.players}P`);
+  pieces.push(who);
+  if (item.bookingCode) pieces.push(item.bookingCode);
+  return pieces.join(' · ');
+}
+
+function setBookingFeedback(message, kind = '') {
+  const box = document.getElementById('bookingFeedback');
+  if (!box) return;
+  box.textContent = message || '';
+  box.className = `summary-email-feedback ${kind ? `summary-email-feedback--${kind}` : ''}`;
+}
+
+async function loadBookings() {
+  const fallback = normalizeBooking({ kind: 'test', id: TEST_BOOKING_ID, customerEmail: 'rudolf.dosser@gmail.com', players: 2, label: 'Test booking' });
+  try {
+    const result = await api('/api/bookings');
+    const loaded = Array.isArray(result.bookings) ? result.bookings.map(normalizeBooking) : [];
+    bookingOptions = loaded.length ? loaded : [fallback];
+    if (!bookingOptions.some(item => item.kind === 'test')) bookingOptions.unshift(fallback);
+    bookingOptionsLoaded = true;
+    setBookingFeedback(result.warning ? result.warning : '', result.warning ? 'warn' : '');
+  } catch (error) {
+    bookingOptions = [fallback];
+    bookingOptionsLoaded = true;
+    setBookingFeedback(error.message || 'Could not load bookings.', 'warn');
+  }
+  renderBookingControls();
+}
+
+async function saveSelectedBooking(booking) {
+  const normalized = normalizeBooking(booking);
+  bookingBusy = true;
+  renderBookingControls();
+  try {
+    const result = await api('/api/select-booking', { method: 'POST', body: JSON.stringify({ booking: normalized }) });
+    state.booking = normalizeBooking(result.booking || normalized);
+    state.game.players_count = state.booking.players;
+    setBookingFeedback(state.booking.kind === 'test' ? 'Test booking selected.' : 'Booking selected and player count sent to game master.', 'ok');
+    await fetchAndPatch();
+  } catch (error) {
+    setBookingFeedback(error.message || 'Could not select booking.', 'error');
+  } finally {
+    bookingBusy = false;
+    renderBookingControls();
+  }
+}
+
+function renderBookingControls() {
+  const select = document.getElementById('bookingSelect');
+  const info = document.getElementById('bookingSelectedInfo');
+  const testFields = document.getElementById('testBookingFields');
+  const testEmail = document.getElementById('testBookingEmail');
+  const testPlayers = document.getElementById('testBookingPlayers');
+  const refreshButton = document.getElementById('refreshBookingsBtn');
+  if (!select) return;
+
+  if (!bookingOptionsLoaded && !bookingOptions.length) {
+    bookingOptions = [normalizeBooking({ kind: 'test', id: TEST_BOOKING_ID, customerEmail: 'rudolf.dosser@gmail.com', players: 2, label: 'Test booking' })];
+  }
+
+  const current = normalizeBooking(state.booking || bookingOptions[0] || {});
+  const currentKey = bookingKey(current);
+  const optionSignature = bookingOptions.map(item => `${bookingKey(item)}:${bookingOptionLabel(item)}`).join('|');
+  if (select.dataset.signature !== optionSignature) {
+    select.innerHTML = bookingOptions.map(item => `<option value="${escapeAttr(bookingKey(item))}">${escapeAttr(bookingOptionLabel(item))}</option>`).join('');
+    select.dataset.signature = optionSignature;
+  }
+  select.value = currentKey;
+  select.disabled = bookingBusy;
+  if (refreshButton) refreshButton.disabled = bookingBusy;
+
+  const isTest = current.kind === 'test';
+  if (testFields) testFields.classList.toggle('hidden', !isTest);
+  if (testEmail && isTest && document.activeElement !== testEmail) testEmail.value = current.customerEmail || 'rudolf.dosser@gmail.com';
+  if (testPlayers && isTest && document.activeElement !== testPlayers) testPlayers.value = String(current.players || 2);
+
+  if (info) {
+    if (isTest) {
+      info.textContent = `Test booking · ${current.players || 2} players · ${current.customerEmail || 'no email'}`;
+    } else {
+      const line1 = [current.date, current.slot, `${current.players || 0} players`].filter(Boolean).join(' · ');
+      const line2 = [current.customerName, current.customerEmail, current.bookingCode].filter(Boolean).join(' · ');
+      info.textContent = [line1, line2].filter(Boolean).join(' | ') || 'No booking selected';
+    }
   }
 }
 
@@ -119,7 +254,9 @@ function renderSummaryControls() {
   if (!sendButton) return;
   const code = String(state.game.leaderboard_code || '').trim();
   const finished = Number(state.game.phase || 0) >= 14 || Boolean(state.game.ended_at);
-  sendButton.disabled = summaryEmailBusy || !finished || !code;
+  const booking = selectedBookingDraft();
+  const targetEmail = String(booking.customerEmail || '').trim();
+  sendButton.disabled = summaryEmailBusy || !finished || !code || !targetEmail;
   sendButton.textContent = summaryEmailBusy
     ? 'Sending…'
     : (code ? `Send summary email (${code})` : 'Send summary email');
@@ -139,7 +276,7 @@ function renderTop() {
     : `${state.game.last_phase}: ${state.game.last_phase_name_pretty || state.game.last_phase_name || ''}`.trim();
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
   document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
-  renderPlayersCountControls();
+  renderBookingControls();
   renderSummaryControls();
 }
 
@@ -353,7 +490,7 @@ function buildRiddleRow(riddle) {
         <button class="clear-outcome-btn" type="button" ${isFinal ? '' : 'disabled'}>Clear</button>
       </div>
     </td>
-    <td>${infoHtml}</td>
+    <td><div class="riddle-info-cell">${infoHtml}</div></td>
     <td>${hintCellHtml(riddle)}</td>
   `;
 
@@ -423,19 +560,16 @@ function buildRiddleRow(riddle) {
 }
 
 function renderRiddles() {
-  const leftBody = document.getElementById('riddlesBodyLeft');
-  const rightBody = document.getElementById('riddlesBodyRight');
-  leftBody.innerHTML = '';
-  rightBody.innerHTML = '';
-
-  const riddles = state.riddles || [];
-  const splitIndex = Math.ceil(riddles.length / 2);
-  riddles.slice(0, splitIndex).forEach(riddle => leftBody.appendChild(buildRiddleRow(riddle)));
-  riddles.slice(splitIndex).forEach(riddle => rightBody.appendChild(buildRiddleRow(riddle)));
+  const body = document.getElementById('riddlesBody');
+  if (!body) return;
+  body.innerHTML = '';
+  for (const riddle of state.riddles || []) {
+    body.appendChild(buildRiddleRow(riddle));
+  }
 }
 
 function patchState(data) {
-  const rerenderTop = sectionChanged(data, 'game');
+  const rerenderTop = sectionChanged(data, 'game') || sectionChanged(data, 'booking');
   const rerenderNodes = sectionChanged(data, 'nodes');
   const rerenderLocks = sectionChanged(data, 'locks');
   const rerenderLights = sectionChanged(data, 'lights');
@@ -448,6 +582,7 @@ function patchState(data) {
   state.locks = data.locks || [];
   state.lights = data.lights || [];
   state.riddles = data.riddles || [];
+  state.booking = data.booking || state.booking;
 
   for (const light of state.lights) {
     if (!dimEditing[light.id] && light.dimmable && dimDrafts[light.id] == null) {
@@ -500,10 +635,11 @@ function wireTopControls() {
     renderSummaryControls();
     setSummaryFeedback('Sending summary email…');
     try {
-      const result = await api('/api/send-summary-email', { method: 'POST', body: JSON.stringify({}) });
+      const booking = selectedBookingDraft();
+      const result = await api('/api/send-summary-email', { method: 'POST', body: JSON.stringify({ booking }) });
       const email = result?.email || {};
-      const booking = result?.booking || {};
-      const target = booking.customerEmail || booking.customer_email || '';
+      const responseBooking = result?.booking || booking || {};
+      const target = responseBooking.customerEmail || responseBooking.customer_email || booking.customerEmail || '';
       setSummaryFeedback(target ? `Summary sent to ${target}.` : (email.skipped ? `Summary email skipped: ${email.reason || 'unknown reason'}.` : 'Summary email sent.'), email.skipped ? 'warn' : 'ok');
     } catch (error) {
       setSummaryFeedback(error.message || 'Could not send summary email.', 'error');
@@ -514,33 +650,45 @@ function wireTopControls() {
     }
   });
 
-  const input = document.getElementById('playersCountInput');
-  const saveButton = document.getElementById('playersCountSave');
+  const bookingSelect = document.getElementById('bookingSelect');
+  const refreshBookingsBtn = document.getElementById('refreshBookingsBtn');
+  const testEmail = document.getElementById('testBookingEmail');
+  const testPlayers = document.getElementById('testBookingPlayers');
 
-  const getDraftCount = () => Math.max(0, parseInt(String(input?.value ?? state.game.players_count ?? 0).replace(/[^0-9-]/g, ''), 10) || 0, 0);
+  bookingSelect?.addEventListener('change', async () => {
+    const key = bookingSelect.value;
+    const selected = bookingOptions.find(item => bookingKey(item) === key) || bookingOptions[0];
+    if (!selected) return;
+    if (normalizeBooking(selected).kind === 'test') {
+      await saveSelectedBooking(selectedBookingDraft());
+    } else {
+      await saveSelectedBooking(selected);
+    }
+  });
 
-  const savePlayersCount = async (nextCount) => {
-    const normalized = Math.max(0, parseInt(nextCount || 0, 10) || 0);
-    const response = await api('/api/players-count', { method: 'POST', body: JSON.stringify({ players_count: normalized }) });
-    state.game.players_count = Math.max(0, parseInt(response?.players_count ?? normalized, 10) || 0);
-    playersCountEditing = false;
-    renderPlayersCountControls();
-    await fetchAndPatch();
+  refreshBookingsBtn?.addEventListener('click', async () => {
+    setBookingFeedback('Loading bookings…');
+    await loadBookings();
+  });
+
+  const saveTestDraft = async () => {
+    if (selectedBookingDraft().kind !== 'test') return;
+    await saveSelectedBooking(selectedBookingDraft());
   };
 
-  if (input) {
-    input.addEventListener('focus', () => { playersCountEditing = true; });
-    input.addEventListener('blur', () => { playersCountEditing = false; });
-    input.addEventListener('input', () => { input.value = input.value.replace(/[^0-9]/g, ''); });
-    input.addEventListener('keydown', async (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      await savePlayersCount(getDraftCount());
-    });
-  }
-
-  saveButton?.addEventListener('mousedown', () => { playersCountEditing = true; });
-  saveButton?.addEventListener('click', async () => { await savePlayersCount(getDraftCount()); });
+  testEmail?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    await saveTestDraft();
+  });
+  testEmail?.addEventListener('blur', saveTestDraft);
+  testPlayers?.addEventListener('input', () => { testPlayers.value = testPlayers.value.replace(/[^0-9]/g, ''); });
+  testPlayers?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    await saveTestDraft();
+  });
+  testPlayers?.addEventListener('blur', saveTestDraft);
 }
 
 setInterval(() => {
@@ -553,4 +701,5 @@ setInterval(() => {
 }, 1000);
 
 wireTopControls();
+loadBookings().catch(console.error);
 fetchAndPatch().catch(console.error);
