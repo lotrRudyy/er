@@ -403,6 +403,9 @@ class GameMaster:
                 return
             self._enter_phase(3, "admin_start")
             return
+        if cmd in {"finish_game", "game_finished", "finish"}:
+            self.finish_current_game(source="admin")
+            return
         if cmd == "set_players_count":
             players_count = payload.get("players_count", 0)
             try:
@@ -469,6 +472,41 @@ class GameMaster:
             self.publish_debug("GAMES", {"games": self.db.list_games()})
             return
         raise ValueError(f"Unknown command: {cmd}")
+
+    def finish_current_game(self, source: str = "admin") -> None:
+        """Finish the current run without requiring the final Sissi solve button.
+
+        Every riddle that has not already been solved/skipped/not-solved is marked
+        as not_solved. Active riddles keep their elapsed segment time; riddles that
+        were never reached get 0 seconds. Then the normal finished phase is entered,
+        which stops the timer, opens the persistent locks, sets the final lighting,
+        and saves the run to SQLite/JSON.
+        """
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                self.publish_debug("FINISH_IGNORED_NO_RUN", {"source": source})
+                return
+            now_mono = time.monotonic()
+            for riddle in config.RIDDLES:
+                timing = run.riddle_timings.get(riddle)
+                if timing is None:
+                    timing = RiddleTiming(riddle_key=riddle)
+                    run.riddle_timings[riddle] = timing
+                if timing.is_final():
+                    timing.segment_started_monotonic = None
+                    continue
+                if timing.segment_started_monotonic is not None:
+                    timing.solve_time_s = round(max(0.0, now_mono - timing.segment_started_monotonic), 3)
+                else:
+                    timing.solve_time_s = round(max(0.0, float(timing.solve_time_s or 0)), 3)
+                timing.skipped = False
+                timing.not_solved = True
+                timing.segment_started_monotonic = None
+            run.duration_s = self.db._compute_effective_duration_s(run)
+
+        self._record_event("game_finished", {"source": source, "marked_unfinished_not_solved": True})
+        self._enter_phase(14, f"{source}_finish_game")
 
     def set_players_count(self, players_count: int) -> None:
         cleaned_count = max(0, int(players_count or 0))
