@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.error
@@ -97,6 +99,73 @@ def website_api_config() -> tuple[str, str]:
     base = _normalise_url_base(os.getenv("ER1_WEBSITE_API_BASE", ""))
     token = os.getenv("ER1_WEBSITE_API_TOKEN", "").strip()
     return base, token
+
+
+def _read_int_env(name: str, fallback: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        return int(raw)
+    except Exception:
+        return fallback
+
+
+def website_api_timeout(default: int = 20) -> int:
+    return max(1, _read_int_env("ER1_WEBSITE_API_TIMEOUT", default))
+
+
+def bookings_http_timeout() -> int:
+    return max(1, _read_int_env("ER1_BOOKINGS_HTTP_TIMEOUT", 6))
+
+
+def booking_source_mode() -> str:
+    _load_env_files()
+    # The Pi dashboard should get bookings by SSH-copying the website DB, not by calling the public/admin website API.
+    mode = os.getenv("ER1_BOOKINGS_SOURCE", "ssh-copy").strip().lower()
+    return mode if mode in {"ssh-copy", "ssh", "http"} else "ssh-copy"
+
+
+def booking_ssh_config() -> dict[str, Any]:
+    _load_env_files()
+    local_default = BASE_DIR / "data" / "website_app_bookings.sqlite3"
+    return {
+        "host": os.getenv("ER1_WEBSITE_SSH_HOST", "192.168.0.111").strip(),
+        "user": os.getenv("ER1_WEBSITE_SSH_USER", "rudyy").strip(),
+        "port": str(_read_int_env("ER1_WEBSITE_SSH_PORT", 22)),
+        "db_path": os.getenv("ER1_WEBSITE_DB_PATH", "/home/rudyy/escapeschenna/data/app.db").strip(),
+        "app_path": os.getenv("ER1_WEBSITE_APP_PATH", "/home/rudyy/escapeschenna").strip(),
+        "summary_script": os.getenv("ER1_WEBSITE_SUMMARY_SCRIPT", "scripts/send-game-summary-email.js").strip(),
+        "local_db_path": Path(os.getenv("ER1_LOCAL_BOOKINGS_DB_PATH", str(local_default))).expanduser(),
+        "timeout": max(2, _read_int_env("ER1_WEBSITE_SSH_TIMEOUT", 8)),
+    }
+
+
+def _ssh_target(cfg: dict[str, Any]) -> str:
+    return f"{cfg['user']}@{cfg['host']}"
+
+
+def _ssh_base(cfg: dict[str, Any]) -> list[str]:
+    return [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-p", str(cfg["port"]),
+        _ssh_target(cfg),
+    ]
+
+
+def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{label} command not found on the Pi") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} timed out") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"{label} failed: {detail or exc}") from exc
 
 
 _load_env_files()
@@ -1973,7 +2042,7 @@ def current_raw_run_payload() -> dict[str, Any]:
     return run
 
 
-def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None) -> dict[str, Any]:
+def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None, timeout: int | None = None) -> dict[str, Any]:
     website_api_base, website_api_token = website_api_config()
     if not website_api_base:
         checked = ", ".join(str(path) for path in _candidate_env_paths())
@@ -1986,10 +2055,13 @@ def website_json(path: str, payload: dict[str, Any] | None = None, method: str |
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if website_api_token:
+        # Support both names. The website accepts either header.
         headers["X-Game-Summary-Token"] = website_api_token
+        headers["X-Dashboard-Token"] = website_api_token
+        headers["Authorization"] = f"Bearer {website_api_token}"
     request_obj = urllib.request.Request(url, data=body, headers=headers, method=request_method)
     try:
-        with urllib.request.urlopen(request_obj, timeout=20) as response:
+        with urllib.request.urlopen(request_obj, timeout=timeout or website_api_timeout()) as response:
             text = response.read().decode("utf-8", errors="replace")
             return json.loads(text or "{}")
     except urllib.error.HTTPError as exc:
@@ -2003,12 +2075,164 @@ def website_json(path: str, payload: dict[str, Any] | None = None, method: str |
         raise RuntimeError(str(exc.reason or exc)) from exc
 
 
-def post_website_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return website_json(path, payload, method="POST")
+def post_website_json(path: str, payload: dict[str, Any], timeout: int | None = None) -> dict[str, Any]:
+    return website_json(path, payload, method="POST", timeout=timeout)
 
 
-def get_website_json(path: str) -> dict[str, Any]:
-    return website_json(path, None, method="GET")
+def get_website_json(path: str, timeout: int | None = None) -> dict[str, Any]:
+    return website_json(path, None, method="GET", timeout=timeout)
+
+
+def _parse_tsv_table(text: str) -> list[dict[str, Any]]:
+    lines = [line.rstrip("\n") for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = lines[0].split("\t")
+    rows: list[dict[str, Any]] = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        row = {key: (values[i] if i < len(values) else "") for i, key in enumerate(header)}
+        rows.append(row)
+    return rows
+
+
+def sync_website_bookings_db_via_ssh() -> Path:
+    """Create a consistent backup of the website app.db on Debian and copy it to the Pi.
+
+    This is intentionally not an HTTP/admin API call. The dashboard SSHes into
+    192.168.0.111, asks sqlite3 to create a safe backup copy, then scps that
+    backup to a local cache file on the Pi. The dashboard reads bookings from
+    the copied DB only.
+    """
+    cfg = booking_ssh_config()
+    if not cfg["host"] or not cfg["user"] or not cfg["db_path"]:
+        raise RuntimeError("Website DB SSH sync is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_DB_PATH.")
+    target = _ssh_target(cfg)
+    remote_tmp = f"/tmp/er1_dashboard_bookings_{int(time.time() * 1000)}.sqlite3"
+    local_path = Path(cfg["local_db_path"]).expanduser()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+    backup_command = f"rm -f {shlex.quote(remote_tmp)}; sqlite3 {shlex.quote(cfg['db_path'])} {shlex.quote('.backup ' + remote_tmp)}; test -s {shlex.quote(remote_tmp)}"
+    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 10, label="ssh sqlite backup")
+    scp_cmd = [
+        "scp",
+        "-P", str(cfg["port"]),
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{target}:{remote_tmp}",
+        str(local_tmp),
+    ]
+    try:
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp website DB")
+        local_tmp.replace(local_path)
+    finally:
+        try:
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+    return local_path
+
+
+def _booking_label(row: dict[str, Any]) -> str:
+    return " · ".join(part for part in [
+        row.get("date", ""),
+        row.get("slot", ""),
+        f"{row.get('players', '')}P" if row.get("players") else "",
+        row.get("customer_name") or row.get("customer_email") or row.get("booking_code", ""),
+    ] if part)
+
+
+def list_bookings_from_local_db(db_path: Path, limit: int = 1000) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        raise FileNotFoundError(f"Copied website booking DB not found: {db_path}")
+    safe_limit = max(1, min(5000, int(limit or 1000)))
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "bookings" not in tables:
+            raise RuntimeError(f"Copied website DB has no bookings table: {db_path}")
+        rows = conn.execute(
+            """
+            SELECT id, booking_code, date, slot, players, language, customer_name, customer_email,
+                   payment_method, payment_status, booking_status, total_cents, created_at, updated_at
+            FROM bookings
+            ORDER BY date DESC, slot DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        row = dict(r)
+        out.append(normalize_booking_selection({
+            "id": row.get("id", ""),
+            "bookingCode": row.get("booking_code", ""),
+            "date": row.get("date", ""),
+            "slot": row.get("slot", ""),
+            "players": row.get("players", ""),
+            "customerEmail": row.get("customer_email", ""),
+            "customerName": row.get("customer_name", ""),
+            "language": row.get("language", "de"),
+            "paymentStatus": row.get("payment_status", ""),
+            "bookingStatus": row.get("booking_status", ""),
+            "totalCents": row.get("total_cents", ""),
+            "label": _booking_label(row),
+        }))
+    return out
+
+
+def list_bookings_via_ssh_copy(limit: int = 1000) -> tuple[list[dict[str, Any]], Path, bool]:
+    local_db = sync_website_bookings_db_via_ssh()
+    return list_bookings_from_local_db(local_db, limit), local_db, True
+
+
+def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
+    cfg = booking_ssh_config()
+    if not cfg["host"] or not cfg["user"] or not cfg["app_path"]:
+        raise RuntimeError("Website SSH summary is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_APP_PATH.")
+    target = _ssh_target(cfg)
+    remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
+    local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
+    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    scp_cmd = [
+        "scp",
+        "-P", str(cfg["port"]),
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        str(local_tmp),
+        f"{target}:{remote_tmp}",
+    ]
+    try:
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp game summary payload")
+        app_path = shlex.quote(cfg["app_path"])
+        script = shlex.quote(cfg["summary_script"])
+        remote_payload = shlex.quote(remote_tmp)
+        remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
+        completed = _run_process(_ssh_base(cfg) + [remote_cmd], timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        text = (completed.stdout or "").strip()
+        # The website script should print only JSON, but parse the last JSON-looking
+        # line too so harmless npm/node warnings do not break the dashboard.
+        candidates = [line.strip() for line in text.splitlines() if line.strip()] or ["{}"]
+        for candidate in reversed(candidates):
+            if not candidate.startswith("{"):
+                continue
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+        raise RuntimeError(f"Website summary script did not return JSON: {text[:500]}")
+    finally:
+        try:
+            local_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
 
 
 @app.get("/")
@@ -2130,14 +2354,32 @@ def api_phase() -> Any:
 def api_bookings() -> Any:
     bookings = [normalize_booking_selection(TEST_BOOKING_DEFAULT)]
     try:
-        query = urllib.parse.urlencode({"limit": 500})
-        result = get_website_json(f"/api/game-dashboard/bookings?{query}")
-        remote = result.get("bookings") if isinstance(result, dict) else []
-        if isinstance(remote, list):
-            bookings.extend(normalize_booking_selection(item) for item in remote if isinstance(item, dict))
-        return jsonify({"ok": True, "bookings": bookings})
+        remote_bookings, local_db, fresh = list_bookings_via_ssh_copy(1000)
+        bookings.extend(remote_bookings)
+        return jsonify({
+            "ok": True,
+            "bookings": bookings,
+            "source": "ssh-copy",
+            "copiedDb": str(local_db),
+            "fresh": fresh,
+        })
     except Exception as exc:
-        return jsonify({"ok": True, "bookings": bookings, "warning": str(exc)})
+        # Still allow the test booking. If a previous copied DB exists, use it as a fallback.
+        cfg = booking_ssh_config()
+        local_db = Path(cfg["local_db_path"]).expanduser()
+        try:
+            if local_db.exists():
+                bookings.extend(list_bookings_from_local_db(local_db, 1000))
+                return jsonify({
+                    "ok": True,
+                    "bookings": bookings,
+                    "source": "cached-copy",
+                    "copiedDb": str(local_db),
+                    "warning": f"SSH copy failed, using cached booking DB: {exc}",
+                })
+        except Exception as cache_exc:
+            return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}; cached DB failed: {cache_exc}"})
+        return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}"})
 
 
 @app.post("/api/select-booking")
@@ -2175,7 +2417,11 @@ def api_send_summary_email() -> Any:
             "players": int(selected_booking.get("players") or 0),
             "testBooking": selected_booking.get("kind") == "test",
         }
-        result = post_website_json("/api/game-summary/send", payload)
+        mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
+        if mode == "http":
+            result = post_website_json("/api/game-summary/send", payload)
+        else:
+            result = send_summary_email_via_ssh(payload)
         return jsonify(result)
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
