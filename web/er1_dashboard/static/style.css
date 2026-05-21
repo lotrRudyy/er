@@ -902,3 +902,97 @@ button:hover,
 .json-block {
   color: var(--text);
 }
+
+/* Live finish/email controls */
+.game-finish-controls {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  align-items: start;
+}
+
+.finish-game-btn,
+.summary-email-btn {
+  min-height: 40px;
+  font-weight: 800;
+}
+
+.finish-game-btn {
+  border-color: var(--red-line);
+  background: var(--red-bg);
+  color: var(--red-text);
+}
+
+.summary-email-btn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.summary-email-feedback {
+  grid-column: 1 / -1;
+  min-height: 18px;
+  line-height: 1.2;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summary-email-feedback--ok { color: var(--green-text); }
+.summary-email-feedback--warn { color: var(--yellow-text); }
+.summary-email-feedback--error { color: var(--red-text); }
+
+/* Keep the riddle table compact while giving status/info data more room. */
+.compact-riddles-table {
+  table-layout: fixed;
+}
+
+.compact-riddles-table th,
+.compact-riddles-table td {
+  padding: 5px 8px;
+}
+
+.compact-riddles-table th:nth-child(1) { width: 78px; }
+.compact-riddles-table th:nth-child(2) { width: 72px; }
+.compact-riddles-table th:nth-child(3) { width: 112px; }
+.compact-riddles-table th:nth-child(4) { width: 190px; }
+.compact-riddles-table th:nth-child(5) { width: 350px; }
+.compact-riddles-table th:nth-child(6) { width: 70px; }
+.compact-riddles-table td { height: 48px; }
+
+.riddle-time-input {
+  width: 76px;
+  padding: 5px 6px;
+}
+
+.riddle-time-save,
+.riddle-actions button {
+  padding: 5px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.riddle-actions {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.compact-riddles-table .inline-info {
+  align-items: flex-start;
+  gap: 3px 5px;
+  line-height: 1.22;
+}
+
+.compact-riddles-table .inline-info-wrap {
+  flex-wrap: wrap;
+}
+
+.compact-riddles-table td:nth-child(5) {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.compact-riddles-table td:nth-child(5) > * {
+  max-height: 42px;
+  overflow: auto;
+}

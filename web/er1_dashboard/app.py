@@ -7,6 +7,8 @@ import re
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +21,8 @@ BASE_DIR = Path(__file__).resolve().parent
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
+WEBSITE_API_BASE = os.getenv("ER1_WEBSITE_API_BASE", "").strip().rstrip("/")
+WEBSITE_API_TOKEN = os.getenv("ER1_WEBSITE_API_TOKEN", "").strip()
 HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
 GAME_DB_PATH = Path(
     os.getenv(
@@ -501,6 +505,9 @@ class DashboardStore:
             "current_riddle_elapsed_s": current_elapsed if current_elapsed is not None else (_seconds_since(current_riddle_started_at) if timer_running else 0),
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
+            "run_id": run.get("run_id") or run.get("id") or "",
+            "leaderboard_code": str(run.get("leaderboard_code") or "").strip(),
+            "ended_at": run.get("ended_at"),
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1806,6 +1813,37 @@ def mqtt_publish(topic: str, payload: dict[str, Any] | str) -> None:
     mqtt_client.publish(topic, body, qos=0, retain=False)
 
 
+def current_raw_run_payload() -> dict[str, Any]:
+    with store.lock:
+        raw_game_state = json.loads(json.dumps(store.game_state))
+    run = raw_game_state.get("run") if isinstance(raw_game_state.get("run"), dict) else None
+    if not run:
+        raise ValueError("No current run is available yet.")
+    return run
+
+
+def post_website_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not WEBSITE_API_BASE:
+        raise RuntimeError("ER1_WEBSITE_API_BASE is not configured on the dashboard.")
+    url = f"{WEBSITE_API_BASE}{path if path.startswith('/') else '/' + path}"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if WEBSITE_API_TOKEN:
+        headers["X-Game-Summary-Token"] = WEBSITE_API_TOKEN
+    request_obj = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request_obj, timeout=20) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            return json.loads(text or "{}")
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(text or "{}")
+        except Exception:
+            payload = {"error": text or str(exc)}
+        raise RuntimeError(str(payload.get("error") or payload.get("message") or f"Website HTTP {exc.code}")) from exc
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
@@ -1917,6 +1955,31 @@ def api_phase() -> Any:
         mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_mode", "mode": action})
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "invalid phase action"}), 400
+
+
+@app.post("/api/finish-game")
+def api_finish_game() -> Any:
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "finish_game"})
+    return jsonify({"ok": True})
+
+
+@app.post("/api/send-summary-email")
+def api_send_summary_email() -> Any:
+    data = request.get_json(silent=True) or {}
+    try:
+        run = current_raw_run_payload()
+        code = str(run.get("leaderboard_code") or run.get("leaderboardCode") or "").strip()
+        if not code:
+            return jsonify({"ok": False, "error": "The game has no leaderboard code yet. Finish the game first, then try again."}), 400
+        payload = {
+            "run": run,
+            "leaderboardCode": code,
+            "bookingCode": str(data.get("bookingCode") or data.get("booking_code") or "").strip(),
+        }
+        result = post_website_json("/api/game-summary/send", payload)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.post("/api/players-count")

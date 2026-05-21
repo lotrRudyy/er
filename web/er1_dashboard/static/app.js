@@ -17,6 +17,7 @@ const dimEditing = {};
 const riddleTimeDrafts = {};
 const riddleTimeEditing = {};
 let playersCountEditing = false;
+let summaryEmailBusy = false;
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -113,6 +114,24 @@ function renderPlayersCountControls() {
   }
 }
 
+function renderSummaryControls() {
+  const sendButton = document.getElementById('sendSummaryEmailBtn');
+  if (!sendButton) return;
+  const code = String(state.game.leaderboard_code || '').trim();
+  const finished = Number(state.game.phase || 0) >= 14 || Boolean(state.game.ended_at);
+  sendButton.disabled = summaryEmailBusy || !finished || !code;
+  sendButton.textContent = summaryEmailBusy
+    ? 'Sending…'
+    : (code ? `Send summary email (${code})` : 'Send summary email');
+}
+
+function setSummaryFeedback(message, kind = '') {
+  const box = document.getElementById('summaryEmailFeedback');
+  if (!box) return;
+  box.textContent = message || '';
+  box.className = `summary-email-feedback ${kind ? `summary-email-feedback--${kind}` : ''}`;
+}
+
 function renderTop() {
   document.getElementById('phaseValue').textContent = state.game.phase_display || `Phase ${state.game.phase}: ${state.game.phase_name_pretty || state.game.phase_name}`;
   document.getElementById('lastPhaseValue').textContent = state.game.last_phase == null
@@ -121,6 +140,7 @@ function renderTop() {
   document.getElementById('timerValue').textContent = fmtTime(readLocalTimer());
   document.getElementById('riddleTimerValue').textContent = fmtTime(readLocalRiddleTimer());
   renderPlayersCountControls();
+  renderSummaryControls();
 }
 
 function renderNodes() {
@@ -463,6 +483,35 @@ function wireTopControls() {
       await api('/api/phase', { method: 'POST', body: JSON.stringify({ action: btn.dataset.phaseAction }) });
       await fetchAndPatch();
     });
+  });
+
+  const finishButton = document.getElementById('finishGameBtn');
+  const sendSummaryButton = document.getElementById('sendSummaryEmailBtn');
+
+  finishButton?.addEventListener('click', async () => {
+    setSummaryFeedback('Finishing game…');
+    await api('/api/finish-game', { method: 'POST', body: JSON.stringify({}) });
+    await fetchAndPatch();
+    setSummaryFeedback('Game finished. Summary email can now be sent.', 'ok');
+  });
+
+  sendSummaryButton?.addEventListener('click', async () => {
+    summaryEmailBusy = true;
+    renderSummaryControls();
+    setSummaryFeedback('Sending summary email…');
+    try {
+      const result = await api('/api/send-summary-email', { method: 'POST', body: JSON.stringify({}) });
+      const email = result?.email || {};
+      const booking = result?.booking || {};
+      const target = booking.customerEmail || booking.customer_email || '';
+      setSummaryFeedback(target ? `Summary sent to ${target}.` : (email.skipped ? `Summary email skipped: ${email.reason || 'unknown reason'}.` : 'Summary email sent.'), email.skipped ? 'warn' : 'ok');
+    } catch (error) {
+      setSummaryFeedback(error.message || 'Could not send summary email.', 'error');
+    } finally {
+      summaryEmailBusy = false;
+      renderSummaryControls();
+      await fetchAndPatch();
+    }
   });
 
   const input = document.getElementById('playersCountInput');
