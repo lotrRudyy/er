@@ -21,9 +21,41 @@ import paho.mqtt.client as mqtt
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def _candidate_env_paths() -> list[Path]:
+    paths: list[Path] = []
+    explicit = os.getenv("ER1_DASHBOARD_ENV", "").strip()
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    # Most installs keep app.py and .env in the same er1_dashboard directory.
+    paths.extend([
+        BASE_DIR / ".env",
+        BASE_DIR.parent / ".env",
+        Path.cwd() / ".env",
+        Path.cwd() / "er1_dashboard" / ".env",
+        Path.home() / "er1_dashboard" / ".env",
+        Path.home() / "scripts" / "er1_dashboard" / ".env",
+    ])
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
 def _load_env_files() -> None:
-    """Small .env loader so the Pi dashboard works without an extra dependency."""
-    for env_path in (BASE_DIR / ".env", BASE_DIR.parent / ".env"):
+    """Small .env loader so the Pi dashboard works without an extra dependency.
+
+    Values from .env replace missing or empty process variables, but they do not
+    override non-empty variables supplied by systemd/the shell. This fixes the
+    common service-file case where ER1_WEBSITE_API_BASE exists but is blank.
+    """
+    for env_path in _candidate_env_paths():
         if not env_path.exists():
             continue
         try:
@@ -34,9 +66,14 @@ def _load_env_files() -> None:
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
+            if line.startswith("export "):
+                line = line[7:].strip()
             key, value = line.split("=", 1)
             key = key.strip()
-            if not key or key in os.environ:
+            if not key:
+                continue
+            current = os.environ.get(key)
+            if current not in (None, ""):
                 continue
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
@@ -44,13 +81,29 @@ def _load_env_files() -> None:
             os.environ[key] = value
 
 
+def _normalise_url_base(value: str) -> str:
+    value = str(value or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+        value = f"http://{value}"
+    return value.rstrip("/")
+
+
+def website_api_config() -> tuple[str, str]:
+    # Re-read the file on demand so changing .env and then restarting is safe,
+    # and blank service variables can still be filled from disk.
+    _load_env_files()
+    base = _normalise_url_base(os.getenv("ER1_WEBSITE_API_BASE", ""))
+    token = os.getenv("ER1_WEBSITE_API_TOKEN", "").strip()
+    return base, token
+
+
 _load_env_files()
 
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
-WEBSITE_API_BASE = os.getenv("ER1_WEBSITE_API_BASE", "").strip().rstrip("/")
-WEBSITE_API_TOKEN = os.getenv("ER1_WEBSITE_API_TOKEN", "").strip()
 HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
 GAME_DB_PATH = Path(
     os.getenv(
@@ -512,7 +565,7 @@ class DashboardStore:
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
             "booking": self.get_selected_booking(),
-            "meta": {"broker": BROKER_HOST, "website_api_configured": bool(WEBSITE_API_BASE)},
+            "meta": {"broker": BROKER_HOST, "website_api_configured": bool(website_api_config()[0]), "website_api_base": website_api_config()[0]},
         }
 
     def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
@@ -1921,17 +1974,19 @@ def current_raw_run_payload() -> dict[str, Any]:
 
 
 def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None) -> dict[str, Any]:
-    if not WEBSITE_API_BASE:
-        raise RuntimeError("ER1_WEBSITE_API_BASE is not configured on the dashboard.")
-    url = f"{WEBSITE_API_BASE}{path if path.startswith('/') else '/' + path}"
+    website_api_base, website_api_token = website_api_config()
+    if not website_api_base:
+        checked = ", ".join(str(path) for path in _candidate_env_paths())
+        raise RuntimeError(f"ER1_WEBSITE_API_BASE is not configured on the dashboard. Checked: {checked}")
+    url = f"{website_api_base}{path if path.startswith('/') else '/' + path}"
     headers = {"Accept": "application/json"}
     body = None
     request_method = method or ("POST" if payload is not None else "GET")
     if payload is not None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    if WEBSITE_API_TOKEN:
-        headers["X-Game-Summary-Token"] = WEBSITE_API_TOKEN
+    if website_api_token:
+        headers["X-Game-Summary-Token"] = website_api_token
     request_obj = urllib.request.Request(url, data=body, headers=headers, method=request_method)
     try:
         with urllib.request.urlopen(request_obj, timeout=20) as response:
