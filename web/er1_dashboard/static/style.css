@@ -996,3 +996,240 @@ button:hover,
   max-height: 42px;
   overflow: auto;
 }
+
+/* v3 dashboard layout: controls in a left sidebar, one wide riddle table on the right. */
+.dashboard-page {
+  width: 1896px;
+  min-height: 1056px;
+  display: block;
+}
+
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 415px 1fr;
+  gap: 12px;
+  align-items: start;
+  min-height: 1032px;
+}
+
+.control-sidebar {
+  min-height: 1032px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.sidebar-section {
+  width: 100%;
+}
+
+.phase-panel,
+.timer-panel,
+.stacked-controls,
+.nodes-panel {
+  grid-column: auto;
+}
+
+.timer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.timer-panel {
+  padding: 8px 0;
+}
+
+.value.timer {
+  font-size: 28px;
+}
+
+.sub-timer {
+  font-size: 22px;
+}
+
+.booking-panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 9px;
+  background: rgba(255, 236, 214, 0.035);
+}
+
+.booking-select,
+.booking-input {
+  width: 100%;
+  min-height: 36px;
+  background: rgba(12, 9, 8, 0.72);
+  border: 1px solid var(--line);
+  color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  border-radius: 10px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.booking-select:focus,
+.booking-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.booking-selected-info {
+  margin-top: 6px;
+  min-height: 30px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.test-booking-fields {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.booking-refresh-btn {
+  width: 100%;
+  margin-top: 7px;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.controls-grid.stacked-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+#lightsGrid .control-card,
+#locksGrid .control-card {
+  width: auto;
+}
+
+.control-button {
+  min-height: 48px;
+  padding: 6px 5px;
+  font-size: 10px;
+}
+
+.dim-row {
+  grid-template-columns: 1fr 34px;
+}
+
+.dim-input {
+  width: 34px;
+  min-height: 34px;
+}
+
+.nodes-sidebar-list {
+  grid-template-columns: 1fr;
+  max-height: 238px;
+  overflow: auto;
+}
+
+.node-line {
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.main-riddles-panel {
+  min-height: 1032px;
+  padding: 10px;
+}
+
+.main-riddles-panel h2 {
+  margin-bottom: 8px;
+}
+
+.full-riddles-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.full-riddles-table th,
+.full-riddles-table td {
+  padding: 5px 8px;
+  height: 48px;
+  max-height: 48px;
+  vertical-align: middle;
+}
+
+.full-riddles-table th:nth-child(1) { width: 90px; }
+.full-riddles-table th:nth-child(2) { width: 88px; }
+.full-riddles-table th:nth-child(3) { width: 128px; }
+.full-riddles-table th:nth-child(4) { width: 238px; }
+.full-riddles-table th:nth-child(6) { width: 76px; }
+
+.full-riddles-table td:nth-child(5) {
+  width: auto;
+  overflow: hidden;
+}
+
+.riddle-info-cell {
+  max-height: 38px;
+  overflow: auto;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+  padding-right: 2px;
+}
+
+.full-riddles-table .inline-info {
+  gap: 3px 5px;
+  line-height: 1.18;
+}
+
+.full-riddles-table .inline-info-wrap {
+  flex-wrap: wrap;
+}
+
+.full-riddles-table .status-badge {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.full-riddles-table .riddle-time-edit {
+  gap: 4px;
+}
+
+.full-riddles-table .riddle-time-input {
+  width: 75px;
+  padding: 5px 6px;
+}
+
+.full-riddles-table .riddle-time-save,
+.full-riddles-table .riddle-actions button {
+  padding: 5px 6px;
+  font-size: 11px;
+}
+
+.full-riddles-table .riddle-actions {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.full-riddles-table .hint-counter-wrap {
+  gap: 6px;
+}
+
+.full-riddles-table .hint-counter-value {
+  min-width: 18px;
+  font-size: 17px;
+}
+
+.full-riddles-table .hint-counter-btn {
+  width: 27px;
+  height: 27px;
+}
+
+.riddles-halves {
+  display: block;
+}
+.full-riddles-table th:nth-child(5) { width: auto; }
