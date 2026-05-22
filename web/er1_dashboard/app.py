@@ -310,6 +310,23 @@ BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
 HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
+SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
+
+
+def load_selected_booking() -> dict[str, Any]:
+    try:
+        if SELECTED_BOOKING_PATH.exists():
+            return normalize_booking_selection(json.loads(SELECTED_BOOKING_PATH.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+    return dict(TEST_BOOKING_DEFAULT)
+
+
+def save_selected_booking(booking: dict[str, Any]) -> None:
+    try:
+        SELECTED_BOOKING_PATH.write_text(json.dumps(normalize_booking_selection(booking), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 GAME_DB_PATH = Path(
     os.getenv(
         "ER1_GAME_DB_PATH",
@@ -571,7 +588,7 @@ class DashboardStore:
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
-    selected_booking: dict[str, Any] = field(default_factory=lambda: dict(TEST_BOOKING_DEFAULT))
+    selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
 
     def update_game_state(self, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -2596,14 +2613,22 @@ def api_select_booking() -> Any:
     players_count = int(selected.get("players") or 0)
     # Newer game-master builds can store the whole booking on the active run;
     # older builds still receive the existing player-count command below.
-    mqtt_publish(TOPIC_GAME_CMD, {
-        "cmd": "set_booking",
+    booking_payload = {
         "booking": selected,
         "bookingCode": str(selected.get("bookingCode") or ""),
+        "booking_code": str(selected.get("bookingCode") or ""),
         "bookingEmail": str(selected.get("customerEmail") or ""),
+        "booking_email": str(selected.get("customerEmail") or ""),
+        "customerEmail": str(selected.get("customerEmail") or ""),
+        "customer_email": str(selected.get("customerEmail") or ""),
+        "customerName": str(selected.get("customerName") or ""),
+        "customer_name": str(selected.get("customerName") or ""),
+        "players": players_count,
         "players_count": players_count,
-    })
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count})
+    }
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_booking", **booking_payload})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "booking", **booking_payload})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count, "players": players_count})
     return jsonify({"ok": True, "booking": selected, "players_count": players_count})
 
 @app.post("/api/finish-game")
@@ -2632,6 +2657,12 @@ def api_send_summary_email() -> Any:
             "bookingEmail": str(selected_booking.get("customerEmail") or "").strip(),
             "players": int(selected_booking.get("players") or 0),
             "testBooking": selected_booking.get("kind") == "test",
+            # Hint for the website-side mailer: keep the summary email minimal.
+            # Intended content: total time, hint count, highlighted leaderboard code,
+            # then the leaderboard link. Older website scripts simply ignore this.
+            "emailTemplate": "minimal_leaderboard_summary",
+            "emailFields": ["total_time", "hint_count", "leaderboard_code", "leaderboard_link"],
+            "leaderboardUrl": os.getenv("ER1_LEADERBOARD_URL", "https://escapeschenna.com/rangliste").strip(),
         }
         mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
         if mode == "http":
