@@ -141,16 +141,14 @@ function bookingKey(booking = {}) {
 
 function selectedBookingDraft(baseBooking = state.booking) {
   const selected = normalizeBooking(baseBooking || {});
-  if (selected.kind !== 'test') return selected;
   const emailInput = document.getElementById('testBookingEmail');
   const playersInput = document.getElementById('testBookingPlayers');
+  const fallbackEmail = selected.kind === 'test' ? 'rudolf.dosser@gmail.com' : selected.customerEmail;
   return normalizeBooking({
     ...selected,
-    kind: 'test',
-    id: TEST_BOOKING_ID,
-    customerEmail: emailInput?.value || selected.customerEmail || 'rudolf.dosser@gmail.com',
-    players: Math.max(1, safeInt(playersInput?.value, selected.players || 2)),
-    label: 'Test booking'
+    customerEmail: String(emailInput?.value || fallbackEmail || '').trim(),
+    players: Math.max(1, safeInt(playersInput?.value, selected.players || (selected.kind === 'test' ? 2 : 1))),
+    label: selected.kind === 'test' ? 'Test booking' : selected.label
   });
 }
 
@@ -198,6 +196,9 @@ async function saveSelectedBooking(booking) {
   try {
     const result = await api('/api/select-booking', { method: 'POST', body: JSON.stringify({ booking: normalized }) });
     state.booking = normalizeBooking(result.booking || normalized);
+    const savedKey = bookingKey(state.booking);
+    bookingOptions = bookingOptions.map(item => bookingKey(item) === savedKey ? state.booking : item);
+    if (savedKey && !bookingOptions.some(item => bookingKey(item) === savedKey)) bookingOptions.unshift(state.booking);
     state.game.players_count = state.booking.players;
     setBookingFeedback(state.booking.kind === 'test' ? 'Test booking selected.' : 'Booking selected and player count sent to game master.', 'ok');
     await fetchAndPatch();
@@ -237,9 +238,9 @@ function renderBookingControls() {
   if (refreshButton) refreshButton.disabled = bookingBusy;
 
   const isTest = current.kind === 'test';
-  if (testFields) testFields.classList.toggle('hidden', !isTest);
-  if (testEmail && isTest && document.activeElement !== testEmail) testEmail.value = current.customerEmail || 'rudolf.dosser@gmail.com';
-  if (testPlayers && isTest && document.activeElement !== testPlayers) testPlayers.value = String(current.players || 2);
+  if (testFields) testFields.classList.remove('hidden');
+  if (testEmail && document.activeElement !== testEmail) testEmail.value = current.customerEmail || (isTest ? 'rudolf.dosser@gmail.com' : '');
+  if (testPlayers && document.activeElement !== testPlayers) testPlayers.value = String(current.players || (isTest ? 2 : 1));
 
   if (info) {
     if (isTest) {
@@ -674,29 +675,27 @@ function wireTopControls() {
     await loadBookings();
   });
 
-  let testBookingSaveTimer = null;
-  const saveTestDraft = async () => {
-    if (normalizeBooking(state.booking || {}).kind !== 'test') return;
+  let bookingDraftSaveTimer = null;
+  const saveBookingDraft = async () => {
     await saveSelectedBooking(selectedBookingDraft(state.booking));
   };
-  const queueTestDraftSave = () => {
-    if (normalizeBooking(state.booking || {}).kind !== 'test') return;
-    if (testBookingSaveTimer) window.clearTimeout(testBookingSaveTimer);
-    testBookingSaveTimer = window.setTimeout(() => {
-      saveTestDraft().catch(console.error);
+  const queueBookingDraftSave = () => {
+    if (bookingDraftSaveTimer) window.clearTimeout(bookingDraftSaveTimer);
+    bookingDraftSaveTimer = window.setTimeout(() => {
+      saveBookingDraft().catch(console.error);
     }, 450);
   };
 
   testEmail?.addEventListener('keydown', async (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    await saveTestDraft();
+    await saveBookingDraft();
   });
-  testEmail?.addEventListener('blur', saveTestDraft);
-  testEmail?.addEventListener('input', queueTestDraftSave);
+  testEmail?.addEventListener('blur', saveBookingDraft);
+  testEmail?.addEventListener('input', queueBookingDraftSave);
   testPlayers?.addEventListener('input', () => {
     testPlayers.value = testPlayers.value.replace(/[^0-9]/g, '');
-    queueTestDraftSave();
+    queueBookingDraftSave();
   });
   testPlayers?.addEventListener('keydown', async (event) => {
     if (event.key !== 'Enter') return;
