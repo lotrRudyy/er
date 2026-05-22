@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -137,6 +138,12 @@ def booking_ssh_config() -> dict[str, Any]:
         "app_path": os.getenv("ER1_WEBSITE_APP_PATH", "/home/rudyy/escapeschenna").strip(),
         "summary_script": os.getenv("ER1_WEBSITE_SUMMARY_SCRIPT", "scripts/send-game-summary-email.js").strip(),
         "local_db_path": Path(os.getenv("ER1_LOCAL_BOOKINGS_DB_PATH", str(local_default))).expanduser(),
+        # Optional password support. When this is set, the dashboard uses Paramiko
+        # instead of shelling out to ssh/scp, so password-based SSH works even when
+        # openssh-client or sshpass is not installed on the Pi.
+        "password": os.getenv("ER1_WEBSITE_SSH_PASSWORD", "").strip(),
+        "backend": os.getenv("ER1_WEBSITE_SSH_BACKEND", "auto").strip().lower() or "auto",
+        "remote_python": os.getenv("ER1_WEBSITE_REMOTE_PYTHON", "python3").strip() or "python3",
         "timeout": max(2, _read_int_env("ER1_WEBSITE_SSH_TIMEOUT", 8)),
     }
 
@@ -156,11 +163,140 @@ def _ssh_base(cfg: dict[str, Any]) -> list[str]:
     ]
 
 
+def _ssh_backend(cfg: dict[str, Any]) -> str:
+    """Return the SSH backend to use for website access.
+
+    auto prefers Paramiko when a password is configured, otherwise it keeps the
+    lightweight OpenSSH/scp path when those commands are available.
+    """
+    backend = str(cfg.get("backend") or "auto").strip().lower()
+    if backend not in {"auto", "openssh", "paramiko"}:
+        backend = "auto"
+    if backend == "paramiko":
+        return "paramiko"
+    if backend == "openssh":
+        return "openssh"
+    if str(cfg.get("password") or ""):
+        return "paramiko"
+    if shutil.which("ssh") and shutil.which("scp"):
+        return "openssh"
+    return "paramiko"
+
+
+def _import_paramiko():
+    try:
+        import paramiko  # type: ignore
+        return paramiko
+    except Exception as exc:
+        raise RuntimeError(
+            "Python package 'paramiko' is not installed. Run 'pip install -r requirements.txt' "
+            "or install openssh-client and use passwordless SSH."
+        ) from exc
+
+
+def _paramiko_connect(cfg: dict[str, Any], *, timeout: int | None = None):
+    paramiko = _import_paramiko()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    use_password = bool(str(cfg.get("password") or ""))
+    try:
+        client.connect(
+            hostname=str(cfg["host"]),
+            port=int(cfg.get("port") or 22),
+            username=str(cfg["user"]),
+            password=str(cfg.get("password") or "") or None,
+            timeout=timeout or int(cfg.get("timeout") or 8),
+            banner_timeout=timeout or int(cfg.get("timeout") or 8),
+            auth_timeout=timeout or int(cfg.get("timeout") or 8),
+            look_for_keys=not use_password,
+            allow_agent=not use_password,
+        )
+    except Exception as exc:
+        try:
+            client.close()
+        except Exception:
+            pass
+        raise RuntimeError(f"SSH connection to {_ssh_target(cfg)} failed: {exc}") from exc
+    return client
+
+
+def _paramiko_exec(client: Any, command: str, *, timeout: int, label: str) -> str:
+    try:
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        try:
+            stdin.close()
+        except Exception:
+            pass
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        exit_code = stdout.channel.recv_exit_status()
+    except Exception as exc:
+        raise RuntimeError(f"{label} failed: {exc}") from exc
+    if exit_code != 0:
+        detail = (err or out or "").strip()
+        raise RuntimeError(f"{label} failed: {detail or f'exit code {exit_code}'}")
+    return out
+
+
+def _remote_sqlite_backup_command(cfg: dict[str, Any], remote_tmp: str) -> str:
+    """Build a remote command that uses Python's sqlite3 module to back up app.db.
+
+    This avoids requiring the sqlite3 command-line tool on the Debian website
+    server and works reliably while the website is running.
+    """
+    py = "\n".join([
+        "import os, sqlite3, sys",
+        "src = sys.argv[1]",
+        "dst = sys.argv[2]",
+        "if not os.path.exists(src):",
+        "    raise SystemExit(f'Website database not found: {src}')",
+        "try:",
+        "    os.remove(dst)",
+        "except FileNotFoundError:",
+        "    pass",
+        "src_conn = sqlite3.connect(f'file:{src}?mode=ro', uri=True)",
+        "dst_conn = sqlite3.connect(dst)",
+        "try:",
+        "    src_conn.backup(dst_conn)",
+        "finally:",
+        "    dst_conn.close()",
+        "    src_conn.close()",
+        "if not os.path.exists(dst) or os.path.getsize(dst) <= 0:",
+        "    raise SystemExit('SQLite backup was not created')",
+    ])
+    return " ".join([
+        shlex.quote(str(cfg.get("remote_python") or "python3")),
+        "-c",
+        shlex.quote(py),
+        shlex.quote(str(cfg["db_path"])),
+        shlex.quote(remote_tmp),
+    ])
+
+
+def _parse_summary_script_json(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    # The website script should print only JSON, but parse the last JSON-looking
+    # line too so harmless npm/node warnings do not break the dashboard.
+    candidates = [line.strip() for line in text.splitlines() if line.strip()] or ["{}"]
+    for candidate in reversed(candidates):
+        if not candidate.startswith("{"):
+            continue
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    raise RuntimeError(f"Website summary script did not return JSON: {text[:500]}")
+
+
 def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
     except FileNotFoundError as exc:
-        raise RuntimeError(f"{label} command not found on the Pi") from exc
+        executable = cmd[0] if cmd else label
+        raise RuntimeError(
+            f"{label} command not found on this machine ({executable}). "
+            "Install openssh-client/scp or configure ER1_WEBSITE_SSH_PASSWORD so the Paramiko backend can be used."
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"{label} timed out") from exc
     except subprocess.CalledProcessError as exc:
@@ -491,9 +627,24 @@ class DashboardStore:
 
     def set_selected_booking(self, booking: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_booking_selection(booking)
+        players_count = int(normalized.get("players") or 0)
         with self.lock:
             self.selected_booking = normalized
-        self.set_local_players_count(int(normalized.get("players") or 0))
+            current = dict(self.game_state)
+            current["booking"] = normalized
+            current["booking_code"] = str(normalized.get("bookingCode") or "")
+            current["booking_email"] = str(normalized.get("customerEmail") or "")
+            current["players_count"] = players_count
+            run = current.get("run") if isinstance(current.get("run"), dict) else None
+            if run is not None:
+                run = dict(run)
+                run["players_count"] = players_count
+                run["booking"] = normalized
+                run["booking_code"] = str(normalized.get("bookingCode") or "")
+                run["booking_email"] = str(normalized.get("customerEmail") or "")
+                current["run"] = run
+            self.local_players_count_override = players_count
+            self.game_state = current
         return normalized
 
     def get_selected_booking(self) -> dict[str, Any]:
@@ -2096,24 +2247,55 @@ def _parse_tsv_table(text: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _sync_website_bookings_db_via_paramiko(cfg: dict[str, Any]) -> Path:
+    remote_tmp = f"/tmp/er1_dashboard_bookings_{int(time.time() * 1000)}.sqlite3"
+    local_path = Path(cfg["local_db_path"]).expanduser()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+    backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
+    client = _paramiko_connect(cfg, timeout=cfg["timeout"] + 10)
+    try:
+        _paramiko_exec(client, backup_command, timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
+        try:
+            with client.open_sftp() as sftp:
+                sftp.get(remote_tmp, str(local_tmp))
+        except Exception as exc:
+            raise RuntimeError(f"sftp website DB download failed: {exc}") from exc
+        local_tmp.replace(local_path)
+    finally:
+        try:
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+    return local_path
+
+
 def sync_website_bookings_db_via_ssh() -> Path:
     """Create a consistent backup of the website app.db on Debian and copy it to the Pi.
 
-    This is intentionally not an HTTP/admin API call. The dashboard SSHes into
-    192.168.0.111, asks sqlite3 to create a safe backup copy, then scps that
-    backup to a local cache file on the Pi. The dashboard reads bookings from
-    the copied DB only.
+    In password mode the dashboard uses Paramiko (pure Python SSH/SFTP). In
+    passwordless/key mode it can still use the system ssh/scp commands. The
+    remote backup is made through Python's sqlite3 module, so the Debian server
+    does not need the sqlite3 command-line tool installed.
     """
     cfg = booking_ssh_config()
     if not cfg["host"] or not cfg["user"] or not cfg["db_path"]:
         raise RuntimeError("Website DB SSH sync is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_DB_PATH.")
+
+    if _ssh_backend(cfg) == "paramiko":
+        return _sync_website_bookings_db_via_paramiko(cfg)
+
     target = _ssh_target(cfg)
     remote_tmp = f"/tmp/er1_dashboard_bookings_{int(time.time() * 1000)}.sqlite3"
     local_path = Path(cfg["local_db_path"]).expanduser()
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
-    backup_command = f"rm -f {shlex.quote(remote_tmp)}; sqlite3 {shlex.quote(cfg['db_path'])} {shlex.quote('.backup ' + remote_tmp)}; test -s {shlex.quote(remote_tmp)}"
-    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 10, label="ssh sqlite backup")
+    backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
+    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
     scp_cmd = [
         "scp",
         "-P", str(cfg["port"]),
@@ -2132,7 +2314,6 @@ def sync_website_bookings_db_via_ssh() -> Path:
         except Exception:
             pass
     return local_path
-
 
 def _booking_label(row: dict[str, Any]) -> str:
     return " · ".join(part for part in [
@@ -2187,10 +2368,47 @@ def list_bookings_via_ssh_copy(limit: int = 1000) -> tuple[list[dict[str, Any]],
     return list_bookings_from_local_db(local_db, limit), local_db, True
 
 
+def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
+    local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
+    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    client = _paramiko_connect(cfg, timeout=cfg["timeout"] + 10)
+    try:
+        try:
+            with client.open_sftp() as sftp:
+                sftp.put(str(local_tmp), remote_tmp)
+        except Exception as exc:
+            raise RuntimeError(f"sftp game summary payload upload failed: {exc}") from exc
+        app_path = shlex.quote(cfg["app_path"])
+        script = shlex.quote(cfg["summary_script"])
+        remote_payload = shlex.quote(remote_tmp)
+        remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
+        text = _paramiko_exec(client, remote_cmd, timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        return _parse_summary_script_json(text)
+    finally:
+        try:
+            local_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
 def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = booking_ssh_config()
     if not cfg["host"] or not cfg["user"] or not cfg["app_path"]:
         raise RuntimeError("Website SSH summary is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_APP_PATH.")
+
+    if _ssh_backend(cfg) == "paramiko":
+        return _send_summary_email_via_paramiko(payload, cfg)
+
     target = _ssh_target(cfg)
     remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
     local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
@@ -2212,18 +2430,7 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
         remote_payload = shlex.quote(remote_tmp)
         remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
         completed = _run_process(_ssh_base(cfg) + [remote_cmd], timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
-        text = (completed.stdout or "").strip()
-        # The website script should print only JSON, but parse the last JSON-looking
-        # line too so harmless npm/node warnings do not break the dashboard.
-        candidates = [line.strip() for line in text.splitlines() if line.strip()] or ["{}"]
-        for candidate in reversed(candidates):
-            if not candidate.startswith("{"):
-                continue
-            try:
-                return json.loads(candidate)
-            except Exception:
-                pass
-        raise RuntimeError(f"Website summary script did not return JSON: {text[:500]}")
+        return _parse_summary_script_json(completed.stdout or "")
     finally:
         try:
             local_tmp.unlink(missing_ok=True)
@@ -2233,7 +2440,6 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
             _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
         except Exception:
             pass
-
 
 @app.get("/")
 def index() -> str:
@@ -2387,8 +2593,18 @@ def api_select_booking() -> Any:
     data = request.get_json(force=True) or {}
     booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
     selected = store.set_selected_booking(booking)
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": int(selected.get("players") or 0)})
-    return jsonify({"ok": True, "booking": selected, "players_count": int(selected.get("players") or 0)})
+    players_count = int(selected.get("players") or 0)
+    # Newer game-master builds can store the whole booking on the active run;
+    # older builds still receive the existing player-count command below.
+    mqtt_publish(TOPIC_GAME_CMD, {
+        "cmd": "set_booking",
+        "booking": selected,
+        "bookingCode": str(selected.get("bookingCode") or ""),
+        "bookingEmail": str(selected.get("customerEmail") or ""),
+        "players_count": players_count,
+    })
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count})
+    return jsonify({"ok": True, "booking": selected, "players_count": players_count})
 
 @app.post("/api/finish-game")
 def api_finish_game() -> Any:
