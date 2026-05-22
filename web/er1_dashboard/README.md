@@ -6,6 +6,7 @@ Single-page Flask dashboard for ER1.
 - Game mode buttons for the 4 current modes
 - Timer that counts up from the current run start
 - Booking selector that pulls customer email and player count from the website
+- Password-based SSH/SFTP booking sync via Paramiko, no local ssh/scp binary required
 - Test booking with editable email/player count
 - Lock controls
 - Light group controls
@@ -67,16 +68,21 @@ GAME_SUMMARY_API_TOKEN=replace-with-the-same-token
 GAME_DASHBOARD_API_TOKEN=replace-with-the-same-token
 ```
 
-For booking selection, the dashboard first tries the website API. If that fails and `ER1_BOOKINGS_SOURCE=auto`, it falls back to SSH and reads the Debian website database directly:
+For booking selection, the dashboard copies the website SQLite DB over SSH/SFTP and reads the copied DB locally:
 
 ```env
-ER1_BOOKINGS_SOURCE=auto
+ER1_BOOKINGS_SOURCE=ssh-copy
 ER1_WEBSITE_SSH_HOST=192.168.0.111
 ER1_WEBSITE_SSH_USER=rudyy
+ER1_WEBSITE_SSH_PORT=22
+ER1_WEBSITE_SSH_PASSWORD='replace-with-password-or-leave-empty'
+ER1_WEBSITE_SSH_BACKEND=auto
+ER1_WEBSITE_REMOTE_PYTHON=python3
 ER1_WEBSITE_DB_PATH=/home/rudyy/escapeschenna/data/app.db
+ER1_LOCAL_BOOKINGS_DB_PATH=/home/rudyy/er1/web/data/website_app_bookings.sqlite3
 ```
 
-SSH fallback needs passwordless SSH from the Pi user that runs the dashboard to `rudyy@192.168.0.111`.
+When `ER1_WEBSITE_SSH_PASSWORD` is set, the dashboard uses Paramiko, so password-based SSH works without local `ssh`, `scp`, or `sshpass`. When the password is empty, it can still use passwordless OpenSSH/scp. The remote backup uses Python's built-in SQLite module, so the Debian server does not need the `sqlite3` command-line tool.
 
 ## Booking sync and summary email over SSH
 
@@ -90,9 +96,22 @@ The summary email is also sent through SSH by default. The Pi copies a JSON payl
 to the Debian server and runs `node scripts/send-game-summary-email.js` inside the
 website project, so the website keeps using its own SMTP configuration and database.
 
-The Pi service user must have passwordless SSH access to the Debian server:
+With password-based SSH, keep `ER1_WEBSITE_SSH_PASSWORD` in `.env` and reinstall requirements after updating:
+
+```bash
+cd er1_dashboard
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+With passwordless SSH instead, leave `ER1_WEBSITE_SSH_PASSWORD` empty and verify access from the Pi service user:
 
 ```bash
 ssh-copy-id rudyy@192.168.0.111
-ssh rudyy@192.168.0.111 "hostname && sqlite3 /home/rudyy/escapeschenna/data/app.db 'SELECT COUNT(*) FROM bookings;'"
+ssh rudyy@192.168.0.111 "hostname && python3 - <<'PY'
+import sqlite3
+conn = sqlite3.connect('/home/rudyy/escapeschenna/data/app.db')
+print(conn.execute('SELECT COUNT(*) FROM bookings').fetchone()[0])
+PY"
 ```

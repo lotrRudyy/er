@@ -224,6 +224,9 @@ function renderBookingControls() {
 
   const current = normalizeBooking(state.booking || bookingOptions[0] || {});
   const currentKey = bookingKey(current);
+  if (currentKey && !bookingOptions.some(item => bookingKey(item) === currentKey)) {
+    bookingOptions = [current, ...bookingOptions];
+  }
   const optionSignature = bookingOptions.map(item => `${bookingKey(item)}:${bookingOptionLabel(item)}`).join('|');
   if (select.dataset.signature !== optionSignature) {
     select.innerHTML = bookingOptions.map(item => `<option value="${escapeAttr(bookingKey(item))}">${escapeAttr(bookingOptionLabel(item))}</option>`).join('');
