@@ -457,6 +457,7 @@ _normalize_existing_games_db_schema(GAME_DB_PATH)
 _ensure_game_riddles_outcome_columns(GAME_DB_PATH)
 
 TOPIC_GAME_STATE = "game/state"
+TOPIC_DASHBOARD_STATE = "game/dashboard_state"
 TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"
 TOPIC_MAGLOCK_CMD = "maglock/cmd"
@@ -590,9 +591,23 @@ class DashboardStore:
     local_players_count_override: int | None = None
     selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
 
-    def update_game_state(self, payload: dict[str, Any]) -> None:
+    def update_game_state(self, payload: dict[str, Any], *, merge: bool = False) -> None:
         with self.lock:
-            next_payload = dict(payload or {})
+            incoming = dict(payload or {})
+            if merge:
+                next_payload = dict(self.game_state or {})
+                next_payload.update(incoming)
+                # ``game/state`` is intentionally firmware-safe and no longer carries
+                # the dashboard run object. Preserve the richer dashboard state for
+                # in-game phases, but clear stale run data outside an active/prepared run.
+                try:
+                    incoming_phase = int(incoming.get("phase", next_payload.get("phase", 0)) or 0)
+                except Exception:
+                    incoming_phase = 0
+                if "run" not in incoming and incoming_phase in {0, 1}:
+                    next_payload["run"] = None
+            else:
+                next_payload = incoming
             if self.local_players_count_override is not None:
                 try:
                     incoming_players_count = parse_players_count_input(next_payload.get("players_count", 0))
@@ -2152,6 +2167,7 @@ def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
 
 def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
     for topic, qos in [
+        (TOPIC_DASHBOARD_STATE, 0),
         (TOPIC_GAME_STATE, 0),
         ("+/state", 0),
         ("+/hb", 0),
@@ -2166,8 +2182,12 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     data = parse_json_payload(msg.payload)
     if data is None:
         return
-    if topic == TOPIC_GAME_STATE:
+    if topic == TOPIC_DASHBOARD_STATE:
         store.update_game_state(data)
+        return
+    if topic == TOPIC_GAME_STATE:
+        # Fallback for older game masters, and phase/timer merge for the firmware-safe state.
+        store.update_game_state(data, merge=("run" not in data))
         return
     if topic.endswith("/hb"):
         node_id = topic.split("/", 1)[0]
