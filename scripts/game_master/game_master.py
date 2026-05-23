@@ -102,12 +102,22 @@ class GameMaster:
         LOG.info("PUB %s %s", topic, body)
 
     def publish_game_state(self) -> None:
-        with self._lock:
-            payload = self.state.to_game_state_payload()
-            self._enrich_game_state_payload_locked(payload)
-        self._publish_json(config.TOPIC_GAME_STATE, payload, retained=True)
+        """Publish firmware-safe state plus dashboard-only live details.
 
-    def _enrich_game_state_payload_locked(self, payload: dict[str, Any]) -> None:
+        Physical puzzle nodes subscribe to ``game/state`` and some of them use small
+        JSON buffers. Keep that retained message tiny and backwards-compatible so
+        nodes can always read the phase/timer state. The dashboard receives the
+        larger run/riddle payload on ``game/dashboard_state`` instead.
+        """
+        with self._lock:
+            node_payload = self.state.to_game_state_payload()
+            dashboard_payload = dict(node_payload)
+            self._enrich_dashboard_state_payload_locked(dashboard_payload)
+
+        self._publish_json(config.TOPIC_GAME_STATE, node_payload, retained=True)
+        self._publish_json(config.TOPIC_DASHBOARD_STATE, dashboard_payload, retained=True)
+
+    def _enrich_dashboard_state_payload_locked(self, payload: dict[str, Any]) -> None:
         run = self.state.current_run
         if run is None:
             payload.setdefault("players_count", 0)
