@@ -1753,6 +1753,27 @@ def _build_insert_payload_for_dst(src_row: dict[str, Any], dst: sqlite3.Connecti
     return names, values
 
 
+def _insert_copied_db_row(dst: sqlite3.Connection, table_name: str, src_row: dict[str, Any], *, keep_id: bool = False) -> None:
+    cols, params = _build_insert_payload_for_dst(src_row, dst, table_name)
+
+    # The live game DB and the removed-games DB are separate SQLite files.
+    # Child tables such as game_riddles use an INTEGER PRIMARY KEY named "id".
+    # Copying that source id into the archive DB can collide with an id that
+    # already belongs to another archived game, causing:
+    #   UNIQUE constraint failed: game_riddles.id
+    # Keep the stable game id in the games table, but let SQLite allocate fresh
+    # row ids for copied child rows.
+    if not keep_id:
+        filtered = [(col, val) for col, val in zip(cols, params) if col != "id"]
+        if filtered:
+            cols, params = [item[0] for item in filtered], [item[1] for item in filtered]
+
+    dst.execute(
+        f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+        tuple(params),
+    )
+
+
 def _run_json_path(game_id: str) -> Path:
     return RUN_JSON_DIR / f"{game_id}.json"
 
@@ -1936,21 +1957,11 @@ def move_game_to_removed(game_id: str) -> None:
         dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
         dst.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
 
-        game_values = dict(game_row)
-        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
-        dst.execute(
-            f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})",
-            tuple(game_params),
-        )
+        _insert_copied_db_row(dst, "games", dict(game_row), keep_id=True)
 
         for rows, table_name in ((riddle_rows, "game_riddles"), (hint_rows, "game_hints")):
             for row in rows:
-                values = dict(row)
-                cols, params = _build_insert_payload_for_dst(values, dst, table_name)
-                dst.execute(
-                    f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                    tuple(params),
-                )
+                _insert_copied_db_row(dst, table_name, dict(row), keep_id=False)
 
         src.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
         src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
@@ -3089,13 +3100,9 @@ def move_game_to_removed(game_id: str) -> None:
             _ensure_missing_columns(src, dst, table_name)
         dst.execute("DELETE FROM games WHERE id = ?", (game_id,))
         dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
-        game_values = dict(game_row)
-        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
-        dst.execute(f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})", tuple(game_params))
+        _insert_copied_db_row(dst, "games", dict(game_row), keep_id=True)
         for row in riddle_rows:
-            values = dict(row)
-            cols, params = _build_insert_payload_for_dst(values, dst, "game_riddles")
-            dst.execute(f"INSERT INTO game_riddles ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})", tuple(params))
+            _insert_copied_db_row(dst, "game_riddles", dict(row), keep_id=False)
         src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
         src.execute("DELETE FROM games WHERE id = ?", (game_id,))
         dst.commit()
