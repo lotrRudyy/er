@@ -58,8 +58,6 @@ class Database:
                     solve_time_s REAL NOT NULL DEFAULT 0,
                     hint_count INTEGER NOT NULL DEFAULT 0,
                     hints TEXT NOT NULL DEFAULT '',
-                    skipped INTEGER NOT NULL DEFAULT 0,
-                    not_solved INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
                     UNIQUE(game_id, riddle_key)
                 );
@@ -68,20 +66,8 @@ class Database:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_leaderboard_code ON games(leaderboard_code) WHERE leaderboard_code IS NOT NULL AND TRIM(leaderboard_code) != ''"
             )
-            self._ensure_game_riddles_outcome_columns(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_game_riddles_game_id ON game_riddles(game_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_game_riddles_riddle_key ON game_riddles(riddle_key)")
-
-    @staticmethod
-    def _ensure_game_riddles_outcome_columns(conn: sqlite3.Connection) -> None:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(game_riddles)").fetchall()}
-        if "skipped" not in columns:
-            conn.execute("ALTER TABLE game_riddles ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
-        if "not_solved" not in columns:
-            conn.execute("ALTER TABLE game_riddles ADD COLUMN not_solved INTEGER NOT NULL DEFAULT 0")
-        conn.execute("UPDATE game_riddles SET skipped = 0 WHERE skipped IS NULL")
-        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE not_solved IS NULL")
-        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE skipped = 1 AND not_solved = 1")
 
     def generate_leaderboard_code(self) -> str:
         with self._connect() as conn:
@@ -159,8 +145,8 @@ class Database:
                 conn.execute(
                     """
                     INSERT INTO game_riddles (
-                        game_id, riddle_key, solve_time_s, hint_count, hints, skipped, not_solved
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        game_id, riddle_key, solve_time_s, hint_count, hints
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         run.run_id,
@@ -168,8 +154,6 @@ class Database:
                         round(float(timing.solve_time_s or 0), 3),
                         int(timing.hint_count or 0),
                         timing.hints or "",
-                        1 if bool(getattr(timing, "skipped", False)) else 0,
-                        1 if bool(getattr(timing, "not_solved", False)) else 0,
                     ),
                 )
 
@@ -200,7 +184,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT riddle_key, solve_time_s, hint_count, hints, skipped, not_solved
+                SELECT riddle_key, solve_time_s, hint_count, hints
                 FROM game_riddles
                 WHERE game_id = ?
                 ORDER BY id ASC
@@ -213,8 +197,6 @@ class Database:
                 "solve_time_s": row[1],
                 "hint_count": row[2],
                 "hints": row[3],
-                "skipped": bool(row[4]) if len(row) > 4 else False,
-                "not_solved": bool(row[5]) if len(row) > 5 else False,
             }
             for row in rows
         ]
@@ -238,7 +220,7 @@ class Database:
             )
 
             rows = conn.execute(
-                "SELECT riddle_key, solve_time_s, hint_count, hints, skipped, not_solved FROM game_riddles WHERE game_id = ?",
+                "SELECT riddle_key, solve_time_s, hint_count, hints FROM game_riddles WHERE game_id = ?",
                 (run_id,),
             ).fetchall()
 
@@ -249,8 +231,6 @@ class Database:
                     solve_time_s=float(row[1] or 0),
                     hint_count=int(row[2] or 0),
                     hints=row[3] or "",
-                    skipped=bool(row[4]) if len(row) > 4 else False,
-                    not_solved=bool(row[5]) if len(row) > 5 else False,
                 )
 
             self.recalc_run(run)

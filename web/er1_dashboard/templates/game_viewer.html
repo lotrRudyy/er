@@ -1,7 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ER1 Game Viewer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
@@ -130,6 +133,8 @@
             <th>Riddle</th>
             <th>Riddle Time</th>
             <th>Hint Count</th>
+            <th>Skipped</th>
+            <th>Not solved</th>
             <th>Hints</th>
             <th>Save</th>
           </tr>
@@ -140,6 +145,8 @@
             <td class="readonly-cell">{{ row.riddle_label or row.riddle_key or '—' }}</td>
             <td class="editable-cell" data-column="riddle_time_mmss" data-value="{{ '' if row.riddle_time_mmss == '—' else row.riddle_time_mmss }}">{{ row.riddle_time_mmss }}</td>
             <td class="editable-cell" data-column="hint_count" data-value="{{ row.hint_count_display }}">{{ row.hint_count_display }}</td>
+            <td class="editable-cell" data-column="skipped" data-value="{{ row.skipped_display }}">{{ row.skipped_display }}</td>
+            <td class="editable-cell" data-column="not_solved" data-value="{{ row.not_solved_display }}">{{ row.not_solved_display }}</td>
             <td class="editable-cell" data-column="hints" data-value="{{ row.hints_display }}">{{ row.hints_display or '—' }}</td>
             <td class="save-cell"><button type="button" class="save-row-button" disabled>Speichern</button></td>
           </tr>
