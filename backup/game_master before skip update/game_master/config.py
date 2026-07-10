@@ -5,7 +5,6 @@ MQTT_PORT = 1883
 MQTT_KEEPALIVE = 30
 
 TOPIC_GAME_STATE = "game/state"
-TOPIC_DASHBOARD_STATE = "game/dashboard_state"
 TOPIC_GAME_EVENT = "game/event"
 TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"

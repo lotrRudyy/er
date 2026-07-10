@@ -4,22 +4,329 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import shutil
 import sqlite3
+import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def _candidate_env_paths() -> list[Path]:
+    paths: list[Path] = []
+    explicit = os.getenv("ER1_DASHBOARD_ENV", "").strip()
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    # Most installs keep app.py and .env in the same er1_dashboard directory.
+    paths.extend([
+        BASE_DIR / ".env",
+        BASE_DIR.parent / ".env",
+        Path.cwd() / ".env",
+        Path.cwd() / "er1_dashboard" / ".env",
+        Path.home() / "er1_dashboard" / ".env",
+        Path.home() / "scripts" / "er1_dashboard" / ".env",
+    ])
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def _load_env_files() -> None:
+    """Small .env loader so the Pi dashboard works without an extra dependency.
+
+    Values from .env replace missing or empty process variables, but they do not
+    override non-empty variables supplied by systemd/the shell. This fixes the
+    common service-file case where ER1_WEBSITE_API_BASE exists but is blank.
+    """
+    for env_path in _candidate_env_paths():
+        if not env_path.exists():
+            continue
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            current = os.environ.get(key)
+            if current not in (None, ""):
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            os.environ[key] = value
+
+
+def _normalise_url_base(value: str) -> str:
+    value = str(value or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+        value = f"http://{value}"
+    return value.rstrip("/")
+
+
+def website_api_config() -> tuple[str, str]:
+    # Re-read the file on demand so changing .env and then restarting is safe,
+    # and blank service variables can still be filled from disk.
+    _load_env_files()
+    base = _normalise_url_base(os.getenv("ER1_WEBSITE_API_BASE", ""))
+    token = os.getenv("ER1_WEBSITE_API_TOKEN", "").strip()
+    return base, token
+
+
+def _read_int_env(name: str, fallback: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        return int(raw)
+    except Exception:
+        return fallback
+
+
+def website_api_timeout(default: int = 20) -> int:
+    return max(1, _read_int_env("ER1_WEBSITE_API_TIMEOUT", default))
+
+
+def bookings_http_timeout() -> int:
+    return max(1, _read_int_env("ER1_BOOKINGS_HTTP_TIMEOUT", 6))
+
+
+def booking_source_mode() -> str:
+    _load_env_files()
+    # The Pi dashboard should get bookings by SSH-copying the website DB, not by calling the public/admin website API.
+    mode = os.getenv("ER1_BOOKINGS_SOURCE", "ssh-copy").strip().lower()
+    return mode if mode in {"ssh-copy", "ssh", "http"} else "ssh-copy"
+
+
+def booking_ssh_config() -> dict[str, Any]:
+    _load_env_files()
+    local_default = BASE_DIR / "data" / "website_app_bookings.sqlite3"
+    return {
+        "host": os.getenv("ER1_WEBSITE_SSH_HOST", "192.168.0.111").strip(),
+        "user": os.getenv("ER1_WEBSITE_SSH_USER", "rudyy").strip(),
+        "port": str(_read_int_env("ER1_WEBSITE_SSH_PORT", 22)),
+        "db_path": os.getenv("ER1_WEBSITE_DB_PATH", "/home/rudyy/escapeschenna/data/app.db").strip(),
+        "app_path": os.getenv("ER1_WEBSITE_APP_PATH", "/home/rudyy/escapeschenna").strip(),
+        "summary_script": os.getenv("ER1_WEBSITE_SUMMARY_SCRIPT", "scripts/send-game-summary-email.js").strip(),
+        "local_db_path": Path(os.getenv("ER1_LOCAL_BOOKINGS_DB_PATH", str(local_default))).expanduser(),
+        # Optional password support. When this is set, the dashboard uses Paramiko
+        # instead of shelling out to ssh/scp, so password-based SSH works even when
+        # openssh-client or sshpass is not installed on the Pi.
+        "password": os.getenv("ER1_WEBSITE_SSH_PASSWORD", "").strip(),
+        "backend": os.getenv("ER1_WEBSITE_SSH_BACKEND", "auto").strip().lower() or "auto",
+        "remote_python": os.getenv("ER1_WEBSITE_REMOTE_PYTHON", "python3").strip() or "python3",
+        "timeout": max(2, _read_int_env("ER1_WEBSITE_SSH_TIMEOUT", 8)),
+    }
+
+
+def _ssh_target(cfg: dict[str, Any]) -> str:
+    return f"{cfg['user']}@{cfg['host']}"
+
+
+def _ssh_base(cfg: dict[str, Any]) -> list[str]:
+    return [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-p", str(cfg["port"]),
+        _ssh_target(cfg),
+    ]
+
+
+def _ssh_backend(cfg: dict[str, Any]) -> str:
+    """Return the SSH backend to use for website access.
+
+    auto prefers Paramiko when a password is configured, otherwise it keeps the
+    lightweight OpenSSH/scp path when those commands are available.
+    """
+    backend = str(cfg.get("backend") or "auto").strip().lower()
+    if backend not in {"auto", "openssh", "paramiko"}:
+        backend = "auto"
+    if backend == "paramiko":
+        return "paramiko"
+    if backend == "openssh":
+        return "openssh"
+    if str(cfg.get("password") or ""):
+        return "paramiko"
+    if shutil.which("ssh") and shutil.which("scp"):
+        return "openssh"
+    return "paramiko"
+
+
+def _import_paramiko():
+    try:
+        import paramiko  # type: ignore
+        return paramiko
+    except Exception as exc:
+        raise RuntimeError(
+            "Python package 'paramiko' is not installed. Run 'pip install -r requirements.txt' "
+            "or install openssh-client and use passwordless SSH."
+        ) from exc
+
+
+def _paramiko_connect(cfg: dict[str, Any], *, timeout: int | None = None):
+    paramiko = _import_paramiko()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    use_password = bool(str(cfg.get("password") or ""))
+    try:
+        client.connect(
+            hostname=str(cfg["host"]),
+            port=int(cfg.get("port") or 22),
+            username=str(cfg["user"]),
+            password=str(cfg.get("password") or "") or None,
+            timeout=timeout or int(cfg.get("timeout") or 8),
+            banner_timeout=timeout or int(cfg.get("timeout") or 8),
+            auth_timeout=timeout or int(cfg.get("timeout") or 8),
+            look_for_keys=not use_password,
+            allow_agent=not use_password,
+        )
+    except Exception as exc:
+        try:
+            client.close()
+        except Exception:
+            pass
+        raise RuntimeError(f"SSH connection to {_ssh_target(cfg)} failed: {exc}") from exc
+    return client
+
+
+def _paramiko_exec(client: Any, command: str, *, timeout: int, label: str) -> str:
+    try:
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        try:
+            stdin.close()
+        except Exception:
+            pass
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        exit_code = stdout.channel.recv_exit_status()
+    except Exception as exc:
+        raise RuntimeError(f"{label} failed: {exc}") from exc
+    if exit_code != 0:
+        detail = (err or out or "").strip()
+        raise RuntimeError(f"{label} failed: {detail or f'exit code {exit_code}'}")
+    return out
+
+
+def _remote_sqlite_backup_command(cfg: dict[str, Any], remote_tmp: str) -> str:
+    """Build a remote command that uses Python's sqlite3 module to back up app.db.
+
+    This avoids requiring the sqlite3 command-line tool on the Debian website
+    server and works reliably while the website is running.
+    """
+    py = "\n".join([
+        "import os, sqlite3, sys",
+        "src = sys.argv[1]",
+        "dst = sys.argv[2]",
+        "if not os.path.exists(src):",
+        "    raise SystemExit(f'Website database not found: {src}')",
+        "try:",
+        "    os.remove(dst)",
+        "except FileNotFoundError:",
+        "    pass",
+        "src_conn = sqlite3.connect(f'file:{src}?mode=ro', uri=True)",
+        "dst_conn = sqlite3.connect(dst)",
+        "try:",
+        "    src_conn.backup(dst_conn)",
+        "finally:",
+        "    dst_conn.close()",
+        "    src_conn.close()",
+        "if not os.path.exists(dst) or os.path.getsize(dst) <= 0:",
+        "    raise SystemExit('SQLite backup was not created')",
+    ])
+    return " ".join([
+        shlex.quote(str(cfg.get("remote_python") or "python3")),
+        "-c",
+        shlex.quote(py),
+        shlex.quote(str(cfg["db_path"])),
+        shlex.quote(remote_tmp),
+    ])
+
+
+def _parse_summary_script_json(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    # The website script should print only JSON, but parse the last JSON-looking
+    # line too so harmless npm/node warnings do not break the dashboard.
+    candidates = [line.strip() for line in text.splitlines() if line.strip()] or ["{}"]
+    for candidate in reversed(candidates):
+        if not candidate.startswith("{"):
+            continue
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    raise RuntimeError(f"Website summary script did not return JSON: {text[:500]}")
+
+
+def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        executable = cmd[0] if cmd else label
+        raise RuntimeError(
+            f"{label} command not found on this machine ({executable}). "
+            "Install openssh-client/scp or configure ER1_WEBSITE_SSH_PASSWORD so the Paramiko backend can be used."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} timed out") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"{label} failed: {detail or exc}") from exc
+
+
+_load_env_files()
+
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
 HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
+SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
+
+
+def load_selected_booking() -> dict[str, Any]:
+    try:
+        if SELECTED_BOOKING_PATH.exists():
+            return normalize_booking_selection(json.loads(SELECTED_BOOKING_PATH.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+    return dict(TEST_BOOKING_DEFAULT)
+
+
+def save_selected_booking(booking: dict[str, Any]) -> None:
+    try:
+        SELECTED_BOOKING_PATH.write_text(json.dumps(normalize_booking_selection(booking), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 GAME_DB_PATH = Path(
     os.getenv(
         "ER1_GAME_DB_PATH",
@@ -30,6 +337,58 @@ GAME_DB_PATH = Path(
 REMOVED_GAMES_DIR = GAME_DB_PATH.parent / "removed"
 REMOVED_GAME_DB_PATH = REMOVED_GAMES_DIR / GAME_DB_PATH.name
 RUN_JSON_DIR = GAME_DB_PATH.parent / "game_runs"
+
+TEST_BOOKING_DEFAULT = {
+    "id": "__test__",
+    "kind": "test",
+    "bookingCode": "",
+    "date": "",
+    "slot": "",
+    "players": 2,
+    "customerEmail": "rudolf.dosser@gmail.com",
+    "customerName": "Test booking",
+    "label": "Test booking",
+}
+
+
+def _safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(str(value).strip() or str(fallback)))
+    except Exception:
+        return int(fallback)
+
+
+def normalize_booking_selection(raw: Any | None) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+    raw_id = str(raw.get("id") or raw.get("bookingCode") or raw.get("booking_code") or "").strip()
+    is_test = kind == "test" or raw_id == "__test__"
+    players = max(1, _safe_int(raw.get("players", raw.get("players_count", raw.get("playerCount", 2 if is_test else 1))), 2 if is_test else 1))
+    booking_code = str(raw.get("bookingCode") or raw.get("booking_code") or "").strip()
+    email = str(raw.get("customerEmail") or raw.get("customer_email") or raw.get("email") or "").strip()
+    if is_test and not email:
+        email = TEST_BOOKING_DEFAULT["customerEmail"]
+    label = str(raw.get("label") or "").strip()
+    if not label:
+        if is_test:
+            label = "Test booking"
+        else:
+            label = " · ".join(part for part in [str(raw.get("date") or "").strip(), str(raw.get("slot") or "").strip(), f"{players}P", email or booking_code] if part)
+    return {
+        "id": "__test__" if is_test else str(raw.get("id") or booking_code or f"{raw.get('date','')}-{raw.get('slot','')}-{email}").strip(),
+        "kind": "test" if is_test else "booking",
+        "bookingCode": "" if is_test else booking_code,
+        "date": str(raw.get("date") or "").strip(),
+        "slot": str(raw.get("slot") or "").strip(),
+        "players": players,
+        "customerEmail": email,
+        "customerName": str(raw.get("customerName") or raw.get("customer_name") or raw.get("name") or "").strip(),
+        "language": str(raw.get("language") or "de").strip() or "de",
+        "bookingStatus": str(raw.get("bookingStatus") or raw.get("booking_status") or "").strip(),
+        "paymentStatus": str(raw.get("paymentStatus") or raw.get("payment_status") or "").strip(),
+        "label": label,
+    }
 
 
 def _normalize_existing_games_db_schema(db_path: Path) -> None:
@@ -76,9 +435,29 @@ def _normalize_existing_games_db_schema(db_path: Path) -> None:
         """)
 
 
+
+def _ensure_game_riddles_outcome_columns(db_path: Path) -> None:
+    if not db_path.exists():
+        return
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+        if "game_riddles" not in tables:
+            return
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(game_riddles)").fetchall()}
+        if "skipped" not in columns:
+            conn.execute("ALTER TABLE game_riddles ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
+        if "not_solved" not in columns:
+            conn.execute("ALTER TABLE game_riddles ADD COLUMN not_solved INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE game_riddles SET skipped = 0 WHERE skipped IS NULL")
+        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE not_solved IS NULL")
+        conn.execute("UPDATE game_riddles SET not_solved = 0 WHERE skipped = 1 AND not_solved = 1")
+
+
 _normalize_existing_games_db_schema(GAME_DB_PATH)
+_ensure_game_riddles_outcome_columns(GAME_DB_PATH)
 
 TOPIC_GAME_STATE = "game/state"
+TOPIC_DASHBOARD_STATE = "game/dashboard_state"
 TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"
 TOPIC_MAGLOCK_CMD = "maglock/cmd"
@@ -210,10 +589,25 @@ class DashboardStore:
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
+    selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
 
-    def update_game_state(self, payload: dict[str, Any]) -> None:
+    def update_game_state(self, payload: dict[str, Any], *, merge: bool = False) -> None:
         with self.lock:
-            next_payload = dict(payload or {})
+            incoming = dict(payload or {})
+            if merge:
+                next_payload = dict(self.game_state or {})
+                next_payload.update(incoming)
+                # ``game/state`` is intentionally firmware-safe and no longer carries
+                # the dashboard run object. Preserve the richer dashboard state for
+                # in-game phases, but clear stale run data outside an active/prepared run.
+                try:
+                    incoming_phase = int(incoming.get("phase", next_payload.get("phase", 0)) or 0)
+                except Exception:
+                    incoming_phase = 0
+                if "run" not in incoming and incoming_phase in {0, 1}:
+                    next_payload["run"] = None
+            else:
+                next_payload = incoming
             if self.local_players_count_override is not None:
                 try:
                     incoming_players_count = parse_players_count_input(next_payload.get("players_count", 0))
@@ -255,8 +649,39 @@ class DashboardStore:
         with self.lock:
             current = dict(self.game_state)
             current["players_count"] = int(players_count)
+            run = current.get("run") if isinstance(current.get("run"), dict) else None
+            if run is not None:
+                run = dict(run)
+                run["players_count"] = int(players_count)
+                current["run"] = run
             self.local_players_count_override = int(players_count)
             self.game_state = current
+
+    def set_selected_booking(self, booking: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_booking_selection(booking)
+        players_count = int(normalized.get("players") or 0)
+        with self.lock:
+            self.selected_booking = normalized
+            current = dict(self.game_state)
+            current["booking"] = normalized
+            current["booking_code"] = str(normalized.get("bookingCode") or "")
+            current["booking_email"] = str(normalized.get("customerEmail") or "")
+            current["players_count"] = players_count
+            run = current.get("run") if isinstance(current.get("run"), dict) else None
+            if run is not None:
+                run = dict(run)
+                run["players_count"] = players_count
+                run["booking"] = normalized
+                run["booking_code"] = str(normalized.get("bookingCode") or "")
+                run["booking_email"] = str(normalized.get("customerEmail") or "")
+                current["run"] = run
+            self.local_players_count_override = players_count
+            self.game_state = current
+        return normalized
+
+    def get_selected_booking(self) -> dict[str, Any]:
+        with self.lock:
+            return json.loads(json.dumps(self.selected_booking or TEST_BOOKING_DEFAULT))
 
     def _clear_node_payload_locked(self, node_id: str) -> None:
         existing = self.node_states.get(node_id, {}) or {}
@@ -264,14 +689,16 @@ class DashboardStore:
         self.node_states[node_id] = {"hb": hb} if hb is not None else {}
 
     def _reset_riddle_display_state_locked(self) -> None:
-        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
+        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
             self._clear_node_payload_locked(node_id)
         self.riddle_states["images"] = {"id": "images", "buttons": {}}
         self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-        self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+        self.riddle_states["stars"] = dict(empty_stars_state)
+        self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
         self.local_hint_counts = {}
         save_hint_store(self.local_hint_counts)
 
@@ -389,7 +816,8 @@ class DashboardStore:
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
-            "meta": {"broker": BROKER_HOST},
+            "booking": self.get_selected_booking(),
+            "meta": {"broker": BROKER_HOST, "website_api_configured": bool(website_api_config()[0]), "website_api_base": website_api_config()[0]},
         }
 
     def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
@@ -402,12 +830,35 @@ class DashboardStore:
         phase_name_pretty = pretty_phase_name(phase_meta["name"])
         last_name_pretty = pretty_phase_name(last_name)
         timer_running = bool(game.get("timer_running", False))
-        started_at = game.get("game_started_at") or game.get("started_at")
+
+        run = game.get("run") if isinstance(game.get("run"), dict) else {}
+        started_at = run.get("started_at") or game.get("game_started_at") or game.get("started_at")
         last_riddle_solved_at = game.get("last_riddle_solved_at")
-        current_riddle_name = ""
         active_riddles = tuple(phase_meta.get("active", ()) or ())
-        if timer_running and active_riddles:
-            current_riddle_name = str(active_riddles[0])
+
+        raw_timings = run.get("riddle_timings") if isinstance(run, dict) else {}
+        timing_map: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_timings, dict):
+            for key, value in raw_timings.items():
+                if isinstance(value, dict):
+                    timing_map[_canonical_riddle_name(key)] = value
+        elif isinstance(raw_timings, list):
+            for value in raw_timings:
+                if isinstance(value, dict):
+                    key = _canonical_riddle_name(value.get("riddle_key") or value.get("id") or value.get("riddle"))
+                    if key:
+                        timing_map[key] = value
+
+        current_riddle_name = _canonical_riddle_name(game.get("current_riddle_name") or game.get("current_riddle") or "")
+        if not current_riddle_name and timer_running:
+            for candidate in active_riddles:
+                timing = timing_map.get(_canonical_riddle_name(candidate), {})
+                if str(timing.get("status") or "").lower() == "active" or bool(timing.get("active")):
+                    current_riddle_name = _canonical_riddle_name(candidate)
+                    break
+        if not current_riddle_name and timer_running and active_riddles:
+            current_riddle_name = _canonical_riddle_name(active_riddles[0])
+
         current_riddle_started_at = None
         if current_riddle_name:
             current_riddle_started_at = last_riddle_solved_at or started_at
@@ -416,11 +867,30 @@ class DashboardStore:
             if not value:
                 return 0
             try:
-                from datetime import datetime, timezone
                 dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0, int((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()))
             except Exception:
                 return 0
+
+        def _numeric_seconds(*values: Any) -> int | None:
+            for value in values:
+                if value in {None, ""}:
+                    continue
+                try:
+                    return max(0, int(round(float(value))))
+                except Exception:
+                    continue
+            return None
+
+        current_timing = timing_map.get(current_riddle_name, {}) if current_riddle_name else {}
+        live_elapsed = _numeric_seconds(run.get("live_duration_s"), run.get("duration_s"), game.get("duration_s"))
+        current_elapsed = _numeric_seconds(
+            current_timing.get("display_time_s"),
+            current_timing.get("live_time_s"),
+            current_timing.get("solve_time_s"),
+        )
 
         return {
             "phase": phase,
@@ -430,14 +900,17 @@ class DashboardStore:
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
-            "players_count": int(game.get("players_count") or 0),
+            "players_count": int(run.get("players_count") if run.get("players_count") is not None else (game.get("players_count") or 0)),
             "timer_running": timer_running,
-            "elapsed_s": _seconds_since(started_at) if timer_running else 0,
+            "elapsed_s": live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0),
             "started_at": started_at,
             "last_riddle_solved_at": last_riddle_solved_at,
-            "current_riddle_elapsed_s": _seconds_since(current_riddle_started_at) if timer_running else 0,
+            "current_riddle_elapsed_s": current_elapsed if current_elapsed is not None else (_seconds_since(current_riddle_started_at) if timer_running else 0),
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
+            "run_id": run.get("run_id") or run.get("id") or "",
+            "leaderboard_code": str(run.get("leaderboard_code") or "").strip(),
+            "ended_at": run.get("ended_at"),
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -513,25 +986,44 @@ class DashboardStore:
     def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hint_counts: dict[str, int]) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
-        active = set(meta.get("active", ()))
-        solved = set(meta.get("solved", ()))
-        run = game.get("run") or {}
-        riddle_timings = run.get("riddle_timings") or {}
+        active = {_canonical_riddle_name(item) for item in (meta.get("active", ()) or ())}
+        solved = {_canonical_riddle_name(item) for item in (meta.get("solved", ()) or ())}
+
+        run = game.get("run") if isinstance(game.get("run"), dict) else {}
+        raw_timings = run.get("riddle_timings") if isinstance(run, dict) else {}
+        riddle_timings: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_timings, dict):
+            for key, value in raw_timings.items():
+                if isinstance(value, dict):
+                    riddle_timings[_canonical_riddle_name(key)] = value
+        elif isinstance(raw_timings, list):
+            for value in raw_timings:
+                if isinstance(value, dict):
+                    key = _canonical_riddle_name(value.get("riddle_key") or value.get("id") or value.get("riddle"))
+                    if key:
+                        riddle_timings[key] = value
+
         now_mono = time.monotonic()
         out = []
         for row in RIDDLES:
-            riddle_id = row["id"]
+            riddle_id = _canonical_riddle_name(row["id"])
             node_id = row["node_id"]
             state_payload = riddle_states.get(riddle_id) or (node_states.get(node_id, {}) if node_id else {})
-
             timing = riddle_timings.get(riddle_id) or {}
-            if riddle_id in solved:
+            timing_status = str(timing.get("status") or "").strip().lower().replace(" ", "_")
+
+            skipped = bool(timing.get("skipped", False)) or timing_status == "skipped"
+            not_solved = bool(timing.get("not_solved", False)) or timing_status == "not_solved"
+            solved_by_timing = bool(timing.get("solved", False)) or timing_status == "solved"
+            active_by_timing = bool(timing.get("active", False)) or timing_status == "active"
+
+            if skipped:
+                phase_state = "skipped"
+            elif not_solved:
+                phase_state = "not_solved"
+            elif riddle_id in solved or solved_by_timing:
                 phase_state = "solved"
-            elif riddle_id in active and bool(timing.get("solved")):
-                phase_state = "solved_pending"
-            elif bool(timing.get("solved")):
-                phase_state = "solved"
-            elif riddle_id in active:
+            elif riddle_id in active or active_by_timing:
                 phase_state = "active"
             else:
                 phase_state = "pending"
@@ -548,14 +1040,31 @@ class DashboardStore:
                 if online and isinstance(uptime, (int, float)):
                     node_status = f"online ({int(uptime)}s)"
 
-            phase_state_label = "solved" if phase_state == "solved_pending" else phase_state
+            def _first_seconds(*values: Any) -> int:
+                for value in values:
+                    if value in {None, ""}:
+                        continue
+                    try:
+                        return max(0, int(round(float(value))))
+                    except Exception:
+                        continue
+                return 0
+
+            display_seconds = _first_seconds(
+                timing.get("display_time_s"),
+                timing.get("live_time_s"),
+                timing.get("solve_time_s"),
+            )
+            hint_count = int(timing.get("hint_count") if timing.get("hint_count") is not None else local_hint_counts.get(riddle_id, 0) or 0)
+            phase_state_label = "not solved" if phase_state == "not_solved" else phase_state
+
             out.append({
                 "id": riddle_id,
                 "label": row["label"],
                 "manual": row["manual"],
                 "phase_state": phase_state,
                 "phase_state_label": phase_state_label,
-                "phase_state_class": f"phase-{phase_state}",
+                "phase_state_class": f"phase-{phase_state.replace('_', '-')}",
                 "node_status": node_status,
                 "node_status_class": "node-manual" if row["manual"] else ("node-online" if online else "node-offline"),
                 "tries": self._extract_tries(state_payload),
@@ -565,7 +1074,14 @@ class DashboardStore:
                 "attempts_summary": self._extract_attempts_summary(riddle_id, state_payload),
                 "star_slider_summary": self._extract_star_slider_summary(riddle_id, state_payload),
                 "piano_summary": self._extract_piano_summary(riddle_id, state_payload),
-                "hint_count": int(local_hint_counts.get(riddle_id, 0) or 0),
+                "hint_count": hint_count,
+                "time_s": display_seconds,
+                "display_time_s": display_seconds,
+                "solve_time_s": _first_seconds(timing.get("solve_time_s")),
+                "live_time_s": _first_seconds(timing.get("live_time_s")),
+                "skipped": skipped,
+                "not_solved": not_solved,
+                "can_solve": phase_state == "active",
             })
         return out
 
@@ -1237,6 +1753,27 @@ def _build_insert_payload_for_dst(src_row: dict[str, Any], dst: sqlite3.Connecti
     return names, values
 
 
+def _insert_copied_db_row(dst: sqlite3.Connection, table_name: str, src_row: dict[str, Any], *, keep_id: bool = False) -> None:
+    cols, params = _build_insert_payload_for_dst(src_row, dst, table_name)
+
+    # The live game DB and the removed-games DB are separate SQLite files.
+    # Child tables such as game_riddles use an INTEGER PRIMARY KEY named "id".
+    # Copying that source id into the archive DB can collide with an id that
+    # already belongs to another archived game, causing:
+    #   UNIQUE constraint failed: game_riddles.id
+    # Keep the stable game id in the games table, but let SQLite allocate fresh
+    # row ids for copied child rows.
+    if not keep_id:
+        filtered = [(col, val) for col, val in zip(cols, params) if col != "id"]
+        if filtered:
+            cols, params = [item[0] for item in filtered], [item[1] for item in filtered]
+
+    dst.execute(
+        f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+        tuple(params),
+    )
+
+
 def _run_json_path(game_id: str) -> Path:
     return RUN_JSON_DIR / f"{game_id}.json"
 
@@ -1420,21 +1957,11 @@ def move_game_to_removed(game_id: str) -> None:
         dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
         dst.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
 
-        game_values = dict(game_row)
-        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
-        dst.execute(
-            f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})",
-            tuple(game_params),
-        )
+        _insert_copied_db_row(dst, "games", dict(game_row), keep_id=True)
 
         for rows, table_name in ((riddle_rows, "game_riddles"), (hint_rows, "game_hints")):
             for row in rows:
-                values = dict(row)
-                cols, params = _build_insert_payload_for_dst(values, dst, table_name)
-                dst.execute(
-                    f"INSERT INTO {table_name} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
-                    tuple(params),
-                )
+                _insert_copied_db_row(dst, table_name, dict(row), keep_id=False)
 
         src.execute("DELETE FROM game_hints WHERE game_id = ?", (game_id,))
         src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
@@ -1651,6 +2178,7 @@ def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
 
 def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
     for topic, qos in [
+        (TOPIC_DASHBOARD_STATE, 0),
         (TOPIC_GAME_STATE, 0),
         ("+/state", 0),
         ("+/hb", 0),
@@ -1665,8 +2193,12 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
     data = parse_json_payload(msg.payload)
     if data is None:
         return
-    if topic == TOPIC_GAME_STATE:
+    if topic == TOPIC_DASHBOARD_STATE:
         store.update_game_state(data)
+        return
+    if topic == TOPIC_GAME_STATE:
+        # Fallback for older game masters, and phase/timer merge for the firmware-safe state.
+        store.update_game_state(data, merge=("run" not in data))
         return
     if topic.endswith("/hb"):
         node_id = topic.split("/", 1)[0]
@@ -1699,6 +2231,263 @@ def mqtt_publish(topic: str, payload: dict[str, Any] | str) -> None:
     body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     mqtt_client.publish(topic, body, qos=0, retain=False)
 
+
+def current_raw_run_payload() -> dict[str, Any]:
+    with store.lock:
+        raw_game_state = json.loads(json.dumps(store.game_state))
+    run = raw_game_state.get("run") if isinstance(raw_game_state.get("run"), dict) else None
+    if not run:
+        raise ValueError("No current run is available yet.")
+    return run
+
+
+def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None, timeout: int | None = None) -> dict[str, Any]:
+    website_api_base, website_api_token = website_api_config()
+    if not website_api_base:
+        checked = ", ".join(str(path) for path in _candidate_env_paths())
+        raise RuntimeError(f"ER1_WEBSITE_API_BASE is not configured on the dashboard. Checked: {checked}")
+    url = f"{website_api_base}{path if path.startswith('/') else '/' + path}"
+    headers = {"Accept": "application/json"}
+    body = None
+    request_method = method or ("POST" if payload is not None else "GET")
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if website_api_token:
+        # Support both names. The website accepts either header.
+        headers["X-Game-Summary-Token"] = website_api_token
+        headers["X-Dashboard-Token"] = website_api_token
+        headers["Authorization"] = f"Bearer {website_api_token}"
+    request_obj = urllib.request.Request(url, data=body, headers=headers, method=request_method)
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout or website_api_timeout()) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            return json.loads(text or "{}")
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(text or "{}")
+        except Exception:
+            error_payload = {"error": text or str(exc)}
+        raise RuntimeError(str(error_payload.get("error") or error_payload.get("message") or f"Website HTTP {exc.code}")) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(str(exc.reason or exc)) from exc
+
+
+def post_website_json(path: str, payload: dict[str, Any], timeout: int | None = None) -> dict[str, Any]:
+    return website_json(path, payload, method="POST", timeout=timeout)
+
+
+def get_website_json(path: str, timeout: int | None = None) -> dict[str, Any]:
+    return website_json(path, None, method="GET", timeout=timeout)
+
+
+def _parse_tsv_table(text: str) -> list[dict[str, Any]]:
+    lines = [line.rstrip("\n") for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = lines[0].split("\t")
+    rows: list[dict[str, Any]] = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        row = {key: (values[i] if i < len(values) else "") for i, key in enumerate(header)}
+        rows.append(row)
+    return rows
+
+
+def _sync_website_bookings_db_via_paramiko(cfg: dict[str, Any]) -> Path:
+    remote_tmp = f"/tmp/er1_dashboard_bookings_{int(time.time() * 1000)}.sqlite3"
+    local_path = Path(cfg["local_db_path"]).expanduser()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+    backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
+    client = _paramiko_connect(cfg, timeout=cfg["timeout"] + 10)
+    try:
+        _paramiko_exec(client, backup_command, timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
+        try:
+            with client.open_sftp() as sftp:
+                sftp.get(remote_tmp, str(local_tmp))
+        except Exception as exc:
+            raise RuntimeError(f"sftp website DB download failed: {exc}") from exc
+        local_tmp.replace(local_path)
+    finally:
+        try:
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+    return local_path
+
+
+def sync_website_bookings_db_via_ssh() -> Path:
+    """Create a consistent backup of the website app.db on Debian and copy it to the Pi.
+
+    In password mode the dashboard uses Paramiko (pure Python SSH/SFTP). In
+    passwordless/key mode it can still use the system ssh/scp commands. The
+    remote backup is made through Python's sqlite3 module, so the Debian server
+    does not need the sqlite3 command-line tool installed.
+    """
+    cfg = booking_ssh_config()
+    if not cfg["host"] or not cfg["user"] or not cfg["db_path"]:
+        raise RuntimeError("Website DB SSH sync is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_DB_PATH.")
+
+    if _ssh_backend(cfg) == "paramiko":
+        return _sync_website_bookings_db_via_paramiko(cfg)
+
+    target = _ssh_target(cfg)
+    remote_tmp = f"/tmp/er1_dashboard_bookings_{int(time.time() * 1000)}.sqlite3"
+    local_path = Path(cfg["local_db_path"]).expanduser()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+    backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
+    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
+    scp_cmd = [
+        "scp",
+        "-P", str(cfg["port"]),
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{target}:{remote_tmp}",
+        str(local_tmp),
+    ]
+    try:
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp website DB")
+        local_tmp.replace(local_path)
+    finally:
+        try:
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+    return local_path
+
+def _booking_label(row: dict[str, Any]) -> str:
+    return " · ".join(part for part in [
+        row.get("date", ""),
+        row.get("slot", ""),
+        f"{row.get('players', '')}P" if row.get("players") else "",
+        row.get("customer_name") or row.get("customer_email") or row.get("booking_code", ""),
+    ] if part)
+
+
+def list_bookings_from_local_db(db_path: Path, limit: int = 1000) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        raise FileNotFoundError(f"Copied website booking DB not found: {db_path}")
+    safe_limit = max(1, min(5000, int(limit or 1000)))
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "bookings" not in tables:
+            raise RuntimeError(f"Copied website DB has no bookings table: {db_path}")
+        rows = conn.execute(
+            """
+            SELECT id, booking_code, date, slot, players, language, customer_name, customer_email,
+                   payment_method, payment_status, booking_status, total_cents, created_at, updated_at
+            FROM bookings
+            ORDER BY date DESC, slot DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        row = dict(r)
+        out.append(normalize_booking_selection({
+            "id": row.get("id", ""),
+            "bookingCode": row.get("booking_code", ""),
+            "date": row.get("date", ""),
+            "slot": row.get("slot", ""),
+            "players": row.get("players", ""),
+            "customerEmail": row.get("customer_email", ""),
+            "customerName": row.get("customer_name", ""),
+            "language": row.get("language", "de"),
+            "paymentStatus": row.get("payment_status", ""),
+            "bookingStatus": row.get("booking_status", ""),
+            "totalCents": row.get("total_cents", ""),
+            "label": _booking_label(row),
+        }))
+    return out
+
+
+def list_bookings_via_ssh_copy(limit: int = 1000) -> tuple[list[dict[str, Any]], Path, bool]:
+    local_db = sync_website_bookings_db_via_ssh()
+    return list_bookings_from_local_db(local_db, limit), local_db, True
+
+
+def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
+    local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
+    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    client = _paramiko_connect(cfg, timeout=cfg["timeout"] + 10)
+    try:
+        try:
+            with client.open_sftp() as sftp:
+                sftp.put(str(local_tmp), remote_tmp)
+        except Exception as exc:
+            raise RuntimeError(f"sftp game summary payload upload failed: {exc}") from exc
+        app_path = shlex.quote(cfg["app_path"])
+        script = shlex.quote(cfg["summary_script"])
+        remote_payload = shlex.quote(remote_tmp)
+        remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
+        text = _paramiko_exec(client, remote_cmd, timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        return _parse_summary_script_json(text)
+    finally:
+        try:
+            local_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
+    cfg = booking_ssh_config()
+    if not cfg["host"] or not cfg["user"] or not cfg["app_path"]:
+        raise RuntimeError("Website SSH summary is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_APP_PATH.")
+
+    if _ssh_backend(cfg) == "paramiko":
+        return _send_summary_email_via_paramiko(payload, cfg)
+
+    target = _ssh_target(cfg)
+    remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
+    local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
+    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+    local_tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    scp_cmd = [
+        "scp",
+        "-P", str(cfg["port"]),
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg['timeout']}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        str(local_tmp),
+        f"{target}:{remote_tmp}",
+    ]
+    try:
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp game summary payload")
+        app_path = shlex.quote(cfg["app_path"])
+        script = shlex.quote(cfg["summary_script"])
+        remote_payload = shlex.quote(remote_tmp)
+        remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
+        completed = _run_process(_ssh_base(cfg) + [remote_cmd], timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        return _parse_summary_script_json(completed.stdout or "")
+    finally:
+        try:
+            local_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+        except Exception:
+            pass
 
 @app.get("/")
 def index() -> str:
@@ -1738,7 +2527,7 @@ def game_viewer() -> str:
                 error = f"No game found for id {game_id}."
             else:
                 summary_columns = [col for col in ["id", "date", "players_count", "hint_count", "leaderboard_code"] if col in game]
-                riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display"]
+                riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display", "skipped", "not_solved"]
         except Exception as exc:
             error = str(exc)
 
@@ -1811,6 +2600,109 @@ def api_phase() -> Any:
         mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_mode", "mode": action})
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "invalid phase action"}), 400
+
+
+
+
+@app.get("/api/bookings")
+def api_bookings() -> Any:
+    bookings = [normalize_booking_selection(TEST_BOOKING_DEFAULT)]
+    try:
+        remote_bookings, local_db, fresh = list_bookings_via_ssh_copy(1000)
+        bookings.extend(remote_bookings)
+        return jsonify({
+            "ok": True,
+            "bookings": bookings,
+            "source": "ssh-copy",
+            "copiedDb": str(local_db),
+            "fresh": fresh,
+        })
+    except Exception as exc:
+        # Still allow the test booking. If a previous copied DB exists, use it as a fallback.
+        cfg = booking_ssh_config()
+        local_db = Path(cfg["local_db_path"]).expanduser()
+        try:
+            if local_db.exists():
+                bookings.extend(list_bookings_from_local_db(local_db, 1000))
+                return jsonify({
+                    "ok": True,
+                    "bookings": bookings,
+                    "source": "cached-copy",
+                    "copiedDb": str(local_db),
+                    "warning": f"SSH copy failed, using cached booking DB: {exc}",
+                })
+        except Exception as cache_exc:
+            return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}; cached DB failed: {cache_exc}"})
+        return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}"})
+
+
+@app.post("/api/select-booking")
+def api_select_booking() -> Any:
+    data = request.get_json(force=True) or {}
+    booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
+    selected = store.set_selected_booking(booking)
+    players_count = int(selected.get("players") or 0)
+    # Newer game-master builds can store the whole booking on the active run;
+    # older builds still receive the existing player-count command below.
+    booking_payload = {
+        "booking": selected,
+        "bookingCode": str(selected.get("bookingCode") or ""),
+        "booking_code": str(selected.get("bookingCode") or ""),
+        "bookingEmail": str(selected.get("customerEmail") or ""),
+        "booking_email": str(selected.get("customerEmail") or ""),
+        "customerEmail": str(selected.get("customerEmail") or ""),
+        "customer_email": str(selected.get("customerEmail") or ""),
+        "customerName": str(selected.get("customerName") or ""),
+        "customer_name": str(selected.get("customerName") or ""),
+        "players": players_count,
+        "players_count": players_count,
+    }
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_booking", **booking_payload})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "booking", **booking_payload})
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count, "players": players_count})
+    return jsonify({"ok": True, "booking": selected, "players_count": players_count})
+
+@app.post("/api/finish-game")
+def api_finish_game() -> Any:
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "finish_game"})
+    return jsonify({"ok": True})
+
+
+@app.post("/api/send-summary-email")
+def api_send_summary_email() -> Any:
+    data = request.get_json(silent=True) or {}
+    try:
+        run = current_raw_run_payload()
+        code = str(run.get("leaderboard_code") or run.get("leaderboardCode") or "").strip()
+        if not code:
+            return jsonify({"ok": False, "error": "The game has no leaderboard code yet. Finish the game first, then try again."}), 400
+        selected_booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else store.get_selected_booking())
+        if selected_booking.get("players"):
+            run = dict(run)
+            run["players_count"] = int(selected_booking.get("players") or 0)
+        payload = {
+            "run": run,
+            "leaderboardCode": code,
+            "bookingCode": str(data.get("bookingCode") or data.get("booking_code") or selected_booking.get("bookingCode") or "").strip(),
+            "booking": selected_booking,
+            "bookingEmail": str(selected_booking.get("customerEmail") or "").strip(),
+            "players": int(selected_booking.get("players") or 0),
+            "testBooking": selected_booking.get("kind") == "test",
+            # Hint for the website-side mailer: keep the summary email minimal.
+            # Intended content: total time, hint count, highlighted leaderboard code,
+            # then the leaderboard link. Older website scripts simply ignore this.
+            "emailTemplate": "minimal_leaderboard_summary",
+            "emailFields": ["total_time", "hint_count", "leaderboard_code", "leaderboard_link"],
+            "leaderboardUrl": os.getenv("ER1_LEADERBOARD_URL", "https://escapeschenna.com/rangliste").strip(),
+        }
+        mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
+        if mode == "http":
+            result = post_website_json("/api/game-summary/send", payload)
+        else:
+            result = send_summary_email_via_ssh(payload)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.post("/api/players-count")
@@ -1905,6 +2797,50 @@ def api_set_hint_count() -> Any:
     return jsonify({"ok": True, "hint_count": count})
 
 
+
+
+@app.post("/api/riddle-time")
+def api_riddle_time() -> Any:
+    data = request.get_json(force=True) or {}
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return jsonify({"ok": False, "error": "riddle required"}), 400
+    raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
+    try:
+        seconds = parse_mmss_input(raw_value)
+        seconds = max(0.0, float(seconds or 0.0))
+    except Exception:
+        return jsonify({"ok": False, "error": "time must be seconds, mm:ss, or hh:mm:ss"}), 400
+    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_time", "riddle": riddle, "solve_time_s": round(seconds, 3)})
+    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3)})
+
+
+@app.post("/api/riddle-outcome")
+def api_riddle_outcome() -> Any:
+    data = request.get_json(force=True) or {}
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return jsonify({"ok": False, "error": "riddle required"}), 400
+    outcome = str(data.get("outcome") or data.get("status") or "").strip().lower().replace(" ", "_")
+    if outcome in {"skip", "skipped"}:
+        advance = bool(data.get("advance", True))
+        if advance:
+            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "skip_riddle", "riddle": riddle})
+        else:
+            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "skipped", "advance": False})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "skipped", "advance": advance})
+    if outcome in {"not_solved", "failed", "fail"}:
+        advance = bool(data.get("advance", False))
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "mark_not_solved", "riddle": riddle, "advance": advance})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "not_solved", "advance": advance})
+    if outcome in {"clear", "reset", "pending", ""}:
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "clear_riddle_outcome", "riddle": riddle})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "clear"})
+    if outcome == "solved":
+        advance = bool(data.get("advance", False))
+        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "solved", "advance": advance})
+        return jsonify({"ok": True, "riddle": riddle, "outcome": "solved", "advance": advance})
+    return jsonify({"ok": False, "error": "outcome must be skipped, not_solved, solved, or clear"}), 400
 # ---- ER1 v2 dashboard overrides (new game_master DB schema) ----
 RIDDLE_ALIASES = {
     "open_prison": "prison",
@@ -2000,6 +2936,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value or 0))
     except Exception:
         return default
+
+
+def _safe_bool_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    text = str(value or '').strip().lower()
+    if text in {'1', 'true', 'yes', 'y', 'on', 'checked', 'skipped', 'not_solved', 'not solved'}:
+        return 1
+    return 0
 
 
 def _duration_and_progress_from_rows(rows: list[dict[str, Any]]) -> tuple[float, dict[str, float]]:
@@ -2126,6 +3071,8 @@ def build_game_view_state(game_id: str) -> dict[str, Any]:
         rendered['riddle_time_mmss'] = format_mmss(rendered.get('_riddle_seconds'))
         rendered['hint_count_display'] = int(rendered.get('hint_count') or 0)
         rendered['hints_display'] = serialize_db_value(rendered.get('hints')) or ''
+        rendered['skipped_display'] = '1' if _safe_bool_int(rendered.get('skipped')) else '0'
+        rendered['not_solved_display'] = '1' if _safe_bool_int(rendered.get('not_solved')) else '0'
         rendered_riddles.append(rendered)
     rendered_riddles.sort(key=lambda row: RIDDLE_ORDER_V2.index(row.get('riddle_key')) if row.get('riddle_key') in RIDDLE_ORDER_V2 else 999)
     raw_rows = [
@@ -2153,13 +3100,9 @@ def move_game_to_removed(game_id: str) -> None:
             _ensure_missing_columns(src, dst, table_name)
         dst.execute("DELETE FROM games WHERE id = ?", (game_id,))
         dst.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
-        game_values = dict(game_row)
-        game_cols, game_params = _build_insert_payload_for_dst(game_values, dst, "games")
-        dst.execute(f"INSERT INTO games ({', '.join(game_cols)}) VALUES ({', '.join(['?'] * len(game_cols))})", tuple(game_params))
+        _insert_copied_db_row(dst, "games", dict(game_row), keep_id=True)
         for row in riddle_rows:
-            values = dict(row)
-            cols, params = _build_insert_payload_for_dst(values, dst, "game_riddles")
-            dst.execute(f"INSERT INTO game_riddles ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})", tuple(params))
+            _insert_copied_db_row(dst, "game_riddles", dict(row), keep_id=False)
         src.execute("DELETE FROM game_riddles WHERE game_id = ?", (game_id,))
         src.execute("DELETE FROM games WHERE id = ?", (game_id,))
         dst.commit()
@@ -2237,6 +3180,10 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                     solve_overrides[int(rowid)] = parse_mmss_input(value) if column == 'riddle_time_mmss' else max(0.0, _safe_float(value))
                 elif column in {'hint_count_display', 'hint_count'}:
                     direct_updates['hint_count'] = max(0, _safe_int(value))
+                elif column in {'skipped', 'skipped_display'}:
+                    direct_updates['skipped'] = _safe_bool_int(value)
+                elif column in {'not_solved', 'not_solved_display'}:
+                    direct_updates['not_solved'] = _safe_bool_int(value)
                 elif column == 'hints':
                     direct_updates['hints'] = str(value or '')
                 elif column in editable_columns:
@@ -2244,6 +3191,10 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 else:
                     raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
             if direct_updates:
+                if direct_updates.get('skipped'):
+                    direct_updates['not_solved'] = 0
+                elif direct_updates.get('not_solved'):
+                    direct_updates['skipped'] = 0
                 set_clause = ', '.join(f"{column} = ?" for column in direct_updates.keys())
                 values = list(direct_updates.values()) + [rowid]
                 conn.execute(f"UPDATE game_riddles SET {set_clause} WHERE rowid = ?", values)
@@ -2258,14 +3209,16 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
 
 
 def _reset_riddle_display_state_locked_v2(self):
-    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
+    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
         self._clear_node_payload_locked(node_id)
     self.riddle_states["images"] = {"id": "images", "buttons": {}}
     self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
     self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
     self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
     self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-    self.riddle_states["star_slider"] = {"id": "star_slider", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
+    self.riddle_states["stars"] = dict(empty_stars_state)
+    self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
     self.local_hint_counts = {}
     save_hint_store(self.local_hint_counts)
 

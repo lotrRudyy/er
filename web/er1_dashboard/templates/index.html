@@ -1,16 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, initial-scale=1.0" />
   <title>ER1 Dashboard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
-  <div class="page">
-    <section class="panel unified-row">
-      <div class="unified-grid">
-        <div class="phase-panel">
+  <div class="page dashboard-page">
+    <div class="dashboard-layout">
+      <aside class="panel control-sidebar">
+        <div class="sidebar-section phase-panel">
           <div class="label">Phase <span id="phaseValue" class="value inline-phase">0: Standby</span></div>
           <div class="subline">Last: <span id="lastPhaseValue">—</span></div>
           <div class="top-nav-links"><a class="nav-button" href="/games">Open Game Viewer</a></div>
@@ -20,70 +23,71 @@
             <button data-phase-action="prepare">Prepare</button>
             <button data-phase-action="start">Start</button>
           </div>
-          <div class="players-inline">
-            <div class="label small-label">Anzahl Spieler <span id="playersCountStored" class="players-count-stored">(gespeichert: 0)</span></div>
-            <div class="players-count-controls">
-              <input id="playersCountInput" class="players-count-input" type="text" inputmode="numeric" value="0" />
-              <button id="playersCountSave" type="button" class="players-count-save">Spieleranzahl speichern</button>
+          <div class="game-finish-controls">
+            <button id="finishGameBtn" type="button" class="finish-game-btn">Game finished</button>
+            <button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Send summary email</button>
+            <div id="summaryEmailFeedback" class="summary-email-feedback"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section timer-panel">
+          <div class="timer-grid">
+            <div>
+              <div class="label small-label">Game Timer</div>
+              <div id="timerValue" class="value timer compact-timer">00:00:00</div>
+            </div>
+            <div>
+              <div class="label small-label">Current riddle</div>
+              <div id="riddleTimerValue" class="value sub-timer">00:00:00</div>
             </div>
           </div>
         </div>
 
-        <div class="timer-panel">
-          <div class="label">Game Timer</div>
-          <div id="timerValue" class="value timer compact-timer">00:00:00</div>
-          <div class="label small-label">Current riddle</div>
-          <div id="riddleTimerValue" class="value sub-timer">00:00:00</div>
+        <div class="sidebar-section booking-panel">
+          <div class="label small-label">Booking</div>
+          <select id="bookingSelect" class="booking-select" aria-label="Booking"></select>
+          <div id="bookingSelectedInfo" class="booking-selected-info"></div>
+          <div id="testBookingFields" class="test-booking-fields hidden">
+            <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="email" />
+            <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="players" />
+          </div>
+          <button id="refreshBookingsBtn" class="booking-refresh-btn" type="button">Refresh bookings</button>
+          <div id="bookingFeedback" class="summary-email-feedback"></div>
         </div>
 
-        <div class="stacked-controls">
-          <section class="subpanel compact-panel controls-borderless">
-            <h2>Lights</h2>
-            <div id="lightsGrid" class="controls-grid"></div>
-          </section>
-          <section class="subpanel compact-panel controls-borderless">
-            <h2>Locks</h2>
-            <div id="locksGrid" class="controls-grid"></div>
-          </section>
-        </div>
+        <section class="sidebar-section subpanel compact-panel controls-borderless">
+          <h2>Lights</h2>
+          <div id="lightsGrid" class="controls-grid stacked-controls-grid"></div>
+        </section>
 
-        <div class="nodes-panel">
-          <div class="label">Controllers / Nodes</div>
-          <div id="nodesList" class="nodes-list nodes-two-col"></div>
-        </div>
-      </div>
-    </section>
+        <section class="sidebar-section subpanel compact-panel controls-borderless">
+          <h2>Locks</h2>
+          <div id="locksGrid" class="controls-grid stacked-controls-grid"></div>
+        </section>
 
-    <section class="panel riddles-panel">
-      <h2>Riddles</h2>
-      <div class="riddles-halves">
-        <table class="simple-table riddles-table compact-riddles-table">
+        <section class="sidebar-section nodes-panel">
+          <div class="label small-label">Controllers / Nodes</div>
+          <div id="nodesList" class="nodes-list nodes-sidebar-list"></div>
+        </section>
+      </aside>
+
+      <main class="panel riddles-panel main-riddles-panel">
+        <h2>Riddles</h2>
+        <table class="simple-table riddles-table compact-riddles-table full-riddles-table">
           <thead>
             <tr>
               <th>Riddle</th>
               <th>Phase</th>
-              <th>Solve</th>
+              <th>Time</th>
+              <th>Actions</th>
               <th>Info</th>
               <th>Hints</th>
             </tr>
           </thead>
-          <tbody id="riddlesBodyLeft"></tbody>
+          <tbody id="riddlesBody"></tbody>
         </table>
-
-        <table class="simple-table riddles-table compact-riddles-table">
-          <thead>
-            <tr>
-              <th>Riddle</th>
-              <th>Phase</th>
-              <th>Solve</th>
-              <th>Info</th>
-              <th>Hints</th>
-            </tr>
-          </thead>
-          <tbody id="riddlesBodyRight"></tbody>
-        </table>
-      </div>
-    </section>
+      </main>
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

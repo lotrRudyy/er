@@ -50,8 +50,6 @@ def migrate(old_path: str, new_path: str) -> None:
             solve_time_s REAL NOT NULL DEFAULT 0,
             hint_count INTEGER NOT NULL DEFAULT 0,
             hints TEXT NOT NULL DEFAULT '',
-            skipped INTEGER NOT NULL DEFAULT 0,
-            not_solved INTEGER NOT NULL DEFAULT 0,
             UNIQUE(game_id, riddle_key)
         );
         INSERT INTO games (id, date, started_at, ended_at, duration_s, players_count, hint_count, leaderboard_code)
