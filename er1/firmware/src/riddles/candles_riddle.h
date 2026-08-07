@@ -86,11 +86,11 @@ private:
   uint32_t windowSum_[4] = {0, 0, 0, 0};
   uint16_t windowMax_[4] = {0, 0, 0, 0};
   uint32_t lastTrigMs_[4] = {0, 0, 0, 0};
-  int base_[4] = {1367, 1463, 1498, 1735};
-  static constexpr int kBaseMin[4] = {1367, 1463, 1498, 1735};
-  int effBase_[4] = {1367, 1463, 1498, 1735};
+  int base_[4] = {1592, 1800, 1135, 1666};
+  static constexpr int kBaseMin[4] = {1592, 1800, 1135, 1666};
+  int effBase_[4] = {1592, 1800, 1135, 1666};
   uint8_t micSaturated_[4] = {0, 0, 0, 0};
-  int delta_[4] = {80, 20, 80, 300};
+  int delta_[4] = {80, 80, 80, 80};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
   bool moduleEnabled_ = true;
