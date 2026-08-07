@@ -34,7 +34,7 @@ private:
   };
 
   static constexpr uint16_t kBlowWindowSamples = 250;
-  static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 20 + 99) / 100;
+  static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 60 + 99) / 100;
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
