@@ -10,9 +10,37 @@ Single-page Flask dashboard for ER1.
 - Test booking with editable email/player count
 - Lock controls
 - Light group controls
-- Solve/skip/not-solved buttons and live riddle time editing
-- Game finished and summary-email buttons
+- Solve/skip buttons where allowed, safe reset controls, and live riddle time editing
+- Single-flight server-side booking assignment when an accepted game start creates the active run
 - MQTT state polling backend
+
+## Normal game finish
+
+The normal finish does not use a separate `finish_game` command. Solving the active
+`sissi` riddle sends the normal `solve` command. The game master records the Sissi
+time, advances from phase 13 to phase 14, stops the timer, persists the run, and
+generates the leaderboard code. The removed emergency finish control is unrelated
+to this normal transition.
+
+## Booking assignment
+
+Preparing a new run always clears the previous booking and player count. Once the
+Game Master confirms that prepared run, Start creates one server-side assignment
+claim shared by all browser sessions. The HTTP request only queues Start; SSH copy,
+Europe/Rome appointment ranking, and booking lookup run in a background worker.
+The Start intent is made durable before MQTT publication and can be resumed for
+the same prepared run after a dashboard restart. The worker durably records the
+exact normalized booking candidate before publishing it, writes only to that run,
+and marks the booking as assigned only after the Game Master reports it back.
+Reloading a browser shows the same persisted assignment status. If no
+non-cancelled booking matches, select one manually before sending the summary
+email. A manual selection durably cancels an automatic lookup for the same run and
+persists the manual selection before its MQTT command is published.
+
+The persisted state machine advances `intent_state` from `authorized` to
+`published` and finally `terminal`. Automatic booking work advances
+`candidate_state` from `none` to `selected` and then `published`. A startup
+directory barrier is required before a restored state may emit either command.
 
 ## Run
 
@@ -42,11 +70,13 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 
 ## Notes
 
-- Uses `game/cmd` for mode, selected booking player count, solve, skip/not-solved, live times, and finish-game.
+- Uses `game/cmd` for mode, selected booking/player count, solve, skip, per-riddle reset, hints, and live time corrections.
 - Uses `maglock/cmd` for lock control.
 - Uses `lighting/cmd` for light control.
 - Uses `star_sky/sys/cmd` plus `lighting/cmd` for the `star sky` row.
-- `reset` is intentionally omitted.
+- A full-game `reset` command is intentionally omitted. Only Gefängnis, Rad, Ketten, Tangram, and Magnetschlüssel use the safe `reset_riddle` command.
+- Lock, light, and diagnostics commands report local MQTT queue failures and possible partial batches; QoS 0 still provides no physical-device acknowledgment.
+- Deferred security boundary: the dashboard control APIs have no application-level authentication and rely on the trusted escape-room LAN/deployment boundary. Adding authentication requires a coordinated deployment/client migration and is intentionally not changed here.
 
 
 ## Booking lookup from Debian website
