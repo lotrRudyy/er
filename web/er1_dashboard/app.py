@@ -2,26 +2,34 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import re
 import shlex
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
+LOG = logging.getLogger("er1_dashboard")
 
 
 def _candidate_env_paths() -> list[Path]:
@@ -216,7 +224,7 @@ def _paramiko_connect(cfg: dict[str, Any], *, timeout: int | None = None):
             client.close()
         except Exception:
             pass
-        raise RuntimeError(f"SSH connection to {_ssh_target(cfg)} failed: {exc}") from exc
+        raise RuntimeError(f"Die SSH-Verbindung zu {_ssh_target(cfg)} ist fehlgeschlagen: {exc}") from exc
     return client
 
 
@@ -231,10 +239,10 @@ def _paramiko_exec(client: Any, command: str, *, timeout: int, label: str) -> st
         err = stderr.read().decode("utf-8", errors="replace")
         exit_code = stdout.channel.recv_exit_status()
     except Exception as exc:
-        raise RuntimeError(f"{label} failed: {exc}") from exc
+        raise RuntimeError(f"{label} ist fehlgeschlagen: {exc}") from exc
     if exit_code != 0:
         detail = (err or out or "").strip()
-        raise RuntimeError(f"{label} failed: {detail or f'exit code {exit_code}'}")
+        raise RuntimeError(f"{label} ist fehlgeschlagen: {detail or f'Exit-Code {exit_code}'}")
     return out
 
 
@@ -249,7 +257,7 @@ def _remote_sqlite_backup_command(cfg: dict[str, Any], remote_tmp: str) -> str:
         "src = sys.argv[1]",
         "dst = sys.argv[2]",
         "if not os.path.exists(src):",
-        "    raise SystemExit(f'Website database not found: {src}')",
+        "    raise SystemExit(f'Website-Datenbank nicht gefunden: {src}')",
         "try:",
         "    os.remove(dst)",
         "except FileNotFoundError:",
@@ -262,7 +270,7 @@ def _remote_sqlite_backup_command(cfg: dict[str, Any], remote_tmp: str) -> str:
         "    dst_conn.close()",
         "    src_conn.close()",
         "if not os.path.exists(dst) or os.path.getsize(dst) <= 0:",
-        "    raise SystemExit('SQLite backup was not created')",
+        "    raise SystemExit('SQLite-Sicherung wurde nicht erstellt')",
     ])
     return " ".join([
         shlex.quote(str(cfg.get("remote_python") or "python3")),
@@ -285,7 +293,7 @@ def _parse_summary_script_json(text: str) -> dict[str, Any]:
             return json.loads(candidate)
         except Exception:
             pass
-    raise RuntimeError(f"Website summary script did not return JSON: {text[:500]}")
+    raise RuntimeError(f"Das Website-Skript für die Spielzusammenfassung hat kein JSON zurückgegeben: {text[:500]}")
 
 
 def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.CompletedProcess[str]:
@@ -294,14 +302,14 @@ def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.Comp
     except FileNotFoundError as exc:
         executable = cmd[0] if cmd else label
         raise RuntimeError(
-            f"{label} command not found on this machine ({executable}). "
-            "Install openssh-client/scp or configure ER1_WEBSITE_SSH_PASSWORD so the Paramiko backend can be used."
+            f"Der Befehl für {label} wurde auf diesem Gerät nicht gefunden ({executable}). "
+            "Installiere openssh-client/scp oder setze ER1_WEBSITE_SSH_PASSWORD, damit das Paramiko-Backend verwendet werden kann."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{label} timed out") from exc
+        raise RuntimeError(f"Zeitüberschreitung bei {label}") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
-        raise RuntimeError(f"{label} failed: {detail or exc}") from exc
+        raise RuntimeError(f"{label} ist fehlgeschlagen: {detail or exc}") from exc
 
 
 _load_env_files()
@@ -311,6 +319,302 @@ BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
 HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
 SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
+START_ASSIGNMENT_PATH = Path(
+    os.getenv("ER1_START_ASSIGNMENT_PATH", str(BASE_DIR / "data" / "start_assignment.json"))
+).expanduser()
+START_ASSIGNMENT_SCHEMA = "er1.dashboard.start_assignment"
+START_ASSIGNMENT_VERSION = 2
+# Persisted transitions: intent none -> authorized -> published -> terminal;
+# candidate none -> selected -> published. MQTT is emitted only after the
+# corresponding authorized/selected write passes a directory durability barrier.
+START_INTENT_STATES = {"none", "authorized", "published", "terminal"}
+START_CANDIDATE_STATES = {"none", "selected", "published"}
+MAX_START_BOOKING_BYTES = 32768
+START_CLICK_MAX_AGE_S = 5 * 60
+START_CLICK_MAX_FUTURE_S = 60
+_START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED = False
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    try:
+        fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except (AttributeError, OSError):
+        if os.name == "posix":
+            raise
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        if os.name == "posix":
+            raise
+    finally:
+        os.close(fd)
+
+
+def _ensure_dashboard_directory_durable(path: Path) -> None:
+    if path.exists():
+        if not path.is_dir():
+            raise NotADirectoryError(path)
+        return
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    if not cursor.exists() or not cursor.is_dir():
+        raise NotADirectoryError(cursor)
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            if not directory.is_dir():
+                raise
+        _fsync_parent_directory(directory)
+
+
+def _atomic_write_dashboard_json(path: Path, payload: dict[str, Any]) -> bool:
+    """Replace ``path`` and return whether the final directory fsync succeeded.
+
+    A false return is still a logical commit: ``os.replace`` already made the
+    file visible. Crash durability is then fundamentally uncertain, so callers
+    must keep memory aligned with the visible file instead of reporting failure.
+    Exceptions are reserved for failures before the rename.
+    """
+    _ensure_dashboard_directory_durable(path.parent)
+    _fsync_parent_directory(path)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = -1
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        try:
+            _fsync_parent_directory(path)
+        except Exception:
+            LOG.critical(
+                "Dashboard JSON replace is visible but directory fsync failed; treating write as committed with crash-durability uncertainty path=%s",
+                path,
+                exc_info=True,
+            )
+            return False
+        return True
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+
+
+def _minimal_start_assignment(value: Any) -> dict[str, Any]:
+    idle = _idle_start_assignment()
+    if not isinstance(value, dict):
+        return idle
+    cleaned = dict(idle)
+    cleaned["active"] = value.get("active") is True
+    cleaned["cancel_requested"] = value.get("cancel_requested") is True
+    cleaned["cancellation_durability_pending"] = value.get("cancellation_durability_pending") is True
+    intent_state = str(value.get("intent_state") or "none").strip().lower()
+    candidate_state = str(value.get("candidate_state") or "none").strip().lower()
+    if intent_state not in START_INTENT_STATES:
+        raise ValueError("invalid start intent state")
+    if candidate_state not in START_CANDIDATE_STATES:
+        raise ValueError("invalid booking candidate state")
+    cleaned["intent_state"] = intent_state
+    cleaned["candidate_state"] = candidate_state
+    cleaned["start_published"] = intent_state == "published" or (
+        intent_state == "terminal" and value.get("start_published") is True
+    )
+    string_fields = (
+        ("status", 64),
+        ("claim_id", 128),
+        ("run_id", 256),
+        ("message", 1000),
+        ("requested_at", 64),
+        ("booking_id", 256),
+    )
+    for key, limit in string_fields:
+        raw = value.get(key)
+        if isinstance(raw, str):
+            cleaned[key] = raw[:limit]
+    for key in ("reference_time", "start_clicked_at_ms", "state_revision"):
+        raw = value.get(key)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(float(raw)):
+            cleaned[key] = raw
+    raw_booking_snapshot = value.get("booking_snapshot")
+    if isinstance(raw_booking_snapshot, dict):
+        booking_snapshot = normalize_booking_selection(raw_booking_snapshot)
+        if len(json.dumps(booking_snapshot, ensure_ascii=False).encode("utf-8")) > MAX_START_BOOKING_BYTES:
+            raise ValueError("start-assignment booking snapshot exceeds its size limit")
+        cleaned["booking_snapshot"] = json.loads(json.dumps(booking_snapshot, ensure_ascii=False))
+        snapshot_id = str(booking_snapshot.get("id") or "").strip()
+        if not snapshot_id:
+            raise ValueError("start-assignment booking snapshot has no id")
+        if cleaned.get("booking_id") and cleaned["booking_id"] != snapshot_id:
+            raise ValueError("start-assignment booking snapshot id mismatch")
+        cleaned["booking_id"] = snapshot_id
+        if candidate_state == "none":
+            raise ValueError("start-assignment booking snapshot lacks candidate state")
+    elif candidate_state != "none":
+        raise ValueError("start-assignment candidate state lacks a booking snapshot")
+    if cleaned["active"] and (
+        not cleaned["claim_id"]
+        or not cleaned["run_id"]
+        or "start_clicked_at_ms" not in cleaned
+        or intent_state not in {"authorized", "published"}
+    ):
+        raise ValueError("active start assignment is not executable")
+    if not cleaned["active"] and intent_state in {"authorized", "published"}:
+        raise ValueError("inactive start assignment is not terminal")
+    if candidate_state == "published" and intent_state not in {"published", "terminal"}:
+        raise ValueError("published booking candidate has no published Start intent")
+    if cleaned["cancellation_durability_pending"] and (
+        cleaned["active"]
+        or not cleaned["cancel_requested"]
+        or intent_state != "terminal"
+        or not cleaned["claim_id"]
+        or not cleaned["run_id"]
+    ):
+        raise ValueError("pending cancellation is not a terminal automatic claim")
+    return cleaned
+
+
+def _terminal_start_assignment(status: str, message: str, *, claim_id: str = "", run_id: str = "") -> dict[str, Any]:
+    return {
+        **_idle_start_assignment(),
+        "intent_state": "terminal",
+        "status": str(status or "failed")[:64],
+        "claim_id": str(claim_id or "")[:128],
+        "run_id": str(run_id or "")[:256],
+        "message": str(message or "")[:1000],
+    }
+
+
+def _quarantine_start_assignment_file(reason: str) -> bool:
+    if not START_ASSIGNMENT_PATH.exists():
+        return True
+    quarantine = START_ASSIGNMENT_PATH.with_name(
+        f"{START_ASSIGNMENT_PATH.name}.invalid.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.{uuid.uuid4().hex[:8]}"
+    )
+    try:
+        os.replace(START_ASSIGNMENT_PATH, quarantine)
+        _fsync_parent_directory(quarantine)
+    except Exception:
+        LOG.critical(
+            "Unsafe dashboard Start assignment could not be quarantined path=%s reason=%s",
+            START_ASSIGNMENT_PATH,
+            reason,
+            exc_info=True,
+        )
+        return False
+    LOG.error(
+        "Dashboard Start assignment quarantined path=%s quarantine=%s reason=%s",
+        START_ASSIGNMENT_PATH,
+        quarantine,
+        reason,
+    )
+    return True
+
+
+def _invalidate_unsynced_start_assignment_file() -> None:
+    try:
+        with START_ASSIGNMENT_PATH.open("r+b") as handle:
+            handle.seek(0)
+            handle.write(b"!")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileNotFoundError:
+        return
+    except Exception:
+        LOG.critical("Unsynced Start intent could not be invalidated path=%s", START_ASSIGNMENT_PATH, exc_info=True)
+
+
+def load_start_assignment() -> dict[str, Any]:
+    global _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED
+    if not START_ASSIGNMENT_PATH.is_file():
+        return _idle_start_assignment()
+    try:
+        payload = json.loads(START_ASSIGNMENT_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("assignment root is not an object")
+        if (
+            payload.get("schema") != START_ASSIGNMENT_SCHEMA
+            or type(payload.get("version")) is not int
+            or payload.get("version") != START_ASSIGNMENT_VERSION
+        ):
+            raise ValueError("unsupported assignment schema")
+        assignment = _minimal_start_assignment(payload.get("assignment"))
+    except Exception as exc:
+        _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED = True
+        LOG.error("Dashboard start-assignment state is invalid and will not execute path=%s", START_ASSIGNMENT_PATH, exc_info=True)
+        _quarantine_start_assignment_file(str(exc))
+        return _terminal_start_assignment("quarantined", "Unsichere Startzuordnung wurde verworfen.")
+    try:
+        _fsync_parent_directory(START_ASSIGNMENT_PATH)
+    except Exception:
+        _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED = True
+        LOG.critical(
+            "Dashboard Start assignment was not loaded because its directory durability barrier failed path=%s",
+            START_ASSIGNMENT_PATH,
+            exc_info=True,
+        )
+        _invalidate_unsynced_start_assignment_file()
+        _quarantine_start_assignment_file("startup assignment directory barrier failed")
+        failed = _terminal_start_assignment(
+            "durability_failed",
+            "Startzuordnung wurde wegen eines Speicherfehlers nicht ausgeführt.",
+            claim_id=str(assignment.get("claim_id") or ""),
+            run_id=str(assignment.get("run_id") or ""),
+        )
+        failed["_load_durability_failed"] = True
+        return failed
+    if assignment.get("active"):
+        assignment["_restored_from_disk"] = True
+        assignment["_directory_barrier_confirmed"] = True
+    elif assignment.get("intent_state") == "terminal" and assignment.get("cancel_requested"):
+        assignment["cancellation_durability_pending"] = False
+    return assignment
+
+
+def save_start_assignment(value: dict[str, Any]) -> bool:
+    assignment = _minimal_start_assignment(value)
+    if assignment == _idle_start_assignment():
+        _ensure_dashboard_directory_durable(START_ASSIGNMENT_PATH.parent)
+        _fsync_parent_directory(START_ASSIGNMENT_PATH)
+        try:
+            START_ASSIGNMENT_PATH.unlink()
+        except FileNotFoundError:
+            return True
+        try:
+            _fsync_parent_directory(START_ASSIGNMENT_PATH)
+        except Exception:
+            LOG.critical(
+                "Start-assignment deletion is visible but directory fsync failed; treating deletion as committed with crash-durability uncertainty path=%s",
+                START_ASSIGNMENT_PATH,
+                exc_info=True,
+            )
+            return False
+        return True
+    return _atomic_write_dashboard_json(START_ASSIGNMENT_PATH, {
+        "schema": START_ASSIGNMENT_SCHEMA,
+        "version": START_ASSIGNMENT_VERSION,
+        "assignment": assignment,
+    })
 
 
 def load_selected_booking() -> dict[str, Any]:
@@ -319,14 +623,11 @@ def load_selected_booking() -> dict[str, Any]:
             return normalize_booking_selection(json.loads(SELECTED_BOOKING_PATH.read_text(encoding="utf-8")))
     except Exception:
         pass
-    return dict(TEST_BOOKING_DEFAULT)
+    return dict(EMPTY_BOOKING_SELECTION)
 
 
-def save_selected_booking(booking: dict[str, Any]) -> None:
-    try:
-        SELECTED_BOOKING_PATH.write_text(json.dumps(normalize_booking_selection(booking), ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+def save_selected_booking(booking: dict[str, Any]) -> bool:
+    return _atomic_write_dashboard_json(SELECTED_BOOKING_PATH, normalize_booking_selection(booking))
 GAME_DB_PATH = Path(
     os.getenv(
         "ER1_GAME_DB_PATH",
@@ -346,9 +647,28 @@ TEST_BOOKING_DEFAULT = {
     "slot": "",
     "players": 2,
     "customerEmail": "rudolf.dosser@gmail.com",
-    "customerName": "Test booking",
-    "label": "Test booking",
+    "customerName": "Testbuchung",
+    "label": "Testbuchung",
 }
+
+EMPTY_BOOKING_SELECTION = {
+    "id": "__empty__",
+    "kind": "empty",
+    "bookingCode": "",
+    "date": "",
+    "slot": "",
+    "players": 0,
+    "customerEmail": "",
+    "customerName": "",
+    "language": "de",
+    "label": "Keine Buchung ausgewählt",
+}
+
+try:
+    EUROPE_ROME_TZ = ZoneInfo("Europe/Rome")
+except ZoneInfoNotFoundError:
+    # Debian has system tzdata; this fallback keeps EU DST behavior on lean installs.
+    EUROPE_ROME_TZ = None
 
 
 def _safe_int(value: Any, fallback: int = 0) -> int:
@@ -358,33 +678,52 @@ def _safe_int(value: Any, fallback: int = 0) -> int:
         return int(fallback)
 
 
+def normalize_hint_language(value: Any) -> str:
+    normalized = "".join(
+        char
+        for char in unicodedata.normalize("NFD", str(value or "").strip().lower().replace("_", "-"))
+        if not unicodedata.combining(char)
+    )
+    base = normalized.split("-", 1)[0]
+    if base == "de" or normalized in {"deutsch", "german", "tedesco"}:
+        return "de"
+    if base == "en" or normalized in {"english", "englisch", "inglese"}:
+        return "en"
+    if base == "it" or normalized in {"italiano", "italian", "italienisch"}:
+        return "it"
+    return "de"
+
+
 def normalize_booking_selection(raw: Any | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
     raw_id = str(raw.get("id") or raw.get("bookingCode") or raw.get("booking_code") or "").strip()
+    is_empty = kind == "empty" or raw_id == "__empty__"
     is_test = kind == "test" or raw_id == "__test__"
-    players = max(1, _safe_int(raw.get("players", raw.get("players_count", raw.get("playerCount", 2 if is_test else 1))), 2 if is_test else 1))
+    players = 0 if is_empty else max(1, _safe_int(raw.get("players", raw.get("players_count", raw.get("playerCount", 2 if is_test else 1))), 2 if is_test else 1))
     booking_code = str(raw.get("bookingCode") or raw.get("booking_code") or "").strip()
     email = str(raw.get("customerEmail") or raw.get("customer_email") or raw.get("email") or "").strip()
     if is_test and not email:
         email = TEST_BOOKING_DEFAULT["customerEmail"]
     label = str(raw.get("label") or "").strip()
     if not label:
-        if is_test:
-            label = "Test booking"
+        if is_empty:
+            label = "Keine Buchung ausgewählt"
+        elif is_test:
+            label = "Testbuchung"
         else:
             label = " · ".join(part for part in [str(raw.get("date") or "").strip(), str(raw.get("slot") or "").strip(), f"{players}P", email or booking_code] if part)
     return {
-        "id": "__test__" if is_test else str(raw.get("id") or booking_code or f"{raw.get('date','')}-{raw.get('slot','')}-{email}").strip(),
-        "kind": "test" if is_test else "booking",
-        "bookingCode": "" if is_test else booking_code,
+        "id": "__empty__" if is_empty else ("__test__" if is_test else str(raw.get("id") or booking_code or f"{raw.get('date','')}-{raw.get('slot','')}-{email}").strip()),
+        "kind": "empty" if is_empty else ("test" if is_test else "booking"),
+        "bookingCode": "" if is_empty or is_test else booking_code,
         "date": str(raw.get("date") or "").strip(),
         "slot": str(raw.get("slot") or "").strip(),
         "players": players,
         "customerEmail": email,
         "customerName": str(raw.get("customerName") or raw.get("customer_name") or raw.get("name") or "").strip(),
-        "language": str(raw.get("language") or "de").strip() or "de",
+        "language": normalize_hint_language(raw.get("language")),
         "bookingStatus": str(raw.get("bookingStatus") or raw.get("booking_status") or "").strip(),
         "paymentStatus": str(raw.get("paymentStatus") or raw.get("payment_status") or "").strip(),
         "label": label,
@@ -538,6 +877,280 @@ LIGHT_NAME_BY_ID = {
     "10": "r3_uv",
 }
 
+LOG_NODE_LABELS = {
+    "lighting": "Lighting Controller",
+    "maglock": "Maglock Controller",
+    "images_piano": "Images / Piano",
+    "chess": "Chess",
+    "knocking": "Knocking",
+    "candles": "Candles",
+    "star_slider": "Star Slider",
+    "star_sky": "Star Sky",
+    "stop_timer": "Stop Timer (optional / possibly offline)",
+}
+LOG_NODE_IDS = tuple(LOG_NODE_LABELS)
+LOG_NODE_ID_SET = frozenset(LOG_NODE_IDS)
+LOG_LEVELS = ("DBG", "INF", "WRN", "ERR")
+LOG_LEVEL_SET = frozenset(LOG_LEVELS)
+LOG_STREAM_ID = uuid.uuid4().hex
+MAX_LOG_PAYLOAD_BYTES = 16 * 1024
+MAX_LOG_MESSAGE_CHARS = 2048
+MAX_LOG_DETAIL_STRING_CHARS = 2048
+MAX_LOG_DETAIL_KEY_CHARS = 128
+MAX_LOG_DETAIL_ITEMS = 40
+MAX_LOG_DETAIL_DEPTH = 6
+MAX_LOG_DETAIL_NODES = 300
+LOG_BUFFER_CAPACITY = 1500
+LOG_API_DEFAULT_LIMIT = 200
+LOG_API_MAX_LIMIT = 500
+
+
+def _bounded_log_text(value: str, limit: int) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 3)] + "..."
+
+
+def _sanitize_log_detail(value: Any, *, _depth: int = 0, _budget: list[int] | None = None) -> Any:
+    if _budget is None:
+        _budget = [MAX_LOG_DETAIL_NODES]
+    if _budget[0] <= 0:
+        return "[truncated]"
+    _budget[0] -= 1
+
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return _bounded_log_text(value, MAX_LOG_DETAIL_STRING_CHARS)
+    if _depth >= MAX_LOG_DETAIL_DEPTH:
+        return "[max depth]"
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= MAX_LOG_DETAIL_ITEMS or _budget[0] <= 0:
+                break
+            cleaned_key = _bounded_log_text(str(key), MAX_LOG_DETAIL_KEY_CHARS)
+            if cleaned_key in cleaned:
+                continue
+            cleaned[cleaned_key] = _sanitize_log_detail(item, _depth=_depth + 1, _budget=_budget)
+        return cleaned
+    if isinstance(value, (list, tuple)):
+        return [
+            _sanitize_log_detail(item, _depth=_depth + 1, _budget=_budget)
+            for item in value[:MAX_LOG_DETAIL_ITEMS]
+            if _budget[0] > 0
+        ]
+    return _bounded_log_text(str(value), MAX_LOG_DETAIL_STRING_CHARS)
+
+
+def _sanitize_log_scalar(value: Any, limit: int) -> Any:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("non-finite log metadata")
+        return value
+    if isinstance(value, str):
+        return _bounded_log_text(value, limit)
+    raise ValueError("structured log metadata")
+
+
+def _reject_log_json_constant(value: str) -> Any:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def parse_node_log(topic: Any, payload: Any) -> dict[str, Any] | None:
+    parts = str(topic or "").split("/")
+    if len(parts) != 2 or parts[1] != "log" or parts[0] not in LOG_NODE_ID_SET:
+        return None
+    if not isinstance(payload, (bytes, bytearray)) or not payload or len(payload) > MAX_LOG_PAYLOAD_BYTES:
+        return None
+    try:
+        data = json.loads(bytes(payload).decode("utf-8"), parse_constant=_reject_log_json_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    level = data.get("lv")
+    message = data.get("msg")
+    detail = data.get("d", {})
+    if not isinstance(level, str) or level not in LOG_LEVEL_SET:
+        return None
+    if not isinstance(message, str):
+        return None
+    if "time_valid" in data and not isinstance(data["time_valid"], bool):
+        return None
+    try:
+        device_type = _sanitize_log_scalar(data.get("t"), 128)
+        device_timestamp = _sanitize_log_scalar(data.get("ts"), 128)
+        detail_type = _sanitize_log_scalar(data.get("d_type"), 32)
+    except ValueError:
+        return None
+    return {
+        "node": parts[0],
+        "t": device_type,
+        "ts": device_timestamp,
+        "time_valid": data.get("time_valid") if "time_valid" in data else None,
+        "lv": level,
+        "msg": _bounded_log_text(message, MAX_LOG_MESSAGE_CHARS),
+        "d": _sanitize_log_detail(detail),
+        "d_type": detail_type,
+    }
+
+
+class NodeLogBuffer:
+    def __init__(self, capacity: int = LOG_BUFFER_CAPACITY) -> None:
+        if type(capacity) is not int or capacity <= 0:
+            raise ValueError("log buffer capacity must be positive")
+        self.capacity = capacity
+        self._entries: deque[dict[str, Any]] = deque(maxlen=capacity)
+        self._lock = threading.RLock()
+        self._next_seq = 1
+        self._dropped = 0
+
+    def append(self, entry: dict[str, Any], *, received_at: float | None = None) -> dict[str, Any]:
+        timestamp = time.time() if received_at is None else float(received_at)
+        if not math.isfinite(timestamp):
+            timestamp = time.time()
+        received = datetime.fromtimestamp(timestamp, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self._lock:
+            if len(self._entries) == self.capacity:
+                self._dropped += 1
+            stored = dict(entry)
+            stored["seq"] = self._next_seq
+            stored["received_at"] = received
+            self._next_seq += 1
+            self._entries.append(stored)
+            return dict(stored)
+
+    def query(
+        self,
+        *,
+        after: int = 0,
+        nodes: set[str] | frozenset[str] | None = None,
+        levels: set[str] | frozenset[str] | None = None,
+        limit: int = LOG_API_DEFAULT_LIMIT,
+    ) -> dict[str, Any]:
+        if type(after) is not int or after < 0:
+            raise ValueError("after must be a non-negative integer")
+        if type(limit) is not int or not 1 <= limit <= LOG_API_MAX_LIMIT:
+            raise ValueError("limit is outside the allowed range")
+        with self._lock:
+            entries = list(self._entries)
+            dropped = self._dropped
+            newest_seq = self._next_seq - 1
+
+        oldest_seq = entries[0]["seq"] if entries else None
+        gap_reason = ""
+        if oldest_seq is not None and after < oldest_seq - 1:
+            gap_reason = "buffer_rollover"
+        elif after > newest_seq:
+            gap_reason = "cursor_ahead"
+        reset = bool(gap_reason)
+        effective_after = (oldest_seq - 1 if oldest_seq is not None else 0) if reset else after
+        matched = [
+            entry
+            for entry in entries
+            if entry["seq"] > effective_after
+            and (nodes is None or entry["node"] in nodes)
+            and (levels is None or entry["lv"] in levels)
+        ]
+        selected = matched[:limit]
+        has_more = len(matched) > len(selected)
+        next_after = selected[-1]["seq"] if has_more and selected else newest_seq
+        return {
+            "entries": [dict(entry) for entry in selected],
+            "stream_id": LOG_STREAM_ID,
+            "next_after": next_after,
+            "oldest_seq": oldest_seq,
+            "newest_seq": newest_seq,
+            "reset": reset,
+            "gap": reset,
+            "gap_reason": gap_reason or None,
+            "dropped": dropped,
+            "buffer_size": len(entries),
+            "buffer_capacity": self.capacity,
+            "has_more": has_more,
+        }
+
+
+def _query_arg_values(args: Any, key: str) -> list[str]:
+    if hasattr(args, "getlist"):
+        values = list(args.getlist(key))
+    else:
+        value = args.get(key) if hasattr(args, "get") else None
+        values = value if isinstance(value, list) else ([] if value is None else [value])
+    if any(not isinstance(value, str) for value in values):
+        raise ValueError(f"{key} must be text")
+    return values
+
+
+def _parse_log_filter(values: list[str], *, name: str, allowed: frozenset[str]) -> frozenset[str] | None:
+    if not values:
+        return None
+    tokens: list[str] = []
+    for value in values:
+        pieces = value.split(",")
+        if any(not piece.strip() for piece in pieces):
+            raise ValueError(f"{name} contains an empty value")
+        tokens.extend(piece.strip() for piece in pieces)
+    unknown = sorted(set(tokens) - allowed)
+    if unknown:
+        raise ValueError(f"unknown {name}: {', '.join(unknown)}")
+    return frozenset(tokens)
+
+
+def parse_logs_query(args: Any) -> dict[str, Any]:
+    allowed_keys = {"after", "node", "nodes", "level", "levels", "limit"}
+    unknown_keys = sorted(set(args.keys()) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(f"unknown query parameter: {', '.join(unknown_keys)}")
+
+    after_values = _query_arg_values(args, "after")
+    limit_values = _query_arg_values(args, "limit")
+    if len(after_values) > 1 or len(limit_values) > 1:
+        raise ValueError("after and limit may only be provided once")
+    after_text = after_values[0] if after_values else "0"
+    limit_text = limit_values[0] if limit_values else str(LOG_API_DEFAULT_LIMIT)
+    if not re.fullmatch(r"0|[1-9][0-9]*", after_text):
+        raise ValueError("after must be a non-negative integer")
+    if not re.fullmatch(r"[1-9][0-9]*", limit_text):
+        raise ValueError("limit must be a positive integer")
+    after = int(after_text)
+    limit = int(limit_text)
+    if after > 9_223_372_036_854_775_807:
+        raise ValueError("after is too large")
+    if limit > LOG_API_MAX_LIMIT:
+        raise ValueError(f"limit must not exceed {LOG_API_MAX_LIMIT}")
+
+    nodes = _parse_log_filter(
+        _query_arg_values(args, "node") + _query_arg_values(args, "nodes"),
+        name="node",
+        allowed=LOG_NODE_ID_SET,
+    )
+    levels = _parse_log_filter(
+        _query_arg_values(args, "level") + _query_arg_values(args, "levels"),
+        name="level",
+        allowed=LOG_LEVEL_SET,
+    )
+    return {"after": after, "nodes": nodes, "levels": levels, "limit": limit}
+
+
+def validate_log_level_request(data: Any) -> tuple[str, str]:
+    if not isinstance(data, dict) or set(data) != {"node", "level"}:
+        raise ValueError("Genau node und level sind erforderlich.")
+    node = data.get("node")
+    level = data.get("level")
+    if not isinstance(node, str) or node not in LOG_NODE_ID_SET:
+        raise ValueError("Unbekannter Diagnose-Knoten.")
+    if not isinstance(level, str) or level not in LOG_LEVEL_SET:
+        raise ValueError("Die Log-Stufe muss DBG, INF, WRN oder ERR sein.")
+    return node, level
+
 
 def load_hint_store() -> dict[str, int]:
     if not HINTS_PATH.exists():
@@ -578,6 +1191,21 @@ def pretty_phase_name(name: str) -> str:
     return " ".join(p.capitalize() for p in parts)
 
 
+def _idle_start_assignment() -> dict[str, Any]:
+    return {
+        "active": False,
+        "cancel_requested": False,
+        "cancellation_durability_pending": False,
+        "intent_state": "none",
+        "candidate_state": "none",
+        "start_published": False,
+        "status": "idle",
+        "claim_id": "",
+        "run_id": "",
+        "message": "",
+    }
+
+
 @dataclass
 class DashboardStore:
     lock: threading.RLock = field(default_factory=threading.RLock)
@@ -590,9 +1218,115 @@ class DashboardStore:
     local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
     selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
+    game_state_revision: int = 0
+    start_assignment: dict[str, Any] = field(default_factory=load_start_assignment)
+    persistence_degraded: bool = field(default_factory=lambda: _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED)
+    last_start_assignment_directory_synced: bool = True
+
+    def _reset_selected_booking_locked(self) -> None:
+        selected = normalize_booking_selection(EMPTY_BOOKING_SELECTION)
+        try:
+            directory_synced = save_selected_booking(selected)
+        except Exception:
+            self.persistence_degraded = True
+            raise
+        self.selected_booking = selected
+        self.local_players_count_override = None
+        if not directory_synced:
+            self.persistence_degraded = True
+
+    def _reset_start_assignment_locked(self) -> None:
+        assignment = _idle_start_assignment()
+        try:
+            directory_synced = save_start_assignment(assignment)
+        except Exception:
+            self.persistence_degraded = True
+            raise
+        self.start_assignment = assignment
+        self.last_start_assignment_directory_synced = directory_synced
+        if not directory_synced:
+            self.persistence_degraded = True
+
+    def _set_start_assignment_locked(self, value: dict[str, Any]) -> bool:
+        assignment = dict(value)
+        try:
+            directory_synced = save_start_assignment(assignment)
+        except Exception:
+            self.persistence_degraded = True
+            raise
+        self.start_assignment = assignment
+        self.last_start_assignment_directory_synced = directory_synced
+        if not directory_synced:
+            self.persistence_degraded = True
+        return directory_synced
+
+    def claim_start_assignment(self, reference_time: datetime) -> tuple[dict[str, Any], bool]:
+        with self.lock:
+            if self.start_assignment.get("active"):
+                return json.loads(json.dumps(self.start_assignment)), False
+            try:
+                phase = int(self.game_state.get("phase", 0) or 0)
+            except Exception:
+                phase = 0
+            if phase != 2:
+                raise ValueError("Das Spiel kann nur aus der Phase Vorbereitung gestartet werden.")
+            run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
+            prepared_run_id = str(run.get("run_id") or run.get("id") or self.game_state.get("run_id") or "").strip()
+            if not prepared_run_id:
+                raise ValueError("Der vorbereitete Lauf wurde noch nicht vom Game Master bestätigt.")
+            claim = {
+                "active": True,
+                "cancel_requested": False,
+                "cancellation_durability_pending": False,
+                "intent_state": "authorized",
+                "candidate_state": "none",
+                "start_published": False,
+                "status": "start_intent",
+                "claim_id": uuid.uuid4().hex,
+                "run_id": prepared_run_id,
+                "message": "Startbefehl wird an den Game Master gesendet.",
+                "requested_at": reference_time.isoformat(timespec="seconds"),
+                "reference_time": reference_time.timestamp(),
+                "start_clicked_at_ms": int(round(reference_time.timestamp() * 1000)),
+                "state_revision": self.game_state_revision,
+            }
+            directory_synced = self._set_start_assignment_locked(claim)
+            if directory_synced:
+                self.start_assignment["_intent_durable_runtime"] = True
+            else:
+                _invalidate_unsynced_start_assignment_file()
+                _quarantine_start_assignment_file("initial Start intent directory sync failed")
+                self.start_assignment = _terminal_start_assignment(
+                    "durability_failed",
+                    "Startabsicht wurde nicht dauerhaft bestätigt und wird nicht ausgeführt.",
+                    claim_id=claim["claim_id"],
+                    run_id=claim["run_id"],
+                )
+                self.last_start_assignment_directory_synced = False
+            result = json.loads(json.dumps(self.start_assignment))
+            result["_directory_synced"] = directory_synced
+            return result, True
+
+    def update_start_assignment(self, claim_id: str, *, require_active: bool = True, **updates: Any) -> bool:
+        with self.lock:
+            if str(self.start_assignment.get("claim_id") or "") != str(claim_id or ""):
+                return False
+            if require_active and (not self.start_assignment.get("active") or self.start_assignment.get("cancel_requested")):
+                return False
+            return self._set_start_assignment_locked({**self.start_assignment, **updates})
+
+    def get_start_assignment(self) -> dict[str, Any]:
+        with self.lock:
+            return json.loads(json.dumps(self.start_assignment))
 
     def update_game_state(self, payload: dict[str, Any], *, merge: bool = False) -> None:
         with self.lock:
+            try:
+                previous_phase = int(self.game_state.get("phase", 0) or 0)
+            except Exception:
+                previous_phase = 0
+            previous_run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
+            previous_run_id = str(previous_run.get("run_id") or previous_run.get("id") or self.game_state.get("run_id") or "").strip()
             incoming = dict(payload or {})
             if merge:
                 next_payload = dict(self.game_state or {})
@@ -618,12 +1352,71 @@ class DashboardStore:
                 else:
                     next_payload["players_count"] = self.local_players_count_override
             self.game_state = next_payload
+            self.game_state_revision += 1
             try:
                 phase = int(next_payload.get("phase", 0))
             except Exception:
                 phase = 0
+            current_run = next_payload.get("run") if isinstance(next_payload.get("run"), dict) else {}
+            current_run_id = str(current_run.get("run_id") or current_run.get("id") or next_payload.get("run_id") or "").strip()
+            authoritative_run_state = "run" in incoming
             if phase in {0, 1, 2}:
                 self._reset_riddle_display_state_locked()
+            if authoritative_run_state and phase == 2 and (previous_phase != 2 or current_run_id != previous_run_id):
+                restored_claim_matches = (
+                    self.start_assignment.get("active")
+                    and self.start_assignment.get("_restored_from_disk")
+                    and str(self.start_assignment.get("run_id") or "") == current_run_id
+                )
+                if not restored_claim_matches:
+                    self._reset_selected_booking_locked()
+                    self._reset_start_assignment_locked()
+            elif authoritative_run_state and phase in {0, 1}:
+                self._reset_start_assignment_locked()
+            elif authoritative_run_state and phase >= 14 and self.start_assignment.get("active"):
+                self._set_start_assignment_locked({
+                    **self.start_assignment,
+                    "active": False,
+                    "intent_state": "terminal",
+                    "status": "cancelled",
+                    "message": "Die Buchungszuordnung wurde beendet, weil der Lauf nicht mehr aktiv ist.",
+                })
+            elif authoritative_run_state and phase >= 3 and self.start_assignment.get("active") and self.start_assignment.get("cancel_requested"):
+                self._set_start_assignment_locked({
+                    **self.start_assignment,
+                    "active": False,
+                    "intent_state": "terminal",
+                })
+
+            claimed_run_id = str(self.start_assignment.get("run_id") or "")
+            if authoritative_run_state and self.start_assignment.get("active") and claimed_run_id and current_run_id and claimed_run_id != current_run_id:
+                self._set_start_assignment_locked({
+                    **self.start_assignment,
+                    "active": False,
+                    "intent_state": "terminal",
+                    "status": "cancelled",
+                    "message": "Die Buchungszuordnung wurde verworfen, weil inzwischen ein anderer Lauf aktiv ist.",
+                })
+
+            has_run_booking = (
+                authoritative_run_state
+                and "booking" in current_run
+                and isinstance(current_run.get("booking"), dict)
+            )
+            if has_run_booking:
+                run_booking = current_run["booking"]
+                normalized_booking = normalize_booking_selection(run_booking)
+                if normalized_booking != normalize_booking_selection(self.selected_booking):
+                    try:
+                        directory_synced = save_selected_booking(normalized_booking)
+                    except Exception:
+                        self.persistence_degraded = True
+                        LOG.error("Rich game state booking could not be persisted", exc_info=True)
+                    else:
+                        self.selected_booking = normalized_booking
+                        self.local_players_count_override = None
+                        if not directory_synced:
+                            self.persistence_degraded = True
 
     def set_local_phase(self, mode: str) -> None:
         phase_by_mode = {"standby": 0, "maintenance": 1, "prepare": 2}
@@ -631,6 +1424,7 @@ class DashboardStore:
         if phase is None:
             return
         with self.lock:
+            self._reset_start_assignment_locked()
             current = dict(self.game_state)
             try:
                 prev_phase = int(current.get("phase", 0))
@@ -641,6 +1435,10 @@ class DashboardStore:
             current["timer_running"] = False
             current["current_riddle_name"] = ""
             current["current_riddle_started_at"] = None
+            if phase == 2:
+                current["run"] = None
+                current["players_count"] = 0
+                self._reset_selected_booking_locked()
             self.game_state = current
             if phase in {0, 1, 2}:
                 self._reset_riddle_display_state_locked()
@@ -657,11 +1455,25 @@ class DashboardStore:
             self.local_players_count_override = int(players_count)
             self.game_state = current
 
-    def set_selected_booking(self, booking: dict[str, Any]) -> dict[str, Any]:
+    def set_selected_booking(
+        self,
+        booking: dict[str, Any],
+        *,
+        expected_run_id: str = "",
+        require_durable: bool = False,
+    ) -> dict[str, Any]:
         normalized = normalize_booking_selection(booking)
         players_count = int(normalized.get("players") or 0)
         with self.lock:
-            self.selected_booking = normalized
+            if expected_run_id:
+                run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
+                current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+                try:
+                    phase = int(self.game_state.get("phase", 0) or 0)
+                except Exception:
+                    phase = 0
+                if current_run_id != expected_run_id or not 3 <= phase <= 13:
+                    raise ValueError("Die Buchungszuordnung gehört nicht mehr zum aktiven Spiel.")
             current = dict(self.game_state)
             current["booking"] = normalized
             current["booking_code"] = str(normalized.get("bookingCode") or "")
@@ -675,13 +1487,23 @@ class DashboardStore:
                 run["booking_code"] = str(normalized.get("bookingCode") or "")
                 run["booking_email"] = str(normalized.get("customerEmail") or "")
                 current["run"] = run
+            try:
+                directory_synced = save_selected_booking(normalized)
+            except Exception:
+                self.persistence_degraded = True
+                raise
             self.local_players_count_override = players_count
+            self.selected_booking = normalized
             self.game_state = current
+            if not directory_synced:
+                self.persistence_degraded = True
+                if require_durable:
+                    raise RuntimeError("Die Buchungsauswahl wurde sichtbar gespeichert, aber nicht dauerhaft bestätigt.")
         return normalized
 
     def get_selected_booking(self) -> dict[str, Any]:
         with self.lock:
-            return json.loads(json.dumps(self.selected_booking or TEST_BOOKING_DEFAULT))
+            return json.loads(json.dumps(self.selected_booking or EMPTY_BOOKING_SELECTION))
 
     def _clear_node_payload_locked(self, node_id: str) -> None:
         existing = self.node_states.get(node_id, {}) or {}
@@ -779,27 +1601,6 @@ class DashboardStore:
         with self.lock:
             self.lights[light_name] = payload
 
-    def set_hint_count(self, riddle_id: str, count: int) -> int:
-        name = str(riddle_id or "").strip()
-        if not name:
-            return 0
-        with self.lock:
-            value = max(0, int(count or 0))
-            self.local_hint_counts[name] = value
-            save_hint_store(self.local_hint_counts)
-            return value
-
-    def change_hint_count(self, riddle_id: str, delta: int) -> int:
-        name = str(riddle_id or "").strip()
-        if not name:
-            return 0
-        with self.lock:
-            current = max(0, int(self.local_hint_counts.get(name, 0) or 0))
-            value = max(0, current + int(delta or 0))
-            self.local_hint_counts[name] = value
-            save_hint_store(self.local_hint_counts)
-            return value
-
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             game = json.loads(json.dumps(self.game_state))
@@ -809,6 +1610,7 @@ class DashboardStore:
             riddle_states = json.loads(json.dumps(self.riddle_states))
             node_last_hb = dict(self.node_last_hb)
             local_hint_counts = dict(self.local_hint_counts)
+            start_assignment = json.loads(json.dumps(self.start_assignment))
 
         return {
             "game": self._build_game_summary(game),
@@ -817,7 +1619,13 @@ class DashboardStore:
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
             "booking": self.get_selected_booking(),
-            "meta": {"broker": BROKER_HOST, "website_api_configured": bool(website_api_config()[0]), "website_api_base": website_api_config()[0]},
+            "start_assignment": start_assignment,
+            "meta": {
+                "broker": BROKER_HOST,
+                "website_api_configured": bool(website_api_config()[0]),
+                "website_api_base": website_api_config()[0],
+                "persistence_degraded": bool(self.persistence_degraded),
+            },
         }
 
     def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
@@ -891,12 +1699,17 @@ class DashboardStore:
             current_timing.get("live_time_s"),
             current_timing.get("solve_time_s"),
         )
+        recovery = game.get("recovery") if isinstance(game.get("recovery"), dict) else {}
+        recovery_restored = bool(recovery.get("restored"))
+        phase_display = f"{phase}: {phase_name_pretty}"
+        if recovery_restored:
+            phase_display += " (nach Neustart wiederhergestellt)"
 
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
             "phase_name_pretty": phase_name_pretty,
-            "phase_display": f"{phase}: {phase_name_pretty}",
+            "phase_display": phase_display,
             "last_phase": last_phase,
             "last_phase_name": last_name,
             "last_phase_name_pretty": last_name_pretty,
@@ -911,6 +1724,8 @@ class DashboardStore:
             "run_id": run.get("run_id") or run.get("id") or "",
             "leaderboard_code": str(run.get("leaderboard_code") or "").strip(),
             "ended_at": run.get("ended_at"),
+            "recovery_restored": recovery_restored,
+            "recovery_checkpoint_saved_at": recovery.get("checkpoint_saved_at"),
         }
 
     def _build_node_summary(self, node_last_hb: dict[str, float], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -948,7 +1763,7 @@ class DashboardStore:
                 "kind": item["kind"],
                 "is_open": is_open,
                 "state_label": state_label,
-                "button": "Close" if action == "close" else "Open",
+                "button": "Schließen" if action == "close" else "Öffnen",
                 "state_class": "is-open" if is_open else ("is-closed" if is_open is False else "is-unknown"),
             })
         return out
@@ -956,30 +1771,92 @@ class DashboardStore:
     def _build_light_summary(self, lights: dict[str, dict[str, Any]], node_states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
         star_sky_state = node_states.get("star_sky", {})
-        star_enabled = bool(star_sky_state.get("enabled") or star_sky_state.get("moduleEnabled") or star_sky_state.get("module_enabled"))
+        if not isinstance(star_sky_state, dict):
+            star_sky_state = {}
+
+        def component_state(payload: Any) -> tuple[bool, int] | None:
+            if not isinstance(payload, dict) or not payload:
+                return None
+            pct: int | None = None
+            try:
+                if payload.get("pct") is not None:
+                    pct = max(0, min(100, int(payload["pct"])))
+            except (TypeError, ValueError):
+                pct = None
+            raw_on = payload.get("on")
+            if isinstance(raw_on, bool):
+                is_on = raw_on
+            elif isinstance(raw_on, (int, float)) and not isinstance(raw_on, bool):
+                is_on = raw_on > 0
+            elif isinstance(raw_on, str) and raw_on.strip().lower() in {"on", "true", "1"}:
+                is_on = True
+            elif isinstance(raw_on, str) and raw_on.strip().lower() in {"off", "false", "0"}:
+                is_on = False
+            elif pct is not None:
+                is_on = pct > 0
+            else:
+                return None
+            return is_on, (pct if pct is not None else (100 if is_on else 0))
+
         for key, cfg in LIGHT_GROUPS.items():
-            entries = [lights.get(name, {}) for name in cfg["lights"]]
-            known = [x for x in entries if x]
-            any_on = any(bool(x.get("on", False)) for x in known)
-            pct_values = []
-            for x in known:
-                try:
-                    pct_values.append(int(x.get("pct", 0)))
-                except Exception:
-                    pass
-            pct = max(pct_values) if pct_values else (100 if any_on else 0)
+            components = [state for name in cfg["lights"] if (state := component_state(lights.get(name))) is not None]
+            total_components = len(cfg["lights"])
             if key == "star_sky":
-                any_on = any_on or star_enabled
-                pct = 100 if any_on else 0
+                total_components += 1
+                enabled_key = next(
+                    (name for name in ("enabled", "moduleEnabled", "module_enabled") if name in star_sky_state),
+                    None,
+                )
+                if enabled_key is not None:
+                    star_component = component_state({"on": star_sky_state[enabled_key]})
+                    if star_component is not None:
+                        components.append(star_component)
+
+            known_count = len(components)
+            on_values = [is_on for is_on, _pct in components]
+            effective_pct_values = [pct_value if is_on else 0 for is_on, pct_value in components]
+            any_on = any(on_values)
+            all_on = known_count == total_components and known_count > 0 and all(on_values)
+            partial = 0 < known_count < total_components
+            mixed = len(set(on_values)) > 1 or (
+                bool(cfg.get("dimmable"))
+                and len(set(effective_pct_values)) > 1
+            )
+            pct = max(effective_pct_values) if effective_pct_values else 0
+            pct_min = min(effective_pct_values) if effective_pct_values else 0
+            if mixed:
+                state = "mixed"
+                state_label = f"gemischt ({pct_min}-{pct}%)" if cfg.get("dimmable") else "gemischt"
+            elif partial:
+                state = "partial"
+                known_state = "an" if any_on else "aus"
+                state_label = f"teilweise bekannt ({known_state}, {pct}%)" if cfg.get("dimmable") else f"teilweise bekannt ({known_state})"
+            elif not components:
+                state = "unknown"
+                state_label = "unbekannt"
+            elif all_on:
+                state = "on"
+                state_label = f"an ({pct}%)" if cfg.get("dimmable") else "an"
+            else:
+                state = "off"
+                state_label = "aus (0%)" if cfg.get("dimmable") else "aus"
             out.append({
                 "id": key,
                 "label": cfg["label"],
-                "on": any_on,
+                "on": all_on,
+                "any_on": any_on,
+                "all_on": all_on,
+                "state": state,
+                "mixed": mixed,
+                "partial": partial,
+                "known_count": known_count,
+                "component_count": total_components,
                 "pct": pct,
-                "button": "Off" if any_on else "On",
+                "pct_min": pct_min,
+                "button": "Aus" if any_on else "An",
                 "dimmable": bool(cfg.get("dimmable")),
-                "state_label": f"{'on' if any_on else 'off'} ({pct}%)" if cfg.get("dimmable") else ("on" if any_on else "off"),
-                "state_class": "is-on" if any_on else "is-off",
+                "state_label": state_label,
+                "state_class": f"is-{state}",
             })
         return out
 
@@ -1014,10 +1891,13 @@ class DashboardStore:
 
             skipped = bool(timing.get("skipped", False)) or timing_status == "skipped"
             not_solved = bool(timing.get("not_solved", False)) or timing_status == "not_solved"
+            reset_pending = bool(timing.get("reset_pending", False)) or timing_status == "reset"
             solved_by_timing = bool(timing.get("solved", False)) or timing_status == "solved"
             active_by_timing = bool(timing.get("active", False)) or timing_status == "active"
 
-            if skipped:
+            if reset_pending:
+                phase_state = "reset"
+            elif skipped:
                 phase_state = "skipped"
             elif not_solved:
                 phase_state = "not_solved"
@@ -1056,7 +1936,14 @@ class DashboardStore:
                 timing.get("solve_time_s"),
             )
             hint_count = int(timing.get("hint_count") if timing.get("hint_count") is not None else local_hint_counts.get(riddle_id, 0) or 0)
-            phase_state_label = "not solved" if phase_state == "not_solved" else phase_state
+            phase_state_label = {
+                "solved": "Gelöst",
+                "active": "Aktiv",
+                "pending": "Ausstehend",
+                "skipped": "Übersprungen",
+                "not_solved": "Nicht gelöst",
+                "reset": "Zurückgesetzt",
+            }.get(phase_state, phase_state)
 
             out.append({
                 "id": riddle_id,
@@ -1081,7 +1968,10 @@ class DashboardStore:
                 "live_time_s": _first_seconds(timing.get("live_time_s")),
                 "skipped": skipped,
                 "not_solved": not_solved,
-                "can_solve": phase_state == "active",
+                "reset_pending": reset_pending,
+                "resettable": riddle_id in {"prison", "wheel", "chains", "tangram", "magnet"},
+                "can_solve": phase_state in {"active", "reset"},
+                "solve_advances": phase_state == "active" or (phase_state == "reset" and riddle_id in active),
             })
         return out
 
@@ -1177,6 +2067,8 @@ class DashboardStore:
             "rook": "ROOK",
             "king": "KING",
         }
+        slot_labels = {"queen": "Dame", "knight": "Pferd", "rook": "Turm", "king": "König"}
+        value_labels = {"QUEEN": "Dame", "HORSE": "Pferd", "KNIGHT": "Pferd", "ROOK": "Turm", "KING": "König", "EMPTY": "Leer", "UNKNOWN": "Unbekannt"}
         raw_labels = state_payload.get("reader_labels") or state_payload.get("reader_label") or state_payload
         labels: dict[str, Any] = {}
         if isinstance(raw_labels, dict):
@@ -1187,11 +2079,13 @@ class DashboardStore:
 
         out: list[dict[str, Any]] = []
         for slot, target in expected.items():
-            value = str(labels.get(slot, "EMPTY")).strip().upper() or "EMPTY"
+            raw_value = labels.get(slot, labels.get("horse", "EMPTY") if slot == "knight" else "EMPTY")
+            value = str(raw_value).strip().upper() or "EMPTY"
+            normalized_value = "HORSE" if value in {"HORSE", "KNIGHT"} else value
             out.append({
-                "slot": slot.capitalize(),
-                "value": value,
-                "correct": value == target,
+                "slot": slot_labels.get(slot, slot.capitalize()),
+                "value": value_labels.get(value, value_labels.get(normalized_value, normalized_value)),
+                "correct": normalized_value == target,
             })
         return out
 
@@ -1273,8 +2167,39 @@ class DashboardStore:
 
 
 store = DashboardStore()
+node_log_buffer = NodeLogBuffer()
+_last_requested_log_levels: dict[str, dict[str, str]] = {}
+_last_requested_log_levels_lock = threading.RLock()
+_log_level_publish_locks = {node: threading.Lock() for node in LOG_NODE_IDS}
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"), static_folder=str(BASE_DIR / "static"))
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
+if hasattr(mqtt_client, "suppress_exceptions"):
+    mqtt_client.suppress_exceptions = True
+_start_assignment_workers: dict[str, threading.Thread] = {}
+_start_assignment_workers_lock = threading.Lock()
+
+
+def _remember_requested_log_level(node: str, level: str, *, requested_at: datetime | None = None) -> dict[str, str]:
+    timestamp = (requested_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    record = {
+        "level": level,
+        "requested_at": timestamp.isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    with _last_requested_log_levels_lock:
+        _last_requested_log_levels[node] = record
+    return dict(record)
+
+
+def _requested_log_levels_snapshot() -> dict[str, dict[str, str]]:
+    with _last_requested_log_levels_lock:
+        return {node: dict(record) for node, record in _last_requested_log_levels.items()}
+
+
+def _publish_requested_log_level(node: str, level: str) -> dict[str, str] | None:
+    with _log_level_publish_locks[node]:
+        if not mqtt_publish(f"{node}/log/level", level):
+            return None
+        return _remember_requested_log_level(node, level)
 
 
 
@@ -1609,7 +2534,7 @@ def build_editable_columns(rows: list[dict[str, Any]], *, exclude: set[str] | No
 
 def list_games_from_db() -> list[dict[str, Any]]:
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
 
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -1928,13 +2853,13 @@ def _ensure_table_schema(src: sqlite3.Connection, dst: sqlite3.Connection, table
         (table_name,),
     ).fetchone()
     if row is None or not row[0]:
-        raise RuntimeError(f"Could not read schema for table {table_name}")
+        raise RuntimeError(f"Das Datenbankschema der Tabelle {table_name} konnte nicht gelesen werden.")
     dst.execute(row[0])
 
 
 def move_game_to_removed(game_id: str) -> None:
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
 
     REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1944,7 +2869,7 @@ def move_game_to_removed(game_id: str) -> None:
 
         game_row = src.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
         if game_row is None:
-            raise ValueError(f"No game found for id {game_id}.")
+            raise ValueError(f"Kein Spiel mit der ID {game_id} gefunden.")
 
         riddle_rows = src.execute("SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
         hint_rows = src.execute("SELECT * FROM game_hints WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
@@ -1973,7 +2898,7 @@ def move_game_to_removed(game_id: str) -> None:
 
 def load_game_from_db(game_id: str) -> dict[str, Any]:
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
 
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -2026,17 +2951,17 @@ EDITABLE_TABLES: dict[str, dict[str, Any]] = {
 def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
     config = EDITABLE_TABLES.get(table_name)
     if config is None:
-        raise ValueError(f"Table {table_name} is not editable.")
+        raise ValueError(f"Die Tabelle {table_name} kann nicht bearbeitet werden.")
     if not updates:
         return
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
 
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         columns_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
         if not columns_info:
-            raise ValueError(f"Could not read schema for table {table_name}.")
+            raise ValueError(f"Das Datenbankschema der Tabelle {table_name} konnte nicht gelesen werden.")
 
         editable_columns = {
             str(col[1])
@@ -2047,7 +2972,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         if table_name == "games":
             current = conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE rowid = ?", (rowid,)).fetchone()
             if current is None:
-                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+                raise ValueError(f"Zeile {rowid} wurde in der Tabelle {table_name} nicht gefunden.")
             normalized_updates: dict[str, Any] = {}
             for key, value in updates.items():
                 column = str(key or "").strip()
@@ -2060,7 +2985,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 elif column in editable_columns:
                     normalized_updates[column] = value
                 else:
-                    raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+                    raise ValueError(f"Die Spalte {column or key!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
 
             if normalized_updates:
                 set_clause = ", ".join(f"{column} = ?" for column in normalized_updates.keys())
@@ -2073,7 +2998,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         if table_name == "game_riddles":
             current = conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE rowid = ?", (rowid,)).fetchone()
             if current is None:
-                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+                raise ValueError(f"Zeile {rowid} wurde in der Tabelle {table_name} nicht gefunden.")
             current_row = _row_to_dict(current) or {}
             game_id = str(current_row.get("game_id") or "")
             current_riddle = str(current_row.get("riddle") or "")
@@ -2103,7 +3028,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 elif column in editable_columns:
                     direct_updates[column] = value
                 else:
-                    raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+                    raise ValueError(f"Die Spalte {column or key!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
 
             if pending_riddle_name != current_riddle:
                 conn.execute(
@@ -2140,7 +3065,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         for key, value in updates.items():
             column = str(key or "").strip()
             if not column or column not in editable_columns:
-                raise ValueError(f"Column {column or key!r} is not editable in table {table_name}.")
+                raise ValueError(f"Die Spalte {column or key!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
             normalized_updates[column] = value
 
         if not normalized_updates:
@@ -2148,7 +3073,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
 
         current = conn.execute(f"SELECT rowid FROM {table_name} WHERE rowid = ?", (rowid,)).fetchone()
         if current is None:
-            raise ValueError(f"Row {rowid} not found in table {table_name}.")
+            raise ValueError(f"Zeile {rowid} wurde in der Tabelle {table_name} nicht gefunden.")
 
         set_clause = ", ".join(f"{column} = ?" for column in normalized_updates.keys())
         values = [normalized_updates[column] for column in normalized_updates.keys()]
@@ -2182,23 +3107,31 @@ def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any,
         (TOPIC_GAME_STATE, 0),
         ("+/state", 0),
         ("+/hb", 0),
+        ("+/log", 0),
         ("maglock/lock/+/state", 0),
         ("lighting/mosfet/+/state", 0),
     ]:
         client.subscribe(topic, qos=qos)
 
 
-def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+def _handle_mqtt_message(msg: mqtt.MQTTMessage) -> None:
     topic = msg.topic
+    if isinstance(topic, str) and topic.endswith("/log") and len(topic.split("/")) == 2:
+        entry = parse_node_log(topic, msg.payload)
+        if entry is not None:
+            node_log_buffer.append(entry)
+        return
     data = parse_json_payload(msg.payload)
     if data is None:
         return
     if topic == TOPIC_DASHBOARD_STATE:
         store.update_game_state(data)
+        _maybe_resume_persisted_start_assignment()
         return
     if topic == TOPIC_GAME_STATE:
         # Fallback for older game masters, and phase/timer merge for the firmware-safe state.
         store.update_game_state(data, merge=("run" not in data))
+        _maybe_resume_persisted_start_assignment()
         return
     if topic.endswith("/hb"):
         node_id = topic.split("/", 1)[0]
@@ -2221,15 +3154,44 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
         return
 
 
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
-mqtt_client.connect_async(BROKER_HOST, BROKER_PORT, keepalive=30)
-mqtt_client.loop_start()
+def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+    try:
+        _handle_mqtt_message(msg)
+    except Exception:
+        LOG.exception(
+            "Dashboard MQTT callback failed topic=%s; exception suppressed so the network loop can continue",
+            getattr(msg, "topic", ""),
+        )
 
 
-def mqtt_publish(topic: str, payload: dict[str, Any] | str) -> None:
-    body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
-    mqtt_client.publish(topic, body, qos=0, retain=False)
+def mqtt_is_connected() -> bool:
+    try:
+        return bool(mqtt_client.is_connected())
+    except Exception:
+        return False
+
+
+def mqtt_publish(topic: str, payload: dict[str, Any] | str) -> bool:
+    try:
+        if not mqtt_is_connected():
+            return False
+        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+        info = mqtt_client.publish(topic, body, qos=0, retain=False)
+        return int(getattr(info, "rc", -1)) == int(getattr(mqtt, "MQTT_ERR_SUCCESS", 0))
+    except Exception:
+        return False
+
+
+def mqtt_publish_batch(commands: list[tuple[str, dict[str, Any] | str]]) -> dict[str, Any]:
+    queued = [mqtt_publish(topic, payload) for topic, payload in commands]
+    queued_count = sum(result is True for result in queued)
+    return {
+        "mqtt_queued": queued_count == len(commands),
+        "command_count": len(commands),
+        "queued_count": queued_count,
+        "failed_commands": [index for index, result in enumerate(queued) if result is not True],
+        "partial": 0 < queued_count < len(commands),
+    }
 
 
 def current_raw_run_payload() -> dict[str, Any]:
@@ -2237,7 +3199,7 @@ def current_raw_run_payload() -> dict[str, Any]:
         raw_game_state = json.loads(json.dumps(store.game_state))
     run = raw_game_state.get("run") if isinstance(raw_game_state.get("run"), dict) else None
     if not run:
-        raise ValueError("No current run is available yet.")
+        raise ValueError("Es ist noch kein aktueller Spieldurchlauf verfügbar.")
     return run
 
 
@@ -2245,7 +3207,7 @@ def website_json(path: str, payload: dict[str, Any] | None = None, method: str |
     website_api_base, website_api_token = website_api_config()
     if not website_api_base:
         checked = ", ".join(str(path) for path in _candidate_env_paths())
-        raise RuntimeError(f"ER1_WEBSITE_API_BASE is not configured on the dashboard. Checked: {checked}")
+        raise RuntimeError(f"ER1_WEBSITE_API_BASE ist im Dashboard nicht konfiguriert. Geprüft: {checked}")
     url = f"{website_api_base}{path if path.startswith('/') else '/' + path}"
     headers = {"Accept": "application/json"}
     body = None
@@ -2303,16 +3265,16 @@ def _sync_website_bookings_db_via_paramiko(cfg: dict[str, Any]) -> Path:
     backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
     client = _paramiko_connect(cfg, timeout=cfg["timeout"] + 10)
     try:
-        _paramiko_exec(client, backup_command, timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
+        _paramiko_exec(client, backup_command, timeout=cfg["timeout"] + 20, label="SSH-SQLite-Sicherung")
         try:
             with client.open_sftp() as sftp:
                 sftp.get(remote_tmp, str(local_tmp))
         except Exception as exc:
-            raise RuntimeError(f"sftp website DB download failed: {exc}") from exc
+            raise RuntimeError(f"Der SFTP-Download der Website-Datenbank ist fehlgeschlagen: {exc}") from exc
         local_tmp.replace(local_path)
     finally:
         try:
-            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="SSH-Bereinigung")
         except Exception:
             pass
         try:
@@ -2332,7 +3294,7 @@ def sync_website_bookings_db_via_ssh() -> Path:
     """
     cfg = booking_ssh_config()
     if not cfg["host"] or not cfg["user"] or not cfg["db_path"]:
-        raise RuntimeError("Website DB SSH sync is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_DB_PATH.")
+        raise RuntimeError("Die SSH-Synchronisierung der Website-Datenbank ist nicht konfiguriert. ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER und ER1_WEBSITE_DB_PATH müssen gesetzt sein.")
 
     if _ssh_backend(cfg) == "paramiko":
         return _sync_website_bookings_db_via_paramiko(cfg)
@@ -2343,7 +3305,7 @@ def sync_website_bookings_db_via_ssh() -> Path:
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_tmp = local_path.with_suffix(local_path.suffix + ".tmp")
     backup_command = _remote_sqlite_backup_command(cfg, remote_tmp)
-    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 20, label="ssh sqlite backup")
+    _run_process(_ssh_base(cfg) + [backup_command], timeout=cfg["timeout"] + 20, label="SSH-SQLite-Sicherung")
     scp_cmd = [
         "scp",
         "-P", str(cfg["port"]),
@@ -2354,11 +3316,11 @@ def sync_website_bookings_db_via_ssh() -> Path:
         str(local_tmp),
     ]
     try:
-        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp website DB")
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="SCP-Übertragung der Website-Datenbank")
         local_tmp.replace(local_path)
     finally:
         try:
-            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="SSH-Bereinigung")
         except Exception:
             pass
     return local_path
@@ -2374,13 +3336,13 @@ def _booking_label(row: dict[str, Any]) -> str:
 
 def list_bookings_from_local_db(db_path: Path, limit: int = 1000) -> list[dict[str, Any]]:
     if not db_path.exists():
-        raise FileNotFoundError(f"Copied website booking DB not found: {db_path}")
+        raise FileNotFoundError(f"Die kopierte Website-Buchungsdatenbank wurde nicht gefunden: {db_path}")
     safe_limit = max(1, min(5000, int(limit or 1000)))
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if "bookings" not in tables:
-            raise RuntimeError(f"Copied website DB has no bookings table: {db_path}")
+            raise RuntimeError(f"Die kopierte Website-Datenbank enthält keine Buchungstabelle: {db_path}")
         rows = conn.execute(
             """
             SELECT id, booking_code, date, slot, players, language, customer_name, customer_email,
@@ -2416,6 +3378,704 @@ def list_bookings_via_ssh_copy(limit: int = 1000) -> tuple[list[dict[str, Any]],
     return list_bookings_from_local_db(local_db, limit), local_db, True
 
 
+def _booking_is_cancelled(booking: dict[str, Any]) -> bool:
+    status = f"{booking.get('bookingStatus', '')} {booking.get('paymentStatus', '')}".lower()
+    status = "".join(char for char in unicodedata.normalize("NFD", status) if not unicodedata.combining(char))
+    return bool(re.search(r"cancel|annull|storn|refund|ruckerstatt|rueckerstatt|ruckzahl|rimbors|cancellat", status))
+
+
+def _last_sunday_of_month(year: int, month: int) -> int:
+    next_month = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    return last_day.day - ((last_day.weekday() + 1) % 7)
+
+
+def _rome_datetime_from_local(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return _rome_datetime_from_timestamp(value.timestamp())
+    if EUROPE_ROME_TZ is not None:
+        return value.replace(tzinfo=EUROPE_ROME_TZ)
+    dst_start = datetime(value.year, 3, _last_sunday_of_month(value.year, 3), 3)
+    dst_end = datetime(value.year, 10, _last_sunday_of_month(value.year, 10), 3)
+    offset_hours = 2 if dst_start <= value < dst_end else 1
+    return value.replace(tzinfo=timezone(timedelta(hours=offset_hours)))
+
+
+def _rome_datetime_from_timestamp(value: float) -> datetime:
+    if EUROPE_ROME_TZ is not None:
+        return datetime.fromtimestamp(value, tz=EUROPE_ROME_TZ)
+    utc_value = datetime.fromtimestamp(value, tz=timezone.utc)
+    dst_start = datetime(utc_value.year, 3, _last_sunday_of_month(utc_value.year, 3), 1, tzinfo=timezone.utc)
+    dst_end = datetime(utc_value.year, 10, _last_sunday_of_month(utc_value.year, 10), 1, tzinfo=timezone.utc)
+    offset_hours = 2 if dst_start <= utc_value < dst_end else 1
+    return utc_value.astimezone(timezone(timedelta(hours=offset_hours)))
+
+
+def _parse_start_clicked_at_ms(value: Any, *, now_epoch: float | None = None) -> datetime:
+    if isinstance(value, bool):
+        raise ValueError("Der Startzeitpunkt fehlt oder ist ungültig.")
+    try:
+        epoch_ms = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Der Startzeitpunkt fehlt oder ist ungültig.") from exc
+    if not math.isfinite(epoch_ms) or not epoch_ms.is_integer():
+        raise ValueError("Der Startzeitpunkt fehlt oder ist ungültig.")
+
+    server_now = time.time() if now_epoch is None else float(now_epoch)
+    clicked_at = epoch_ms / 1000.0
+    if clicked_at < server_now - START_CLICK_MAX_AGE_S or clicked_at > server_now + START_CLICK_MAX_FUTURE_S:
+        raise ValueError("Der Startzeitpunkt liegt außerhalb des zulässigen Zeitfensters.")
+    return _rome_datetime_from_timestamp(clicked_at)
+
+
+def _booking_start_in_rome(booking: dict[str, Any]) -> datetime | None:
+    date_text = str(booking.get("date") or "").strip()
+    slot_text = str(booking.get("slot") or "").strip()
+    time_match = re.search(r"(\d{1,2})[:.](\d{2})", slot_text)
+    if not date_text or not time_match:
+        return None
+    date_match = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", date_text)
+    if date_match:
+        year, month, day = (int(value) for value in date_match.groups())
+    else:
+        date_match = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})", date_text)
+        if not date_match:
+            return None
+        day, month, year = (int(value) for value in date_match.groups())
+    try:
+        return _rome_datetime_from_local(datetime(year, month, day, int(time_match.group(1)), int(time_match.group(2))))
+    except (TypeError, ValueError):
+        return None
+
+
+def nearest_booking_for_start(bookings: list[dict[str, Any]], reference_time: datetime) -> dict[str, Any] | None:
+    reference = _rome_datetime_from_local(reference_time)
+    candidates: list[tuple[float, datetime, str, dict[str, Any]]] = []
+    for raw_booking in bookings:
+        booking = normalize_booking_selection(raw_booking)
+        if booking.get("kind") != "booking" or _booking_is_cancelled(booking):
+            continue
+        appointment = _booking_start_in_rome(booking)
+        if appointment is None:
+            continue
+        candidates.append((
+            abs((appointment - reference).total_seconds()),
+            appointment,
+            str(booking.get("id") or booking.get("bookingCode") or ""),
+            booking,
+        ))
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    return candidates[0][3] if candidates else None
+
+
+def _select_booking_for_start_claim(
+    claim: dict[str, Any],
+    bookings: list[dict[str, Any]],
+    reference_time: datetime,
+) -> dict[str, Any] | None:
+    snapshot = claim.get("booking_snapshot")
+    if isinstance(snapshot, dict):
+        selected = normalize_booking_selection(snapshot)
+        return selected if selected.get("kind") == "booking" else None
+
+    booking_id = str(claim.get("booking_id") or "").strip()
+    if booking_id:
+        for raw_booking in bookings:
+            selected = normalize_booking_selection(raw_booking)
+            if str(selected.get("id") or "").strip() == booking_id:
+                return None if _booking_is_cancelled(selected) else selected
+        return None
+
+    return nearest_booking_for_start(bookings, reference_time)
+
+
+def load_bookings_for_start_assignment(limit: int = 1000) -> list[dict[str, Any]]:
+    try:
+        bookings, _local_db, _fresh = list_bookings_via_ssh_copy(limit)
+        return bookings
+    except Exception as fresh_error:
+        local_db = Path(booking_ssh_config()["local_db_path"]).expanduser()
+        try:
+            if local_db.exists():
+                return list_bookings_from_local_db(local_db, limit)
+        except Exception as cache_error:
+            raise RuntimeError(
+                f"Buchungen konnten weder aktuell noch aus dem Zwischenspeicher geladen werden: {fresh_error}; Zwischenspeicher: {cache_error}"
+            ) from cache_error
+        raise RuntimeError(f"Buchungen konnten nicht geladen werden: {fresh_error}") from fresh_error
+
+
+def _booking_selection_key(booking: dict[str, Any]) -> tuple[Any, ...]:
+    normalized = normalize_booking_selection(booking)
+    return (
+        normalized.get("kind"),
+        str(normalized.get("id") or ""),
+        str(normalized.get("bookingCode") or ""),
+        str(normalized.get("customerEmail") or ""),
+        str(normalized.get("date") or ""),
+        str(normalized.get("slot") or ""),
+        int(normalized.get("players") or 0),
+        str(normalized.get("language") or "de"),
+    )
+
+
+def _booking_selection_identity(booking: dict[str, Any]) -> tuple[Any, ...]:
+    return _booking_selection_key(booking)[:-1]
+
+
+def publish_booking_selection(
+    booking: dict[str, Any],
+    *,
+    expected_run_id: str = "",
+    supersede_automatic: bool = False,
+) -> dict[str, Any]:
+    selected = normalize_booking_selection(booking)
+    with store.lock:
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        if expected_run_id:
+            if current_run_id != expected_run_id or not 3 <= phase <= 13:
+                raise ValueError("Die Buchungszuordnung gehört nicht mehr zum aktiven Spiel.")
+        cancellation_pending = store.start_assignment.get("cancellation_durability_pending") is True
+        if supersede_automatic and (store.start_assignment.get("active") or cancellation_pending):
+            assignment_run_id = str(store.start_assignment.get("run_id") or "").strip()
+            if not current_run_id or assignment_run_id != current_run_id:
+                raise ValueError("Die automatische Zuordnung gehört zu einem anderen vorbereiteten Lauf.")
+            current_selection = normalize_booking_selection(store.selected_booking)
+            if selected.get("kind") in {"empty", "test"}:
+                raise ValueError("Während der automatischen Zuordnung kann keine leere oder Testbuchung gespeichert werden.")
+            if _booking_selection_identity(current_selection) == _booking_selection_identity(selected):
+                raise ValueError("Die Tipp-Sprache kann erst nach der automatischen Buchungszuordnung geändert werden.")
+            cancellation_synced = store._set_start_assignment_locked({
+                **store.start_assignment,
+                "active": False,
+                "cancel_requested": True,
+                "cancellation_durability_pending": True,
+                "intent_state": "terminal",
+                "status": "manual",
+                "message": "Die automatische Zuordnung wurde durch die manuelle Buchungsauswahl beendet.",
+            })
+            if not cancellation_synced:
+                store.start_assignment["cancellation_durability_pending"] = True
+                raise RuntimeError(
+                    "Die automatische Zuordnung wurde nicht dauerhaft beendet; der manuelle Buchungsbefehl wurde nicht gesendet."
+                )
+            store.start_assignment["cancellation_durability_pending"] = False
+        if supersede_automatic:
+            selected = store.set_selected_booking(
+                selected,
+                expected_run_id=expected_run_id,
+                require_durable=True,
+            )
+        payload: dict[str, Any] = {"cmd": "set_booking", "booking": selected}
+        if expected_run_id:
+            payload["expected_run_id"] = expected_run_id
+        if not mqtt_publish(TOPIC_GAME_CMD, payload):
+            raise RuntimeError("Der Buchungsbefehl konnte nicht an MQTT übergeben werden.")
+    return selected
+
+
+def update_hint_language_selection(language: Any, *, expected_run_id: str = "") -> dict[str, Any]:
+    with store.lock:
+        if store.start_assignment.get("active"):
+            raise ValueError("Die Tipp-Sprache kann erst nach der automatischen Buchungszuordnung geändert werden.")
+
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        current_selection = normalize_booking_selection(store.selected_booking)
+        if 3 <= phase <= 13 and current_selection.get("kind") not in {"booking", "test"}:
+            raise ValueError("Ohne bereits ausgewählte Buchung kann die Tipp-Sprache im aktiven Spiel nicht geändert werden.")
+
+        scoped_run_id = expected_run_id or (current_run_id if 3 <= phase <= 13 else "")
+        selected = normalize_booking_selection({
+            **current_selection,
+            "language": normalize_hint_language(language),
+        })
+        selected = store.set_selected_booking(
+            selected,
+            expected_run_id=scoped_run_id,
+            require_durable=True,
+        )
+        return publish_booking_selection(selected, expected_run_id=scoped_run_id)
+
+
+def publish_hint_count_change(riddle: str, *, delta: int | None = None, count: int | None = None) -> int:
+    name = str(riddle or "").strip()
+    if not name:
+        raise ValueError("Rätsel-ID fehlt")
+    with store.lock:
+        previous = max(0, int(store.local_hint_counts.get(name, 0) or 0))
+        value = max(0, int(count or 0)) if count is not None else max(0, previous + int(delta or 0))
+        store.local_hint_counts[name] = value
+        try:
+            save_hint_store(store.local_hint_counts)
+        except Exception:
+            store.local_hint_counts[name] = previous
+            raise
+        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_hint_count", "riddle": name, "count": value}):
+            store.local_hint_counts[name] = previous
+            try:
+                save_hint_store(store.local_hint_counts)
+            except Exception:
+                pass
+            raise RuntimeError("Der Tippzähler konnte nicht an MQTT übergeben werden.")
+        return value
+
+
+def _start_assignment_worker_entry(claim_id: str) -> None:
+    try:
+        _run_start_booking_assignment(claim_id)
+    except Exception:
+        LOG.exception("Unhandled start-assignment worker failure claim_id=%s", claim_id)
+    finally:
+        with _start_assignment_workers_lock:
+            _start_assignment_workers.pop(claim_id, None)
+
+
+def _launch_start_assignment_worker(claim_id: str, *, resumed: bool = False) -> bool:
+    with _start_assignment_workers_lock:
+        existing = _start_assignment_workers.get(claim_id)
+        if existing is not None:
+            return True
+        worker = threading.Thread(
+            target=_start_assignment_worker_entry,
+            args=(claim_id,),
+            name=f"booking-assignment-{'resume-' if resumed else ''}{claim_id[:8]}",
+            daemon=True,
+        )
+        _start_assignment_workers[claim_id] = worker
+    try:
+        worker.start()
+    except Exception:
+        with _start_assignment_workers_lock:
+            if _start_assignment_workers.get(claim_id) is worker:
+                _start_assignment_workers.pop(claim_id, None)
+        LOG.critical("Could not launch start-assignment worker claim_id=%s", claim_id, exc_info=True)
+        return False
+    return True
+
+
+def _publish_start_for_claim(claim_id: str) -> bool:
+    with store.lock:
+        claim = store.start_assignment
+        if (
+            str(claim.get("claim_id") or "") != claim_id
+            or not claim.get("active")
+            or claim.get("cancel_requested")
+            or claim.get("intent_state") not in {"authorized", "published"}
+        ):
+            return False
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        if phase != 2 or current_run_id != str(claim.get("run_id") or "").strip():
+            return False
+        if not (claim.get("_intent_durable_runtime") or claim.get("_directory_barrier_confirmed")):
+            LOG.critical("Start intent has no successful durability barrier and will not execute claim_id=%s", claim_id)
+            return False
+        if claim.get("_start_published_runtime"):
+            return True
+
+        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "start"}):
+            try:
+                store._set_start_assignment_locked({
+                    **claim,
+                    "status": "start_pending",
+                    "message": "Der Startbefehl wartet auf einen erneuten MQTT-Versuch.",
+                })
+            except Exception:
+                LOG.error("Could not persist pending Start status claim_id=%s", claim_id, exc_info=True)
+            return False
+
+        claim["_start_published_runtime"] = True
+        try:
+            store._set_start_assignment_locked({
+                **claim,
+                "intent_state": "published",
+                "start_published": True,
+                "status": "waiting_for_run",
+                "message": "Startbefehl gesendet. Der neu gestartete Lauf wird für die Buchungszuordnung abgewartet.",
+            })
+        except Exception:
+            LOG.critical(
+                "Start was queued but its published status could not be persisted claim_id=%s",
+                claim_id,
+                exc_info=True,
+            )
+        return True
+
+
+def _ensure_active_start_assignment_worker() -> bool:
+    with store.lock:
+        claim = store.start_assignment
+        if not claim.get("active") or claim.get("cancel_requested"):
+            return False
+        claim_id = str(claim.get("claim_id") or "").strip()
+        run_id = str(claim.get("run_id") or "").strip()
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        durability_confirmed = bool(claim.get("_intent_durable_runtime") or claim.get("_directory_barrier_confirmed"))
+        if (
+            not claim_id
+            or not run_id
+            or current_run_id != run_id
+            or claim.get("intent_state") not in {"authorized", "published"}
+            or not durability_confirmed
+            or not 2 <= phase <= 13
+        ):
+            return False
+        resumed = bool(claim.get("_restored_from_disk"))
+
+    if phase == 2 and not _publish_start_for_claim(claim_id):
+        return False
+
+    if phase >= 3:
+        with store.lock:
+            current_claim = store.start_assignment
+            if (
+                str(current_claim.get("claim_id") or "") != claim_id
+                or not current_claim.get("active")
+                or current_claim.get("cancel_requested")
+            ):
+                return False
+            current_claim["_start_published_runtime"] = True
+            if current_claim.get("intent_state") == "authorized":
+                try:
+                    store._set_start_assignment_locked({
+                        **current_claim,
+                        "intent_state": "published",
+                        "start_published": True,
+                        "status": "loading_bookings",
+                        "message": "Spiel läuft. Die Buchungszuordnung wird fortgesetzt.",
+                    })
+                except Exception:
+                    LOG.error("Could not persist authoritative Start state claim_id=%s", claim_id, exc_info=True)
+    worker_started = _launch_start_assignment_worker(claim_id, resumed=resumed)
+    if worker_started and resumed:
+        with store.lock:
+            current_claim = store.start_assignment
+            if str(current_claim.get("claim_id") or "") == claim_id:
+                current_claim["_restored_from_disk"] = False
+    return worker_started
+
+
+def _run_start_booking_assignment(claim_id: str) -> None:
+    try:
+        claim = store.get_start_assignment()
+        if claim.get("claim_id") != claim_id or not claim.get("active") or claim.get("cancel_requested"):
+            return
+        reference_time = _rome_datetime_from_timestamp(float(claim["start_clicked_at_ms"]) / 1000.0)
+
+        deadline = time.monotonic() + 30.0
+        run_id = str(claim.get("run_id") or "").strip()
+        run_confirmed = False
+        while time.monotonic() < deadline:
+            with store.lock:
+                current_claim = store.start_assignment
+                if current_claim.get("claim_id") != claim_id or not current_claim.get("active") or current_claim.get("cancel_requested"):
+                    return
+                try:
+                    phase = int(store.game_state.get("phase", 0) or 0)
+                except Exception:
+                    phase = 0
+                run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+                candidate_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+                if 3 <= phase <= 13 and candidate_run_id == run_id:
+                    run_confirmed = True
+                    try:
+                        store._set_start_assignment_locked({
+                            **current_claim,
+                            "intent_state": "published",
+                            "start_published": True,
+                            "status": "loading_bookings",
+                            "run_id": run_id,
+                            "message": "Spiel läuft. Die zeitlich nächste Buchung wird im Hintergrund gesucht.",
+                        })
+                    except Exception:
+                        LOG.error("Could not persist booking lookup status claim_id=%s", claim_id, exc_info=True)
+                    break
+                if phase not in {2} and not 3 <= phase <= 13:
+                    store._set_start_assignment_locked({
+                        **current_claim,
+                        "active": False,
+                        "intent_state": "terminal",
+                        "status": "cancelled",
+                        "message": "Die Buchungszuordnung wurde verworfen, weil kein neu gestarteter Lauf aktiv ist.",
+                    })
+                    return
+            time.sleep(0.1)
+
+        if not run_confirmed:
+            store.update_start_assignment(
+                claim_id,
+                active=False,
+                intent_state="terminal",
+                status="failed",
+                message="Der neu gestartete Lauf wurde nicht rechtzeitig bestätigt; es wurde keine Buchung zugeordnet.",
+            )
+            return
+
+        claim = store.get_start_assignment()
+        if claim.get("claim_id") != claim_id or not claim.get("active") or claim.get("cancel_requested"):
+            return
+        retry_snapshot = claim.get("_candidate_retry_snapshot")
+        has_exact_candidate = isinstance(claim.get("booking_snapshot"), dict) or isinstance(retry_snapshot, dict)
+        bookings = [] if has_exact_candidate else load_bookings_for_start_assignment(1000)
+        if not isinstance(claim.get("booking_snapshot"), dict) and isinstance(retry_snapshot, dict):
+            claim = {**claim, "booking_snapshot": retry_snapshot}
+        selected = _select_booking_for_start_claim(claim, bookings, reference_time)
+        if selected is None:
+            claimed_booking_id = str(claim.get("booking_id") or "").strip()
+            message = (
+                "Die bereits ausgewählte Buchung ist nicht mehr verfügbar; es wurde keine andere Buchung zugeordnet."
+                if claimed_booking_id
+                else "Keine passende normale Buchung gefunden. Bitte die Buchung vor dem E-Mail-Versand manuell auswählen."
+            )
+            store.update_start_assignment(
+                claim_id,
+                active=False,
+                intent_state="terminal",
+                status="no_match",
+                message=message,
+            )
+            return
+        selected = normalize_booking_selection(selected)
+        if selected.get("kind") != "booking" or not str(selected.get("id") or "").strip():
+            raise ValueError("Die automatische Buchungsauswahl ist ungültig.")
+
+        with store.lock:
+            current_claim = store.start_assignment
+            current_run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+            current_run_id = str(current_run.get("run_id") or current_run.get("id") or "").strip()
+            try:
+                phase = int(store.game_state.get("phase", 0) or 0)
+            except Exception:
+                phase = 0
+            if current_claim.get("claim_id") != claim_id or not current_claim.get("active") or current_claim.get("cancel_requested") or current_run_id != run_id or not 3 <= phase <= 13:
+                return
+            existing_snapshot = current_claim.get("booking_snapshot") if isinstance(current_claim.get("booking_snapshot"), dict) else None
+            exact_candidate = bool(
+                existing_snapshot
+                and _booking_selection_key(existing_snapshot) == _booking_selection_key(selected)
+            )
+            candidate_durable = bool(
+                exact_candidate
+                and current_claim.get("candidate_state") in {"selected", "published"}
+                and (current_claim.get("_candidate_directory_synced") or current_claim.get("_directory_barrier_confirmed"))
+            )
+            if not candidate_durable:
+                candidate_value = {
+                    **current_claim,
+                    "candidate_state": "selected",
+                    "status": "candidate_selected",
+                    "booking_id": str(selected.get("id") or ""),
+                    "booking_snapshot": selected,
+                    "message": "Passende Buchung gefunden; die Auswahl wird dauerhaft gespeichert.",
+                }
+                try:
+                    candidate_synced = store._set_start_assignment_locked(candidate_value)
+                except Exception:
+                    current_claim["_candidate_retry_snapshot"] = json.loads(json.dumps(selected, ensure_ascii=False))
+                    current_claim["status"] = "candidate_pending"
+                    current_claim["message"] = "Die ausgewählte Buchung wartet auf einen erneuten Speicherversuch."
+                    store.persistence_degraded = True
+                    LOG.error("Automatic booking candidate could not be persisted claim_id=%s", claim_id, exc_info=True)
+                    return
+                if not candidate_synced:
+                    store.start_assignment["_candidate_directory_synced"] = False
+                    store.start_assignment["status"] = "candidate_pending"
+                    store.start_assignment["message"] = "Die ausgewählte Buchung wartet auf eine bestätigte Speicherung."
+                    LOG.critical("Automatic booking candidate is visible but not durably confirmed claim_id=%s", claim_id)
+                    return
+                store.start_assignment["_candidate_directory_synced"] = True
+
+        # Persistence can block long enough for a manual override to arrive.
+        # Reacquire and validate the claim before emitting the booking command.
+        with store.lock:
+            current_claim = store.start_assignment
+            current_run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+            current_run_id = str(current_run.get("run_id") or current_run.get("id") or "").strip()
+            try:
+                phase = int(store.game_state.get("phase", 0) or 0)
+            except Exception:
+                phase = 0
+            durable_snapshot = current_claim.get("booking_snapshot") if isinstance(current_claim.get("booking_snapshot"), dict) else None
+            if (
+                current_claim.get("claim_id") != claim_id
+                or not current_claim.get("active")
+                or current_claim.get("cancel_requested")
+                or current_run_id != run_id
+                or not 3 <= phase <= 13
+                or current_claim.get("candidate_state") not in {"selected", "published"}
+                or not durable_snapshot
+                or _booking_selection_key(durable_snapshot) != _booking_selection_key(selected)
+                or not (current_claim.get("_candidate_directory_synced") or current_claim.get("_directory_barrier_confirmed"))
+            ):
+                return
+
+            if not current_claim.get("_booking_published_runtime"):
+                try:
+                    selected = publish_booking_selection(selected, expected_run_id=run_id)
+                except RuntimeError as exc:
+                    try:
+                        store._set_start_assignment_locked({
+                            **current_claim,
+                            "status": "booking_publish_pending",
+                            "message": f"Der Buchungsbefehl wartet auf einen erneuten MQTT-Versuch: {exc}",
+                        })
+                    except Exception:
+                        LOG.error("Could not persist pending booking publication claim_id=%s", claim_id, exc_info=True)
+                    return
+                current_claim = store.start_assignment
+                current_claim["_booking_published_runtime"] = True
+                try:
+                    store._set_start_assignment_locked({
+                        **current_claim,
+                        "candidate_state": "published",
+                        "status": "waiting_for_apply",
+                        "message": "Buchungsbefehl gesendet; Bestätigung des aktiven Laufs wird abgewartet.",
+                    })
+                except Exception:
+                    LOG.critical(
+                        "Booking was queued but its published status could not be persisted claim_id=%s",
+                        claim_id,
+                        exc_info=True,
+                    )
+
+        confirmation_deadline = time.monotonic() + 10.0
+        expected_key = _booking_selection_key(selected)
+        while time.monotonic() < confirmation_deadline:
+            with store.lock:
+                current_claim = store.start_assignment
+                if current_claim.get("claim_id") != claim_id or not current_claim.get("active") or current_claim.get("cancel_requested"):
+                    return
+                try:
+                    phase = int(store.game_state.get("phase", 0) or 0)
+                except Exception:
+                    phase = 0
+                run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+                current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+                if current_run_id != run_id or not 3 <= phase <= 13:
+                    store._set_start_assignment_locked({
+                        **current_claim,
+                        "active": False,
+                        "intent_state": "terminal",
+                        "status": "cancelled",
+                        "message": "Die Buchungszuordnung wurde verworfen, weil der gestartete Lauf nicht mehr aktiv ist.",
+                    })
+                    return
+                run_booking = run.get("booking") if isinstance(run.get("booking"), dict) else {}
+                if run_booking and _booking_selection_key(run_booking) == expected_key:
+                    store.set_selected_booking(selected, expected_run_id=run_id)
+                    label = str(selected.get("label") or selected.get("bookingCode") or selected.get("id") or "Buchung")
+                    store._set_start_assignment_locked({
+                        **current_claim,
+                        "active": False,
+                        "intent_state": "terminal",
+                        "candidate_state": "published",
+                        "status": "assigned",
+                        "booking_id": str(selected.get("id") or ""),
+                        "message": f"Buchung automatisch zugeordnet: {label}",
+                    })
+                    return
+            time.sleep(0.1)
+
+        store.update_start_assignment(
+            claim_id,
+            active=False,
+            intent_state="terminal",
+            candidate_state="published",
+            status="unconfirmed",
+            message="Der Buchungsbefehl wurde gesendet, aber vom aktiven Lauf nicht rechtzeitig bestätigt.",
+        )
+    except Exception as exc:
+        try:
+            store.update_start_assignment(
+                claim_id,
+                status="retry_pending",
+                message=f"Automatische Buchungszuordnung wird erneut versucht: {exc}",
+            )
+        except Exception:
+            LOG.exception("Could not persist start-assignment worker failure claim_id=%s", claim_id)
+
+
+def _resume_persisted_start_assignment() -> None:
+    with store.lock:
+        claim = store.start_assignment
+        if not claim.get("active") or not claim.get("_restored_from_disk"):
+            return
+        if claim.get("cancel_requested"):
+            store._set_start_assignment_locked({
+                **claim,
+                "active": False,
+                "intent_state": "terminal",
+                "_restored_from_disk": False,
+            })
+            return
+        if not claim.get("_directory_barrier_confirmed"):
+            LOG.critical("Persisted Start intent has no startup directory barrier claim_id=%s", claim.get("claim_id"))
+            return
+        claim_id = str(claim.get("claim_id") or "").strip()
+        run_id = str(claim.get("run_id") or "").strip()
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        if not claim_id or not run_id or current_run_id != run_id or not 2 <= phase <= 13:
+            return
+        claimed_booking_id = str(claim.get("booking_id") or "").strip()
+        claimed_booking_snapshot = claim.get("booking_snapshot") if isinstance(claim.get("booking_snapshot"), dict) else None
+        run_booking = run.get("booking") if isinstance(run.get("booking"), dict) else {}
+        current_booking_id = str(run_booking.get("id") or "").strip()
+        snapshot_confirmed = bool(
+            claimed_booking_snapshot
+            and run_booking
+            and _booking_selection_key(run_booking) == _booking_selection_key(claimed_booking_snapshot)
+        )
+        legacy_id_confirmed = bool(not claimed_booking_snapshot and claimed_booking_id and current_booking_id == claimed_booking_id)
+        if phase >= 3 and (snapshot_confirmed or legacy_id_confirmed):
+            confirmed_booking = claimed_booking_snapshot or run_booking
+            store.set_selected_booking(confirmed_booking, expected_run_id=run_id)
+            store._set_start_assignment_locked({
+                **claim,
+                "active": False,
+                "intent_state": "terminal",
+                "candidate_state": "published",
+                "_restored_from_disk": False,
+                "status": "assigned",
+                "message": "Die bereits bestätigte Buchungszuordnung wurde nach dem Dashboard-Neustart übernommen.",
+            })
+            return
+
+
+def _maybe_resume_persisted_start_assignment() -> None:
+    try:
+        _resume_persisted_start_assignment()
+    except Exception:
+        LOG.exception("Could not resume persisted start assignment; exception suppressed for the MQTT network loop")
+    try:
+        _ensure_active_start_assignment_worker()
+    except Exception:
+        LOG.exception("Could not ensure start-assignment worker; exception suppressed for the MQTT network loop")
+
+
 def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     remote_tmp = f"/tmp/er1_dashboard_summary_{int(time.time() * 1000)}.json"
     local_tmp = BASE_DIR / "data" / f"summary_payload_{int(time.time() * 1000)}.json"
@@ -2427,12 +4087,12 @@ def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any
             with client.open_sftp() as sftp:
                 sftp.put(str(local_tmp), remote_tmp)
         except Exception as exc:
-            raise RuntimeError(f"sftp game summary payload upload failed: {exc}") from exc
+            raise RuntimeError(f"Der SFTP-Upload der Daten für die Spielzusammenfassung ist fehlgeschlagen: {exc}") from exc
         app_path = shlex.quote(cfg["app_path"])
         script = shlex.quote(cfg["summary_script"])
         remote_payload = shlex.quote(remote_tmp)
         remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
-        text = _paramiko_exec(client, remote_cmd, timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        text = _paramiko_exec(client, remote_cmd, timeout=max(20, cfg["timeout"] + 30), label="SSH-Versand der Spielzusammenfassung")
         return _parse_summary_script_json(text)
     finally:
         try:
@@ -2440,7 +4100,7 @@ def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any
         except Exception:
             pass
         try:
-            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="ssh cleanup")
+            _paramiko_exec(client, f"rm -f {shlex.quote(remote_tmp)}", timeout=cfg["timeout"] + 5, label="SSH-Bereinigung")
         except Exception:
             pass
         try:
@@ -2452,7 +4112,7 @@ def _send_summary_email_via_paramiko(payload: dict[str, Any], cfg: dict[str, Any
 def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = booking_ssh_config()
     if not cfg["host"] or not cfg["user"] or not cfg["app_path"]:
-        raise RuntimeError("Website SSH summary is not configured. Set ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER and ER1_WEBSITE_APP_PATH.")
+        raise RuntimeError("Der Versand der Spielzusammenfassung über Website-SSH ist nicht konfiguriert. ER1_WEBSITE_SSH_HOST, ER1_WEBSITE_SSH_USER und ER1_WEBSITE_APP_PATH müssen gesetzt sein.")
 
     if _ssh_backend(cfg) == "paramiko":
         return _send_summary_email_via_paramiko(payload, cfg)
@@ -2472,12 +4132,12 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
         f"{target}:{remote_tmp}",
     ]
     try:
-        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="scp game summary payload")
+        _run_process(scp_cmd, timeout=cfg["timeout"] + 20, label="SCP-Übertragung der Spielzusammenfassungsdaten")
         app_path = shlex.quote(cfg["app_path"])
         script = shlex.quote(cfg["summary_script"])
         remote_payload = shlex.quote(remote_tmp)
         remote_cmd = f"cd {app_path} && node {script} {remote_payload}"
-        completed = _run_process(_ssh_base(cfg) + [remote_cmd], timeout=max(20, cfg["timeout"] + 30), label="ssh send summary email")
+        completed = _run_process(_ssh_base(cfg) + [remote_cmd], timeout=max(20, cfg["timeout"] + 30), label="SSH-Versand der Spielzusammenfassung")
         return _parse_summary_script_json(completed.stdout or "")
     finally:
         try:
@@ -2485,7 +4145,7 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
         try:
-            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="ssh cleanup")
+            _run_process(_ssh_base(cfg) + [f"rm -f {shlex.quote(remote_tmp)}"], timeout=cfg["timeout"] + 5, label="SSH-Bereinigung")
         except Exception:
             pass
 
@@ -2524,7 +4184,7 @@ def game_viewer() -> str:
             hint_columns = state["hint_columns"]
             raw_rows = state["raw_rows"]
             if game is None:
-                error = f"No game found for id {game_id}."
+                error = f"Kein Spiel mit der ID {game_id} gefunden."
             else:
                 summary_columns = [col for col in ["id", "date", "players_count", "hint_count", "leaderboard_code"] if col in game]
                 riddle_columns = ["riddle", "riddle_time_mmss", "hint_count_display", "skipped", "not_solved"]
@@ -2556,10 +4216,10 @@ def game_viewer() -> str:
 def delete_game(game_id: str) -> Any:
     game_id = str(game_id or "").strip()
     if not game_id:
-        return redirect(url_for("game_viewer", error="Missing game id."))
+        return redirect(url_for("game_viewer", error="Spiel-ID fehlt."))
     try:
         move_game_to_removed(game_id)
-        return redirect(url_for("game_viewer", message=f"Moved game {game_id} to {REMOVED_GAMES_DIR}"))
+        return redirect(url_for("game_viewer", message=f"Spiel {game_id} wurde nach {REMOVED_GAMES_DIR} verschoben."))
     except Exception as exc:
         return redirect(url_for("game_viewer", error=str(exc), game_id=game_id))
 
@@ -2570,11 +4230,11 @@ def api_db_update() -> Any:
     try:
         rowid = int(data.get("rowid"))
     except Exception:
-        return jsonify({"ok": False, "error": "rowid must be an integer"}), 400
+        return jsonify({"ok": False, "error": "Die Zeilen-ID muss eine ganze Zahl sein."}), 400
 
     updates = data.get("updates") or {}
     if not isinstance(updates, dict):
-        return jsonify({"ok": False, "error": "updates must be an object"}), 400
+        return jsonify({"ok": False, "error": "Die Änderungen müssen als Objekt übergeben werden."}), 400
 
     try:
         update_db_row(table_name, rowid, updates)
@@ -2585,21 +4245,129 @@ def api_db_update() -> Any:
 
 @app.get("/api/state")
 def api_state() -> Any:
-    return jsonify(store.snapshot())
+    _maybe_resume_persisted_start_assignment()
+    response = jsonify(store.snapshot())
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/api/logs")
+def api_logs() -> Any:
+    try:
+        query = parse_logs_query(request.args)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    result = node_log_buffer.query(**query)
+    selected_nodes = query["nodes"]
+    selected_levels = query["levels"]
+    response = jsonify({
+        "ok": True,
+        **result,
+        "nodes": [node for node in LOG_NODE_IDS if selected_nodes is None or node in selected_nodes],
+        "levels": [level for level in LOG_LEVELS if selected_levels is None or level in selected_levels],
+        "last_requested": _requested_log_levels_snapshot(),
+        "mqtt_connected": mqtt_is_connected(),
+    })
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.post("/api/log-level")
+def api_log_level() -> Any:
+    try:
+        node, level = validate_log_level_request(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    record = _publish_requested_log_level(node, level)
+    if record is None:
+        return jsonify({
+            "ok": False,
+            "node": node,
+            "requested": level,
+            "mqtt_queued": False,
+            "applied": False,
+            "error": "Die Log-Stufe konnte nicht an MQTT übergeben werden.",
+        }), 503
+    return jsonify({
+        "ok": True,
+        "node": node,
+        "requested": level,
+        "requested_at": record["requested_at"],
+        "mqtt_queued": True,
+        "applied": False,
+        "qos": 0,
+        "retained": False,
+    })
 
 
 @app.post("/api/phase")
 def api_phase() -> Any:
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     action = str(data.get("action", "")).strip().lower()
     if action == "start":
-        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "start"})
-        return jsonify({"ok": True})
+        try:
+            reference_time = _parse_start_clicked_at_ms(data.get("start_clicked_at_ms"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc), "start_assignment": store.get_start_assignment()}), 400
+        try:
+            claim, created = store.claim_start_assignment(reference_time)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc), "start_assignment": store.get_start_assignment()}), 409
+        except Exception:
+            LOG.error("Game start was blocked because its durable assignment claim could not be saved", exc_info=True)
+            return jsonify({
+                "ok": False,
+                "error": "Der Spielstart wurde nicht gesendet, weil die Startzuordnung nicht sicher gespeichert werden konnte.",
+                "start_assignment": store.get_start_assignment(),
+            }), 503
+        if not created:
+            _maybe_resume_persisted_start_assignment()
+            worker_started = _ensure_active_start_assignment_worker()
+            claim = store.get_start_assignment()
+            return jsonify({
+                "ok": True,
+                "idempotent": True,
+                "mqtt_queued": bool(claim.get("_start_published_runtime")),
+                "assignment_worker_started": worker_started,
+                "start_assignment": claim,
+            })
+        claim_id = str(claim["claim_id"])
+        directory_synced = bool(claim.pop("_directory_synced", getattr(store, "last_start_assignment_directory_synced", True)))
+        if not directory_synced:
+            LOG.critical(
+                "Start intent is visible but not durably confirmed; Start publish is blocked claim_id=%s",
+                claim_id,
+            )
+            return jsonify({
+                "ok": False,
+                "mqtt_queued": False,
+                "error": "Der Spielstart wurde nicht gesendet, weil die Startabsicht nicht dauerhaft bestätigt werden konnte.",
+                "start_assignment": store.get_start_assignment(),
+            }), 503
+        worker_started = _ensure_active_start_assignment_worker()
+        current_claim = store.get_start_assignment()
+        mqtt_queued = bool(current_claim.get("_start_published_runtime"))
+        if not mqtt_queued:
+            return jsonify({
+                "ok": False,
+                "mqtt_queued": False,
+                "error": "Der Startbefehl konnte nicht an MQTT übergeben werden; die dauerhaft gespeicherte Startabsicht wird erneut versucht.",
+                "start_assignment": current_claim,
+            }), 503
+        return jsonify({
+            "ok": True,
+            "mqtt_queued": True,
+            "assignment_worker_started": worker_started,
+            "start_assignment": current_claim,
+        })
     if action in {"standby", "maintenance", "prepare"}:
+        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_mode", "mode": action}):
+            return jsonify({"ok": False, "error": "Die Phasenaktion konnte nicht an MQTT übergeben werden."}), 503
         store.set_local_phase(action)
-        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_mode", "mode": action})
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "invalid phase action"}), 400
+        return jsonify({"ok": True, "mqtt_queued": True})
+    return jsonify({"ok": False, "error": "Ungültige Phasenaktion"}), 400
 
 
 
@@ -2629,43 +4397,38 @@ def api_bookings() -> Any:
                     "bookings": bookings,
                     "source": "cached-copy",
                     "copiedDb": str(local_db),
-                    "warning": f"SSH copy failed, using cached booking DB: {exc}",
+                    "warning": f"Die Buchungsdaten konnten nicht aktuell kopiert werden; die zwischengespeicherte Datenbank wird verwendet: {exc}",
                 })
         except Exception as cache_exc:
-            return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}; cached DB failed: {cache_exc}"})
-        return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"SSH copy failed: {exc}"})
+            return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"Die Buchungsdaten konnten weder aktuell noch aus dem Zwischenspeicher geladen werden: {exc}; Zwischenspeicher: {cache_exc}"})
+        return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"Die Buchungsdaten konnten nicht geladen werden: {exc}"})
 
 
 @app.post("/api/select-booking")
 def api_select_booking() -> Any:
     data = request.get_json(force=True) or {}
-    booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
-    selected = store.set_selected_booking(booking)
+    expected_run_id = str(data.get("expected_run_id") or "").strip()
+    try:
+        if "hint_language" in data:
+            selected = update_hint_language_selection(data.get("hint_language"), expected_run_id=expected_run_id)
+        else:
+            booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
+            selected = publish_booking_selection(booking, expected_run_id=expected_run_id, supersede_automatic=True)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "start_assignment": store.get_start_assignment()}), 409
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    except OSError as exc:
+        LOG.error("Selected booking state could not be persisted", exc_info=True)
+        return jsonify({"ok": False, "error": f"Die Buchungsauswahl konnte nicht sicher gespeichert werden: {exc}"}), 503
     players_count = int(selected.get("players") or 0)
-    # Newer game-master builds can store the whole booking on the active run;
-    # older builds still receive the existing player-count command below.
-    booking_payload = {
+    return jsonify({
+        "ok": True,
         "booking": selected,
-        "bookingCode": str(selected.get("bookingCode") or ""),
-        "booking_code": str(selected.get("bookingCode") or ""),
-        "bookingEmail": str(selected.get("customerEmail") or ""),
-        "booking_email": str(selected.get("customerEmail") or ""),
-        "customerEmail": str(selected.get("customerEmail") or ""),
-        "customer_email": str(selected.get("customerEmail") or ""),
-        "customerName": str(selected.get("customerName") or ""),
-        "customer_name": str(selected.get("customerName") or ""),
-        "players": players_count,
         "players_count": players_count,
-    }
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_booking", **booking_payload})
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "booking", **booking_payload})
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count, "players": players_count})
-    return jsonify({"ok": True, "booking": selected, "players_count": players_count})
-
-@app.post("/api/finish-game")
-def api_finish_game() -> Any:
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "finish_game"})
-    return jsonify({"ok": True})
+        "mqtt_queued": True,
+        "applied": False,
+    })
 
 
 @app.post("/api/send-summary-email")
@@ -2675,7 +4438,7 @@ def api_send_summary_email() -> Any:
         run = current_raw_run_payload()
         code = str(run.get("leaderboard_code") or run.get("leaderboardCode") or "").strip()
         if not code:
-            return jsonify({"ok": False, "error": "The game has no leaderboard code yet. Finish the game first, then try again."}), 400
+            return jsonify({"ok": False, "error": "Das Spiel hat noch keinen Ranglisten-Code. Beende zuerst das Spiel und versuche es danach erneut."}), 400
         selected_booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else store.get_selected_booking())
         if selected_booking.get("players"):
             run = dict(run)
@@ -2712,9 +4475,10 @@ def api_players_count() -> Any:
         players_count = parse_players_count_input(data.get("players_count", 0))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count}):
+        return jsonify({"ok": False, "error": "Die Spielerzahl konnte nicht an MQTT übergeben werden."}), 503
     store.set_local_players_count(players_count)
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count})
-    return jsonify({"ok": True, "players_count": players_count})
+    return jsonify({"ok": True, "players_count": players_count, "mqtt_queued": True})
 
 
 @app.post("/api/solve")
@@ -2722,9 +4486,10 @@ def api_solve() -> Any:
     data = request.get_json(force=True)
     node = str(data.get("node", "")).strip()
     if not node:
-        return jsonify({"ok": False, "error": "node required"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node})
-    return jsonify({"ok": True, "node": node})
+        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
+    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node}):
+        return jsonify({"ok": False, "error": "Der Gelöst-Befehl konnte nicht an MQTT übergeben werden."}), 503
+    return jsonify({"ok": True, "node": node, "mqtt_queued": True})
 
 
 @app.post("/api/lock")
@@ -2733,11 +4498,18 @@ def api_lock() -> Any:
     lock_id = str(data.get("lock", "")).strip()
     action = str(data.get("action", "")).strip().lower()
     if lock_id not in {item["id"] for item in LOCKS}:
-        return jsonify({"ok": False, "error": "invalid lock"}), 400
+        return jsonify({"ok": False, "error": "Ungültiges Schloss"}), 400
     if action not in {"open", "close"}:
-        return jsonify({"ok": False, "error": "invalid action"}), 400
-    mqtt_publish(TOPIC_MAGLOCK_CMD, {"cmd": action, "lock": lock_id})
-    return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Ungültige Aktion"}), 400
+    result = mqtt_publish_batch([(TOPIC_MAGLOCK_CMD, {"cmd": action, "lock": lock_id})])
+    if not result["mqtt_queued"]:
+        return jsonify({
+            "ok": False,
+            **result,
+            "applied": False,
+            "error": "Der Schlossbefehl konnte nicht an MQTT übergeben werden.",
+        }), 503
+    return jsonify({"ok": True, **result, "applied": False})
 
 
 @app.post("/api/light")
@@ -2748,15 +4520,24 @@ def api_light() -> Any:
     pct_raw = data.get("pct")
     cfg = LIGHT_GROUPS.get(group_id)
     if cfg is None:
-        return jsonify({"ok": False, "error": "invalid group"}), 400
+        return jsonify({"ok": False, "error": "Ungültige Lichtgruppe"}), 400
 
     if group_id == "star_sky":
         if action not in {"on", "off"}:
-            return jsonify({"ok": False, "error": "star sky supports only on/off"}), 400
-        mqtt_publish(TOPIC_STAR_SKY_CMD, {"cmd": "on" if action == "on" else "off"})
-        mqtt_publish("star_sky/sys/cmd", "SOLVE" if action == "on" else "DISABLE")
-        mqtt_publish(TOPIC_LIGHTING_CMD, {"cmd": "turn_on" if action == "on" else "turn_off", "light": "r3_uv"})
-        return jsonify({"ok": True})
+            return jsonify({"ok": False, "error": "Der Sternenhimmel unterstützt nur Ein/Aus"}), 400
+        result = mqtt_publish_batch([
+            (TOPIC_STAR_SKY_CMD, {"cmd": "on" if action == "on" else "off"}),
+            ("star_sky/sys/cmd", "SOLVE" if action == "on" else "DISABLE"),
+            (TOPIC_LIGHTING_CMD, {"cmd": "turn_on" if action == "on" else "turn_off", "light": "r3_uv"}),
+        ])
+        if not result["mqtt_queued"]:
+            return jsonify({
+                "ok": False,
+                **result,
+                "applied": False,
+                "error": "Die Sternenhimmel-Befehle konnten nicht vollständig an MQTT übergeben werden.",
+            }), 503
+        return jsonify({"ok": True, **result, "applied": False})
 
     if cfg.get("dimmable"):
         try:
@@ -2766,16 +4547,35 @@ def api_light() -> Any:
         if action == "off":
             pct = 0
         elif action not in {"on", "off", "set_pct"}:
-            return jsonify({"ok": False, "error": "invalid action"}), 400
-        for light_name in cfg["lights"]:
-            mqtt_publish(TOPIC_LIGHTING_CMD, {"cmd": "set", "light": light_name, "pct": pct})
-        return jsonify({"ok": True, "pct": pct})
+            return jsonify({"ok": False, "error": "Ungültige Aktion"}), 400
+        result = mqtt_publish_batch([
+            (TOPIC_LIGHTING_CMD, {"cmd": "set", "light": light_name, "pct": pct})
+            for light_name in cfg["lights"]
+        ])
+        if not result["mqtt_queued"]:
+            return jsonify({
+                "ok": False,
+                **result,
+                "applied": False,
+                "pct": pct,
+                "error": "Die Lichtbefehle konnten nicht vollständig an MQTT übergeben werden.",
+            }), 503
+        return jsonify({"ok": True, **result, "applied": False, "pct": pct})
 
     if action not in {"on", "off"}:
-        return jsonify({"ok": False, "error": "invalid action"}), 400
-    for light_name in cfg["lights"]:
-        mqtt_publish(TOPIC_LIGHTING_CMD, {"cmd": "turn_on" if action == "on" else "turn_off", "light": light_name})
-    return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Ungültige Aktion"}), 400
+    result = mqtt_publish_batch([
+        (TOPIC_LIGHTING_CMD, {"cmd": "turn_on" if action == "on" else "turn_off", "light": light_name})
+        for light_name in cfg["lights"]
+    ])
+    if not result["mqtt_queued"]:
+        return jsonify({
+            "ok": False,
+            **result,
+            "applied": False,
+            "error": "Die Lichtbefehle konnten nicht vollständig an MQTT übergeben werden.",
+        }), 503
+    return jsonify({"ok": True, **result, "applied": False})
 
 
 @app.post("/api/hints")
@@ -2783,18 +4583,21 @@ def api_set_hint_count() -> Any:
     data = request.get_json(force=True)
     riddle = str(data.get("riddle", "")).strip()
     if not riddle:
-        return jsonify({"ok": False, "error": "riddle required"}), 400
+        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
 
-    if "count" in data:
-        count = store.set_hint_count(riddle, int(data.get("count") or 0))
-    else:
-        delta = int(data.get("delta") or 0)
-        if delta == 0:
-            return jsonify({"ok": False, "error": "delta or count required"}), 400
-        count = store.change_hint_count(riddle, delta)
-
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_hint_count", "riddle": riddle, "count": count})
-    return jsonify({"ok": True, "hint_count": count})
+    try:
+        if "count" in data:
+            count = publish_hint_count_change(riddle, count=int(data.get("count") or 0))
+        else:
+            delta = int(data.get("delta") or 0)
+            if delta == 0:
+                return jsonify({"ok": False, "error": "Änderung oder Anzahl fehlt"}), 400
+            count = publish_hint_count_change(riddle, delta=delta)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    return jsonify({"ok": True, "hint_count": count, "mqtt_queued": True})
 
 
 
@@ -2804,15 +4607,19 @@ def api_riddle_time() -> Any:
     data = request.get_json(force=True) or {}
     riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
     if not riddle:
-        return jsonify({"ok": False, "error": "riddle required"}), 400
+        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
     raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
     try:
         seconds = parse_mmss_input(raw_value)
         seconds = max(0.0, float(seconds or 0.0))
     except Exception:
-        return jsonify({"ok": False, "error": "time must be seconds, mm:ss, or hh:mm:ss"}), 400
-    mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_time", "riddle": riddle, "solve_time_s": round(seconds, 3)})
-    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3)})
+        return jsonify({"ok": False, "error": "Die Zeit muss als Sekunden, mm:ss oder hh:mm:ss angegeben werden."}), 400
+    current_row = next((row for row in (store.snapshot().get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
+    if current_row and str(current_row.get("phase_state") or "pending") == "pending":
+        return jsonify({"ok": False, "error": "Die Zeit eines noch nicht erreichten Rätsels kann nicht geändert werden."}), 400
+    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_time", "riddle": riddle, "solve_time_s": round(seconds, 3)}):
+        return jsonify({"ok": False, "error": "Die Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
+    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "mqtt_queued": True})
 
 
 @app.post("/api/riddle-outcome")
@@ -2820,27 +4627,40 @@ def api_riddle_outcome() -> Any:
     data = request.get_json(force=True) or {}
     riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
     if not riddle:
-        return jsonify({"ok": False, "error": "riddle required"}), 400
+        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
     outcome = str(data.get("outcome") or data.get("status") or "").strip().lower().replace(" ", "_")
+    if riddle == "sissi":
+        return jsonify({"ok": False, "error": "Sissi darf nur über den normalen Gelöst-Befehl abgeschlossen werden."}), 400
+    command: dict[str, Any]
+    response: dict[str, Any]
     if outcome in {"skip", "skipped"}:
         advance = bool(data.get("advance", True))
         if advance:
-            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "skip_riddle", "riddle": riddle})
+            command = {"cmd": "skip_riddle", "riddle": riddle}
         else:
-            mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "skipped", "advance": False})
-        return jsonify({"ok": True, "riddle": riddle, "outcome": "skipped", "advance": advance})
-    if outcome in {"not_solved", "failed", "fail"}:
+            command = {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "skipped", "advance": False}
+        response = {"riddle": riddle, "outcome": "skipped", "advance": advance}
+    elif outcome in {"not_solved", "failed", "fail"}:
         advance = bool(data.get("advance", False))
-        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "mark_not_solved", "riddle": riddle, "advance": advance})
-        return jsonify({"ok": True, "riddle": riddle, "outcome": "not_solved", "advance": advance})
-    if outcome in {"clear", "reset", "pending", ""}:
-        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "clear_riddle_outcome", "riddle": riddle})
-        return jsonify({"ok": True, "riddle": riddle, "outcome": "clear"})
-    if outcome == "solved":
+        command = {"cmd": "mark_not_solved", "riddle": riddle, "advance": advance}
+        response = {"riddle": riddle, "outcome": "not_solved", "advance": advance}
+    elif outcome in {"reset", "reset_timing"}:
+        if riddle not in {"prison", "wheel", "chains", "tangram", "magnet"}:
+            return jsonify({"ok": False, "error": "Dieses Rätsel kann nicht sicher zurückgesetzt werden."}), 400
+        command = {"cmd": "reset_riddle", "riddle": riddle}
+        response = {"riddle": riddle, "outcome": "reset"}
+    elif outcome in {"clear", "pending", ""}:
+        command = {"cmd": "clear_riddle_outcome", "riddle": riddle}
+        response = {"riddle": riddle, "outcome": "clear"}
+    elif outcome == "solved":
         advance = bool(data.get("advance", False))
-        mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "solved", "advance": advance})
-        return jsonify({"ok": True, "riddle": riddle, "outcome": "solved", "advance": advance})
-    return jsonify({"ok": False, "error": "outcome must be skipped, not_solved, solved, or clear"}), 400
+        command = {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "solved", "advance": advance}
+        response = {"riddle": riddle, "outcome": "solved", "advance": advance}
+    else:
+        return jsonify({"ok": False, "error": "Der Status muss übersprungen, nicht gelöst, gelöst, zurückgesetzt oder geleert sein."}), 400
+    if not mqtt_publish(TOPIC_GAME_CMD, command):
+        return jsonify({"ok": False, "error": "Der Rätselstatus konnte nicht an MQTT übergeben werden."}), 503
+    return jsonify({"ok": True, **response, "mqtt_queued": True})
 # ---- ER1 v2 dashboard overrides (new game_master DB schema) ----
 RIDDLE_ALIASES = {
     "open_prison": "prison",
@@ -2857,17 +4677,17 @@ RIDDLE_ORDER_V2 = [
     "tangram", "magnet", "chess", "knocking", "candles", "stars", "sissi",
 ]
 RIDDLE_LABELS_V2 = {
-    "images": "Images",
+    "images": "Bilder",
     "piano": "Piano",
-    "prison": "Prison",
-    "wheel": "Wheel",
-    "chains": "Chains",
+    "prison": "Gefängnis",
+    "wheel": "Rad",
+    "chains": "Ketten",
     "tangram": "Tangram",
-    "magnet": "Magnet",
-    "chess": "Chess",
-    "knocking": "Knocking",
-    "candles": "Candles",
-    "stars": "Stars",
+    "magnet": "Magnetschlüssel",
+    "chess": "Pferd",
+    "knocking": "Klopfen",
+    "candles": "Kerzen",
+    "stars": "Sterne",
     "sissi": "Sissi",
 }
 
@@ -2890,29 +4710,75 @@ PHASE_META = {
 }
 
 RIDDLES = [
-    {"id": "images", "label": "Images", "node_id": "images_piano", "manual": False},
+    {"id": "images", "label": "Bilder", "node_id": "images_piano", "manual": False},
     {"id": "piano", "label": "Piano", "node_id": "images_piano", "manual": False},
-    {"id": "prison", "label": "Prison", "node_id": None, "manual": True},
-    {"id": "wheel", "label": "Wheel", "node_id": None, "manual": True},
-    {"id": "chains", "label": "Chains", "node_id": None, "manual": True},
+    {"id": "prison", "label": "Gefängnis", "node_id": None, "manual": True},
+    {"id": "wheel", "label": "Rad", "node_id": None, "manual": True},
+    {"id": "chains", "label": "Ketten", "node_id": None, "manual": True},
     {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
-    {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
-    {"id": "chess", "label": "Chess", "node_id": "chess", "manual": False},
-    {"id": "knocking", "label": "Knocking", "node_id": "knocking", "manual": False},
-    {"id": "candles", "label": "Candles", "node_id": "candles", "manual": False},
-    {"id": "stars", "label": "Stars", "node_id": "star_slider", "manual": False},
+    {"id": "magnet", "label": "Magnetschlüssel", "node_id": None, "manual": True},
+    {"id": "chess", "label": "Pferd", "node_id": "chess", "manual": False},
+    {"id": "knocking", "label": "Klopfen", "node_id": "knocking", "manual": False},
+    {"id": "candles", "label": "Kerzen", "node_id": "candles", "manual": False},
+    {"id": "stars", "label": "Sterne", "node_id": "star_slider", "manual": False},
     {"id": "sissi", "label": "Sissi", "node_id": None, "manual": True},
 ]
 NODE_LABELS = [
-    ("lighting", "Lighting Controller"),
-    ("maglock", "Maglock Controller"),
-    ("images_piano", "Images / Piano"),
-    ("chess", "Chess"),
-    ("knocking", "Knocking"),
-    ("candles", "Candles"),
-    ("star_slider", "Star Slider"),
-    ("star_sky", "Star Sky"),
+    ("lighting", "Lichtsteuerung"),
+    ("maglock", "Schlosssteuerung"),
+    ("images_piano", "Bilder / Piano"),
+    ("chess", "Pferd"),
+    ("knocking", "Klopfen"),
+    ("candles", "Kerzen"),
+    ("star_slider", "Sternenschieber"),
+    ("star_sky", "Sternenhimmel"),
 ]
+
+PHASE_LABELS_DE = {
+    0: "Bereitschaft",
+    1: "Wartung",
+    2: "Vorbereitung",
+    3: "Bilder",
+    4: "Piano",
+    5: "Gefängnis",
+    6: "Rad",
+    7: "Ketten",
+    8: "Tangram & Magnetschlüssel",
+    9: "Pferd",
+    10: "Klopfen",
+    11: "Kerzen",
+    12: "Sterne",
+    13: "Sissi",
+    14: "Beendet",
+}
+
+def pretty_phase_name(name: str) -> str:
+    text = str(name or "").strip().lower()
+    by_name = {
+        "standby": "Bereitschaft", "maintenance": "Wartung", "prepare": "Vorbereitung",
+        "start": "Bilder", "piano": "Piano", "prison": "Gefängnis", "wheel": "Rad",
+        "chains": "Ketten", "rope": "Ketten", "tangram_magnet": "Tangram & Magnetschlüssel",
+        "chess": "Pferd", "knocking": "Klopfen", "candles": "Kerzen",
+        "stars": "Sterne", "sissi": "Sissi", "finished": "Beendet",
+    }
+    return by_name.get(text, str(name or "").replace("_", " ").strip().title())
+
+LOCKS = [
+    {"id": "r2", "label": "Raum 2", "kind": "toggle"},
+    {"id": "r3", "label": "Raum 3", "kind": "toggle"},
+    {"id": "images", "label": "Bildertür", "kind": "pulse"},
+    {"id": "knocking", "label": "Klopftür", "kind": "pulse"},
+    {"id": "slider", "label": "Schiebertür", "kind": "pulse"},
+]
+LIGHT_GROUPS = {
+    "entrance": {"label": "Eingang", "lights": ["torch_stiege"], "dimmable": False},
+    "r1": {"label": "Raum 1", "lights": ["r1_stuen", "r1_bild"], "dimmable": False},
+    "r2_main": {"label": "R2 Pferd + Kiste", "lights": ["r2_chess", "r2_schronk"], "dimmable": False},
+    "r2_torch": {"label": "R2 Fackel", "lights": ["torch_r2"], "dimmable": False},
+    "r3_main": {"label": "R3 Schieber + Käfig", "lights": ["r3_slider", "r3_cage"], "dimmable": True},
+    "r3_torch": {"label": "R2/R3 Fackel", "lights": ["torch_r2r3"], "dimmable": False},
+    "star_sky": {"label": "Sternenhimmel", "lights": ["r3_uv"], "dimmable": False, "special": "star_sky"},
+}
 
 EDITABLE_TABLES = {
     "games": {"blocked_columns": {"id", "ended_at", "duration_s", "hint_count"}},
@@ -3086,14 +4952,14 @@ def build_game_view_state(game_id: str) -> dict[str, Any]:
 
 def move_game_to_removed(game_id: str) -> None:
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
     REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(GAME_DB_PATH) as src, sqlite3.connect(REMOVED_GAME_DB_PATH) as dst:
         src.row_factory = sqlite3.Row
         dst.row_factory = sqlite3.Row
         game_row = src.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
         if game_row is None:
-            raise ValueError(f"No game found for id {game_id}.")
+            raise ValueError(f"Kein Spiel mit der ID {game_id} gefunden.")
         riddle_rows = src.execute("SELECT * FROM game_riddles WHERE game_id = ? ORDER BY rowid ASC", (game_id,)).fetchall()
         for table_name in ("games", "game_riddles"):
             _ensure_table_schema(src, dst, table_name)
@@ -3111,7 +4977,7 @@ def move_game_to_removed(game_id: str) -> None:
 
 def load_game_from_db(game_id: str) -> dict[str, Any]:
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         game = _row_to_dict(conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE id = ?", (game_id,)).fetchone())
@@ -3130,11 +4996,11 @@ def load_game_from_db(game_id: str) -> dict[str, Any]:
 def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
     config = EDITABLE_TABLES.get(table_name)
     if config is None:
-        raise ValueError(f"Table {table_name} is not editable.")
+        raise ValueError(f"Die Tabelle {table_name} kann nicht bearbeitet werden.")
     if not updates:
         return
     if not GAME_DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {GAME_DB_PATH}")
+        raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
     with sqlite3.connect(GAME_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         columns_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -3142,7 +5008,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         if table_name == 'games':
             current = conn.execute("SELECT rowid AS _rowid_, * FROM games WHERE rowid = ?", (rowid,)).fetchone()
             if current is None:
-                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+                raise ValueError(f"Zeile {rowid} wurde in der Tabelle {table_name} nicht gefunden.")
             current_row = _row_to_dict(current) or {}
             game_id = str(current_row.get('id') or '').strip()
             normalized_updates = {}
@@ -3153,11 +5019,11 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 elif column in {'leaderboard_code', 'leaderboard_code_display'}:
                     normalized_updates['leaderboard_code'] = str(value or '').strip() or None
                 elif column in {'date_display', 'started_at_display'}:
-                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+                    raise ValueError(f"Die Spalte {column!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
                 elif column in editable_columns:
                     normalized_updates[column] = value
                 else:
-                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+                    raise ValueError(f"Die Spalte {column!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
             if normalized_updates:
                 set_clause = ', '.join(f"{column} = ?" for column in normalized_updates.keys())
                 values = list(normalized_updates.values()) + [rowid]
@@ -3169,7 +5035,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
         if table_name == 'game_riddles':
             current = conn.execute("SELECT rowid AS _rowid_, * FROM game_riddles WHERE rowid = ?", (rowid,)).fetchone()
             if current is None:
-                raise ValueError(f"Row {rowid} not found in table {table_name}.")
+                raise ValueError(f"Zeile {rowid} wurde in der Tabelle {table_name} nicht gefunden.")
             current_row = _row_to_dict(current) or {}
             game_id = str(current_row.get('game_id') or '').strip()
             direct_updates = {}
@@ -3189,7 +5055,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 elif column in editable_columns:
                     direct_updates[column] = value
                 else:
-                    raise ValueError(f"Column {column!r} is not editable in table {table_name}.")
+                    raise ValueError(f"Die Spalte {column!r} kann in der Tabelle {table_name} nicht bearbeitet werden.")
             if direct_updates:
                 if direct_updates.get('skipped'):
                     direct_updates['not_solved'] = 0
@@ -3205,7 +5071,7 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
                 _refresh_game_hint_count(conn, game_id)
             conn.commit()
             return
-        raise ValueError(f"Table {table_name} is not editable.")
+        raise ValueError(f"Die Tabelle {table_name} kann nicht bearbeitet werden.")
 
 
 def _reset_riddle_display_state_locked_v2(self):
@@ -3297,6 +5163,59 @@ def _extract_info_any(riddle_id: str, state_payload: dict[str, Any]) -> str:
             break
     return '   '.join(generic)
 DashboardStore._extract_info = _extract_info_any
+
+_original_dashboard_snapshot = DashboardStore.snapshot
+
+def _snapshot_german(self):
+    data = _original_dashboard_snapshot(self)
+    game = data.get("game") or {}
+    phase = int(game.get("phase", 0) or 0)
+    last_phase = game.get("last_phase")
+    game["phase_name_pretty"] = PHASE_LABELS_DE.get(phase, pretty_phase_name(game.get("phase_name", "")))
+    game["phase_display"] = f"{phase}: {game['phase_name_pretty']}"
+    if game.get("recovery_restored"):
+        game["phase_display"] += " (nach Neustart wiederhergestellt)"
+    if last_phase is not None:
+        try:
+            game["last_phase_name_pretty"] = PHASE_LABELS_DE.get(int(last_phase), pretty_phase_name(game.get("last_phase_name", "")))
+        except Exception:
+            pass
+    game["is_live"] = 3 <= phase <= 13
+    data["game"] = game
+
+    status_labels = {
+        "solved": "Gelöst", "active": "Aktiv", "pending": "Ausstehend",
+        "skipped": "Übersprungen", "not_solved": "Nicht gelöst", "reset": "Zurückgesetzt",
+    }
+    active_riddles = set(PHASE_META.get(phase, {}).get("active", ()))
+    for row in data.get("riddles") or []:
+        rid = _canonical_riddle_name(row.get("id"))
+        row["label"] = RIDDLE_LABELS_V2.get(rid, row.get("label", rid))
+        state_name = str(row.get("phase_state") or "pending")
+        row["phase_state_label"] = status_labels.get(state_name, state_name)
+        row["resettable"] = rid in {"prison", "wheel", "chains", "tangram", "magnet"}
+        row["solve_advances"] = state_name == "active" or (state_name == "reset" and rid in active_riddles)
+        row["can_solve"] = state_name in {"active", "reset"}
+        row["is_current"] = state_name == "active"
+    for node in data.get("nodes") or []:
+        status = str(node.get("status") or "")
+        if status.startswith("online ("):
+            seconds = status.removeprefix("online (").removesuffix("s)")
+            node["status"] = f"verbunden ({seconds} s)"
+        elif status == "online":
+            node["status"] = "verbunden"
+        elif status == "offline":
+            node["status"] = "nicht verbunden"
+    for lock in data.get("locks") or []:
+        lock["state_label"] = {"open": "offen", "closed": "geschlossen", "unknown": "unbekannt"}.get(lock.get("state_label"), lock.get("state_label"))
+    return data
+
+DashboardStore.snapshot = _snapshot_german
+
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+mqtt_client.connect_async(BROKER_HOST, BROKER_PORT, keepalive=30)
+mqtt_client.loop_start()
 
 
 if __name__ == "__main__":

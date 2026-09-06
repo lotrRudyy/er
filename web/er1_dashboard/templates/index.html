@@ -1,94 +1,299 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
-      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-<meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, initial-scale=1.0" />
-  <title>ER1 Dashboard</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ER1 Spielleitung</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
-  <div class="page dashboard-page">
-    <div class="dashboard-layout">
-      <aside class="panel control-sidebar">
-        <div class="sidebar-section phase-panel">
-          <div class="label">Phase <span id="phaseValue" class="value inline-phase">0: Standby</span></div>
-          <div class="subline">Last: <span id="lastPhaseValue">—</span></div>
-          <div class="top-nav-links"><a class="nav-button" href="/games">Open Game Viewer</a></div>
-          <div class="mode-buttons">
-            <button data-phase-action="standby">Standby</button>
-            <button data-phase-action="maintenance">Maintenance</button>
-            <button data-phase-action="prepare">Prepare</button>
-            <button data-phase-action="start">Start</button>
-          </div>
-          <div class="game-finish-controls">
-            <button id="finishGameBtn" type="button" class="finish-game-btn">Game finished</button>
-            <button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Send summary email</button>
-            <div id="summaryEmailFeedback" class="summary-email-feedback"></div>
-          </div>
-        </div>
+  <div class="page dashboard-page dashboard-v4">
+    <header class="panel live-dashboard-header">
+      <section class="live-phase-block">
+        <div class="eyebrow">Aktuelle Phase</div>
+        <div id="phaseValue" class="live-phase-value">0: Bereitschaft</div>
+        <div class="subline">Vorher: <span id="lastPhaseValue">—</span></div>
+      </section>
 
-        <div class="sidebar-section timer-panel">
-          <div class="timer-grid">
-            <div>
-              <div class="label small-label">Game Timer</div>
-              <div id="timerValue" class="value timer compact-timer">00:00:00</div>
-            </div>
-            <div>
-              <div class="label small-label">Current riddle</div>
-              <div id="riddleTimerValue" class="value sub-timer">00:00:00</div>
-            </div>
-          </div>
+      <section class="live-timers-block">
+        <div class="live-timer-card">
+          <div class="eyebrow">Spielzeit</div>
+          <div id="timerValue" class="live-timer-value">00:00:00</div>
         </div>
+        <div class="live-timer-card">
+          <div class="eyebrow">Aktuelles Rätsel</div>
+          <div id="riddleTimerValue" class="live-timer-value live-timer-value-small">00:00:00</div>
+        </div>
+        <div id="prepareCounterWrap" class="live-timer-card prepare-counter-card hidden">
+          <div class="eyebrow">Vorbereitungszähler 0–10</div>
+          <div id="prepareCounterValue" class="prepare-counter-value">0</div>
+        </div>
+      </section>
 
-        <div class="sidebar-section booking-panel">
-          <div class="label small-label">Booking</div>
-          <select id="bookingSelect" class="booking-select" aria-label="Booking"></select>
+      <details id="bookingDetails" class="booking-details" open>
+        <summary>
+          <span class="eyebrow">Buchung</span>
+          <span id="bookingCompactValue" class="booking-compact-value">Keine Buchung ausgewählt</span>
+          <span class="booking-change-hint">ändern</span>
+        </summary>
+        <div class="booking-details-body">
+          <select id="bookingSelect" class="booking-select" aria-label="Buchung"></select>
           <div id="bookingSelectedInfo" class="booking-selected-info"></div>
+          <label class="booking-language-field" for="hintLanguageSelect">
+            <span>Tipp-Sprache</span>
+            <select id="hintLanguageSelect" class="booking-select">
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+              <option value="it">Italiano</option>
+            </select>
+          </label>
           <div id="testBookingFields" class="test-booking-fields hidden">
-            <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="email" />
-            <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="players" />
+            <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="E-Mail" />
+            <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" />
           </div>
-          <button id="refreshBookingsBtn" class="booking-refresh-btn" type="button">Refresh bookings</button>
+          <button id="refreshBookingsBtn" class="booking-refresh-btn" type="button">Buchungen aktualisieren</button>
           <div id="bookingFeedback" class="summary-email-feedback"></div>
         </div>
+      </details>
 
-        <section class="sidebar-section subpanel compact-panel controls-borderless">
-          <h2>Lights</h2>
-          <div id="lightsGrid" class="controls-grid stacked-controls-grid"></div>
+      <section class="live-header-actions">
+        <button id="startGameBtn" type="button" class="primary-live-action hidden">Spiel starten</button>
+        <button id="toggleAllRiddlesBtn" type="button">Alle Rätsel anzeigen</button>
+        <button id="toggleEmergencyBtn" type="button">Notfallsteuerung anzeigen</button>
+        <a class="nav-button" href="/games">Spielübersicht</a>
+        <div id="postGameActions" class="post-game-actions hidden">
+          <button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button>
+        </div>
+      </section>
+
+      <div id="startAssignmentStatus" class="start-assignment-status hidden" aria-live="polite"></div>
+      <div id="globalFeedback" class="global-feedback" aria-live="polite"></div>
+      <div id="summaryEmailFeedback" class="summary-email-feedback header-feedback"></div>
+    </header>
+
+    <main class="dashboard-main-grid">
+      <section id="currentRiddlesPanel" class="panel current-riddles-panel hidden">
+        <div class="section-heading-row">
+          <div>
+            <div class="eyebrow">Live-Modus</div>
+            <h1>Aktuelles Rätsel</h1>
+          </div>
+          <div class="live-mode-note">Nur der normale Spielablauf ist eingeblendet.</div>
+        </div>
+        <div id="currentRiddlesGrid" class="current-riddles-grid"></div>
+      </section>
+
+      <section id="allRiddlesPanel" class="panel riddles-panel main-riddles-panel">
+        <div class="section-heading-row">
+          <div>
+            <div class="eyebrow">Gesamtübersicht</div>
+            <h2>Alle Rätsel</h2>
+          </div>
+          <div class="subline">Hier können frühere Rätsel nachträglich als übersprungen markiert oder korrigiert werden.</div>
+        </div>
+        <div class="table-scroll-wrap">
+          <table class="simple-table riddles-table compact-riddles-table full-riddles-table">
+            <thead>
+              <tr>
+                <th>Rätsel</th>
+                <th>Status</th>
+                <th>Zeit</th>
+                <th>Aktionen</th>
+                <th>Informationen</th>
+                <th>Tipps</th>
+              </tr>
+            </thead>
+            <tbody id="riddlesBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="emergencyPanel" class="panel emergency-panel hidden">
+        <div class="section-heading-row">
+          <div>
+            <div class="eyebrow danger-eyebrow">Nur bei Bedarf</div>
+            <h2>Notfallsteuerung</h2>
+          </div>
+          <div class="subline">Manuelle Eingriffe während eines laufenden Spiels müssen bestätigt werden.</div>
+        </div>
+
+        <div class="emergency-grid">
+          <section class="emergency-section">
+            <h3>Phase</h3>
+            <div class="mode-buttons">
+              <button data-phase-action="standby">Bereitschaft</button>
+              <button data-phase-action="maintenance">Wartung</button>
+              <button data-phase-action="prepare">Vorbereitung</button>
+              <button data-phase-action="start">Spiel starten</button>
+            </div>
+          </section>
+
+          <section class="emergency-section">
+            <h3>Lichter</h3>
+            <div id="lightsGrid" class="controls-grid emergency-controls-grid"></div>
+          </section>
+
+          <section class="emergency-section">
+            <h3>Schlösser</h3>
+            <div id="locksGrid" class="controls-grid emergency-controls-grid"></div>
+          </section>
+
+          <section class="emergency-section nodes-panel">
+            <h3>Steuergeräte</h3>
+            <div id="nodesList" class="nodes-list emergency-nodes-list"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <details id="diagnosticsDetails" class="panel diagnostics-panel">
+      <summary>
+        <span>
+          <span class="eyebrow">Lokale Werkzeuge</span>
+          <span class="diagnostics-title">Node-Diagnose</span>
+        </span>
+        <span class="diagnostics-summary-note">Nur bei geöffneter Ansicht aktiv</span>
+      </summary>
+      <div class="diagnostics-body">
+        <p class="diagnostics-contract-note">
+          Logs und zuletzt angeforderte Stufen liegen nur im Arbeitsspeicher dieses Dashboards. Eine Stufe wird per MQTT angefordert, aber vom Gerät nicht zuverlässig bestätigt.
+        </p>
+
+        <div class="diagnostics-toolbar">
+          <fieldset class="diagnostics-fieldset diagnostics-node-filters">
+            <legend>Knotenfilter</legend>
+            <div class="diagnostics-quick-actions">
+              <button id="diagnosticsAllNodesBtn" type="button">Alle</button>
+              <button id="diagnosticsNoNodesBtn" type="button">Keine</button>
+            </div>
+            <div class="diagnostics-check-grid">
+              <label><input class="diagnostics-node-filter" type="checkbox" value="lighting" checked /> Lighting</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="maglock" checked /> Maglock</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="images_piano" checked /> Images / Piano</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="chess" checked /> Chess</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="knocking" checked /> Knocking</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="candles" checked /> Candles</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="star_slider" checked /> Star Slider</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="star_sky" checked /> Star Sky</label>
+              <label><input class="diagnostics-node-filter" type="checkbox" value="stop_timer" checked /> Stop Timer (optional, möglicherweise offline)</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="diagnostics-fieldset diagnostics-level-filters">
+            <legend>Log-Stufen</legend>
+            <div class="diagnostics-check-grid diagnostics-check-grid-levels">
+              <label><input class="diagnostics-level-filter" type="checkbox" value="DBG" checked /> DBG</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="INF" checked /> INF</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="WRN" checked /> WRN</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="ERR" checked /> ERR</label>
+            </div>
+          </fieldset>
+
+          <div class="diagnostics-display-actions">
+            <button id="diagnosticsClearBtn" type="button">Anzeige leeren</button>
+            <span id="diagnosticsCount" class="diagnostics-count">0 Einträge</span>
+          </div>
+        </div>
+
+        <section class="diagnostics-level-section" aria-labelledby="diagnosticsLevelHeading">
+          <div class="diagnostics-section-heading">
+            <h2 id="diagnosticsLevelHeading">Log-Stufe je Knoten anfordern</h2>
+            <span>QoS 0, nicht retained, keine Anwendungsbestätigung</span>
+          </div>
+          <div class="diagnostics-level-grid">
+            <div class="diagnostics-level-row" data-log-level-node="lighting">
+              <strong>Lighting</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Lighting auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Lighting anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="maglock">
+              <strong>Maglock</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Maglock auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Maglock anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="images_piano">
+              <strong>Images / Piano <small>ein gemeinsamer Knoten</small></strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Images und Piano auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Images und Piano anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="chess">
+              <strong>Chess</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Chess auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Chess anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="knocking">
+              <strong>Knocking</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Knocking auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Knocking anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="candles">
+              <strong>Candles</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Candles auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Candles anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="star_slider">
+              <strong>Star Slider</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Star Slider auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Star Slider anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="star_sky">
+              <strong>Star Sky</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Star Sky auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Star Sky anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            <div class="diagnostics-level-row" data-log-level-node="stop_timer">
+              <strong>Stop Timer <small>optional, möglicherweise offline</small></strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für Stop Timer auswählen"><option>DBG</option><option>INF</option><option>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für Stop Timer anfordern">Anfordern</button>
+              <span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+          </div>
         </section>
 
-        <section class="sidebar-section subpanel compact-panel controls-borderless">
-          <h2>Locks</h2>
-          <div id="locksGrid" class="controls-grid stacked-controls-grid"></div>
-        </section>
-
-        <section class="sidebar-section nodes-panel">
-          <div class="label small-label">Controllers / Nodes</div>
-          <div id="nodesList" class="nodes-list nodes-sidebar-list"></div>
-        </section>
-      </aside>
-
-      <main class="panel riddles-panel main-riddles-panel">
-        <h2>Riddles</h2>
-        <table class="simple-table riddles-table compact-riddles-table full-riddles-table">
-          <thead>
-            <tr>
-              <th>Riddle</th>
-              <th>Phase</th>
-              <th>Time</th>
-              <th>Actions</th>
-              <th>Info</th>
-              <th>Hints</th>
-            </tr>
-          </thead>
-          <tbody id="riddlesBody"></tbody>
-        </table>
-      </main>
-    </div>
+        <div id="diagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
+        <div id="diagnosticsLogList" class="diagnostics-log-list" role="log" aria-label="Node-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
+      </div>
+    </details>
   </div>
+
+  <dialog id="confirmDialog" class="dashboard-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="eyebrow danger-eyebrow">Bestätigung erforderlich</div>
+      <h2 id="confirmDialogTitle">Aktion bestätigen</h2>
+      <p id="confirmDialogMessage"></p>
+      <div class="dialog-actions">
+        <button id="confirmDialogCancel" type="button">Abbrechen</button>
+        <button id="confirmDialogConfirm" type="button" class="danger-button">Bestätigen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="bookingConfirmDialog" class="dashboard-dialog booking-confirm-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="eyebrow">Buchung kontrollieren</div>
+      <h2 id="bookingDialogTitle">Buchung auswählen</h2>
+      <p id="bookingDialogMessage"></p>
+      <label class="dialog-field-label" for="bookingConfirmSelect">Ausgewählte Buchung</label>
+      <select id="bookingConfirmSelect" class="booking-select"></select>
+      <div id="bookingConfirmInfo" class="booking-confirm-info"></div>
+      <div id="bookingSuggestionInfo" class="booking-suggestion-info"></div>
+      <div class="dialog-actions">
+        <button id="bookingDialogCancel" type="button">Abbrechen</button>
+        <button id="bookingDialogConfirm" type="button" class="summary-email-btn">Buchung bestätigen</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
