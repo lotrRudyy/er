@@ -9,6 +9,8 @@ class ScheduledAction:
     due_monotonic: float
     kind: str
     payload: dict[str, Any]
+    phase: int
+    phase_generation: int
 
 @dataclass(slots=True)
 class RiddleTiming:
@@ -19,11 +21,17 @@ class RiddleTiming:
     skipped: bool = False
     not_solved: bool = False
     segment_started_monotonic: float | None = None
+    first_started_monotonic: float | None = None
+    reset_pending: bool = False
 
     def is_final(self) -> bool:
+        if self.reset_pending:
+            return False
         return bool(self.skipped or self.not_solved or float(self.solve_time_s or 0) > 0)
 
     def status(self) -> str:
+        if self.reset_pending:
+            return "reset"
         if self.skipped:
             return "skipped"
         if self.not_solved:
@@ -41,6 +49,7 @@ class CurrentRun:
     started_at: str
     started_monotonic: float
     players_count: int = 0
+    booking: dict[str, Any] = field(default_factory=dict)
     leaderboard_code: str | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
     riddle_timings: dict[str, RiddleTiming] = field(default_factory=dict)
@@ -62,6 +71,12 @@ class RuntimeState:
     pending: list[ScheduledAction] = field(default_factory=list)
     current_run: CurrentRun | None = None
     completed_phase_events: set[str] = field(default_factory=set)
+    phase_generation: int = 0
+    completion_db_saved: bool = False
+    completion_json_saved: bool = False
+    recovery_restored: bool = False
+    recovery_checkpoint_saved_at: str | None = None
+    recovery_durability_degraded: bool = False
 
     def to_game_state_payload(self) -> dict[str, Any]:
         payload = {"phase": self.phase, "lighting_phase": self.lighting_phase}
