@@ -47,8 +47,8 @@ struct PhaseCfg {
 };
 
 static constexpr PhaseCfg kPhaseCfg[15] = {
-  {true,  false, true,  false}, // 0
-  {false, false, false, false}, // 1
+  {false, false, false, false}, // 0
+  {true,  false, true,  false}, // 1
   {false, false, false, false}, // 2
   {true,  false, false, false}, // 3
   {false, true,  true,  false}, // 4
