@@ -38,6 +38,14 @@ void CandlesRiddle::setGameMode(bool inGame) {
   publishState();
 }
 
+void CandlesRiddle::setSolveEnabled(bool enabled) {
+  if (solveEnabled_ == enabled) return;
+  solveEnabled_ = enabled;
+  if (enabled) {
+    resetAll();
+  }
+}
+
 void CandlesRiddle::calibrateBases() {
   // One-time idle calibration at boot.
   //
@@ -125,8 +133,13 @@ void CandlesRiddle::tick(uint32_t nowMs) {
 
         if (detectBlow(i, thrAbs, nowMs)) {
           lastAction_ = nowMs;
-          lastSeqActivityMs_ = nowMs;
           setLed(i, false);
+
+          if (!solveEnabled_) {
+            continue;
+          }
+
+          lastSeqActivityMs_ = nowMs;
           if (progressed_ < 4) {
             progress_[progressed_] = i;
             progressed_++;
@@ -142,6 +155,20 @@ void CandlesRiddle::tick(uint32_t nowMs) {
           }
         }
       }
+
+      if (!solveEnabled_) {
+        bool anyOff = false;
+        for (int i = 0; i < 4; i++) {
+          if (!lit_[i]) {
+            anyOff = true;
+            break;
+          }
+        }
+        if (anyOff && (nowMs - lastAction_ >= 3000)) {
+          resetAll();
+        }
+      }
+
       evaluateSequenceIfDue(nowMs);
       // If we have a delayed reset armed (wrong full sequence), execute it after the same
       // timeout used for sequence inactivity.
