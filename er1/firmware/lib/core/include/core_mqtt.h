@@ -56,6 +56,9 @@ private:
   PubSubClient mqtt_{eth_};
   MqttDelegate* delegate_ = nullptr;
   uint32_t lastReconnectAttemptMs_ = 0;
+  uint32_t disconnectedSinceMs_ = 0;
+  bool disconnectTimerActive_ = false;
+  bool ethernetRecoveryDone_ = false;
   bool ethernetReady_ = false;
   static MqttClient* self_;
 };
