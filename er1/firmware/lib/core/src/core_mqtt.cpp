@@ -23,6 +23,10 @@
 
 namespace {
 
+constexpr uint32_t MQTT_RECONNECT_INTERVAL_MS = 2000;
+constexpr uint32_t ETHERNET_RECOVERY_AFTER_MS = 15000;
+constexpr uint32_t ESP_RESTART_AFTER_MS = 60000;
+
 void serialMqttLog(const String& msg) {
   if (Serial) {
     Serial.println(String("[mqtt] ") + msg);
@@ -121,9 +125,47 @@ void MqttClient::startEthernet() {
 }
 
 void MqttClient::ensureConnected() {
-  if (mqtt_.connected()) return;
+  if (mqtt_.connected()) {
+    disconnectTimerActive_ = false;
+    ethernetRecoveryDone_ = false;
+    return;
+  }
+
   const uint32_t now = millis();
-  if (now - lastReconnectAttemptMs_ < 2000) {
+
+  // Start one continuous-offline timer. A successful MQTT connection resets it.
+  if (!disconnectTimerActive_) {
+    disconnectedSinceMs_ = now;
+    disconnectTimerActive_ = true;
+    ethernetRecoveryDone_ = false;
+    serialMqttLog("MQTT offline; recovery timer started");
+  }
+
+  const uint32_t offlineMs = now - disconnectedSinceMs_;
+
+  // Last-resort recovery: if MQTT has been continuously offline for one minute,
+  // reboot the ESP. This also reinitializes SPI, Ethernet and all node state.
+  if (offlineMs >= ESP_RESTART_AFTER_MS) {
+    serialMqttLog(String("MQTT offline for ") + offlineMs + "ms; restarting ESP");
+    delay(50);
+    ESP.restart();
+    return;
+  }
+
+  // First escalation: after 15 seconds continuously offline, reset the W5500
+  // and rebuild the Ethernet stack exactly once for this outage.
+  if (!ethernetRecoveryDone_ && offlineMs >= ETHERNET_RECOVERY_AFTER_MS) {
+    serialMqttLog(String("MQTT offline for ") + offlineMs +
+                  "ms; resetting Ethernet/W5500");
+    mqtt_.disconnect();
+    eth_.stop();
+    ethernetReady_ = false;
+    startEthernet();
+    ethernetRecoveryDone_ = true;
+    lastReconnectAttemptMs_ = 0;
+  }
+
+  if (now - lastReconnectAttemptMs_ < MQTT_RECONNECT_INTERVAL_MS) {
     return;
   }
   lastReconnectAttemptMs_ = now;
@@ -154,6 +196,9 @@ void MqttClient::ensureConnected() {
 }
 
 void MqttClient::handleConnected() {
+  disconnectTimerActive_ = false;
+  disconnectedSinceMs_ = 0;
+  ethernetRecoveryDone_ = false;
   serialMqttLog(String("connected local=") + ipToString(Ethernet.localIP()));
   if (delegate_) {
     delegate_->onMqttConnected();
