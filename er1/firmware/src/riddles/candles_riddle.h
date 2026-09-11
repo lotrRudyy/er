@@ -10,6 +10,7 @@ public:
   void tick(uint32_t nowMs);
   bool onCmd(const char* cmd, const char* payload);
   void setGameMode(bool inGame);
+  void setSolveEnabled(bool enabled);
 
   uint32_t errorCount() const { return errorCount_; }
   bool shouldAllowLog(const char* level);
@@ -34,7 +35,7 @@ private:
   };
 
   static constexpr uint16_t kBlowWindowSamples = 250;
-  static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 45 + 99) / 100;
+  static constexpr uint16_t kBlowNeededSamples = (kBlowWindowSamples * 50 + 99) / 100;
 
   void log(const char* level, const String& msg) const;
   void log(const char* level, const String& msg, const String& dataJson) const;
@@ -93,6 +94,7 @@ private:
   int delta_[4] = {80, 80, 80, 80};
   uint32_t errorCount_ = 0;
   bool gameActive_ = false;
+  bool solveEnabled_ = false;
   bool moduleEnabled_ = true;
 
   uint32_t tries_ = 0;

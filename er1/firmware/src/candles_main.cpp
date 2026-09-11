@@ -9,7 +9,7 @@
 using namespace Core;
 
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "42";
+static const char* FW_VERSION = "43";
 static const char* FW_DESC = "candles debug logs 1s";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
@@ -110,6 +110,9 @@ static void gameModeSubscription(NodeContext& ctx, const char* /*topic*/, const 
 
   const PhaseCfg& cfg = kPhaseCfg[phase];
   applyTarget(module, cfg.enabled, cfg.solved);
+  if (module) {
+    module->setSolveEnabled(phase == 11);
+  }
   s_lastPhase = phase;
 }
 
