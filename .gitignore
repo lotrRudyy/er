@@ -19,6 +19,7 @@ er1/firmware/.pio/
 # ---- Pi runtime: logs and local secrets stay on the Pi ----
 er1/pi-runtime/logs/
 er1/pi-runtime/config/local.env
+web/er1_dashboard/.env
 
 # --- Tools: commit code, ignore outputs ---
 er1/tools/out/
