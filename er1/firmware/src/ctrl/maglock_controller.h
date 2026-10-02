@@ -48,7 +48,7 @@ private:
 
   static constexpr uint32_t kPulseMs = 1000;
   static constexpr uint32_t kHardCutoffMs = 1000;
-  static constexpr uint32_t kCooldownMs = 10000;
+  static constexpr uint32_t kCooldownMs = 5000;
   static constexpr uint32_t kBootGuardMs = 10000;
   static constexpr uint32_t kMetricIntervalMs = 10000;
 

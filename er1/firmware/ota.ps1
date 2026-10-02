@@ -29,6 +29,7 @@ $deployments = @{
     "candles"      = @{ Env="candles";      Dev="candles";      CmdNode="candles";      FirmwareName="candles.bin" }
     "star_sky"     = @{ Env="star_sky";     Dev="star_sky";     CmdNode="star_sky";     FirmwareName="star_sky.bin" }
     "star_slider"  = @{ Env="star_slider";  Dev="star_slider";  CmdNode="star_slider";  FirmwareName="star_slider.bin" }
+    "stop_timer"   = @{ Env="stop_timer";   Dev="stop_timer";   CmdNode="stop_timer";   FirmwareName="stop_timer.bin" }
 }
 
 $allTargets = @(
@@ -39,7 +40,8 @@ $allTargets = @(
     "knocking",
     "candles",
     "star_sky",
-    "star_slider"
+    "star_slider",
+    "stop_timer"
 )
 
 function Normalize-RequestedTargets {

@@ -21,6 +21,7 @@ struct NetConfig {
   // Optional per-node Ethernet reset pin override.
   // If < 0, the library default (ETH_RST macro) is used.
   int8_t ethRstPin = -1;
+  bool restartOnMqttLoss = true;
 };
 
 class MqttDelegate {
@@ -60,6 +61,7 @@ private:
   bool disconnectTimerActive_ = false;
   bool ethernetRecoveryDone_ = false;
   bool ethernetReady_ = false;
+  bool spiReady_ = false;
   static MqttClient* self_;
 };
 

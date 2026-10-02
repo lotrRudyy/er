@@ -103,8 +103,8 @@ er1 ota <target>
 
 Examples:
 
-- `er1 ota images_piano` (publishes UPDATE to `images/cmd`, verifies `images` + `piano`)
-- `er1 ota maglock` (canonical file `/firmware/maglock.bin`, also copies `maglock_ctrl.bin` on the Pi for migrations)
+- `er1 ota images_piano` (publishes UPDATE to `images_piano/sys/cmd`)
+- `er1 ota maglock` (canonical file `/node_firmware/maglock.bin`)
 
 The map aligns PlatformIO env, firmware filename, MQTT command topic, and verifier nodes. OTA artifact lives on the Pi at `/home/rudyy/er1/node_firmware/<FirmwareName>`.
 
@@ -229,9 +229,9 @@ OTA steps:
 
 1. Resolve target via the canonical map (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames, VerifyNodes). Build the PlatformIO env unless `-NoBuild` is set.
 2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/er1/node_firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
-3. From the Pi, verify `http://192.168.0.10/firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
-4. Run `~/er1/node_firmware/ota_publish.py --dev <Dev> --cmd-node <CmdNode> --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/firmware/<FirmwareName> --file /home/rudyy/er1/node_firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
-5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_verify.py` (running from `~/er1/node_firmware/`) watches `VerifyNodes` (images_piano verifies both `images` and `piano` even though `CmdNode=images`).
+3. From the Pi, verify `http://192.168.0.10/node_firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
+4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode>/sys --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/node_firmware/<FirmwareName> --file /home/rudyy/er1/node_firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/sys/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
+5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_publish.py` verifies the deployment node returns with the announced firmware version.
 
 ---
 
