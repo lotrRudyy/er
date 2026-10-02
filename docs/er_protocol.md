@@ -121,4 +121,4 @@ Any change requires updating affected documentation
 Violating this protocol is considered a regression
 12. Node Migration Status
 
-**maglock:** Fully migrated to canonical ER1 topics (fw 1.4+); legacy `maglock/lock/+/cmd` commands accepted with deprecation warnings until further notice.
+**maglock:** Fully migrated to the canonical `maglock/cmd` JSON command topic; legacy `maglock/lock/+/cmd` commands are not accepted.

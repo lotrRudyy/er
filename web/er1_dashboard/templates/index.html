@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body>
+<body class="dashboard-body">
   <div class="page dashboard-page dashboard-v4">
     <header class="panel live-dashboard-header">
       <section class="live-phase-block">
@@ -21,7 +21,7 @@
       <section class="live-timers-block">
         <div class="live-timer-card">
           <div class="eyebrow">Spielzeit</div>
-          <div id="timerValue" class="live-timer-value">00:00:00</div>
+          <div id="timerValue" class="live-timer-value">00:00</div>
         </div>
         <div class="live-timer-card">
           <div class="eyebrow">Aktuelles Rätsel</div>
@@ -55,6 +55,7 @@
             <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" />
           </div>
           <button id="refreshBookingsBtn" class="booking-refresh-btn" type="button">Buchungen aktualisieren</button>
+          <button id="applyBookingBtn" class="booking-refresh-btn" type="button">Buchung anwenden</button>
           <div id="bookingFeedback" class="summary-email-feedback"></div>
         </div>
       </details>
@@ -110,6 +111,34 @@
           </table>
         </div>
       </section>
+
+      <details id="maintenanceHintEditor" class="panel hint-editor-panel" open>
+        <summary>
+          <span>
+            <span class="eyebrow">Tippvorlagen</span>
+            <span class="diagnostics-title">Wartungseditor</span>
+          </span>
+          <span class="diagnostics-summary-note">Außerhalb der Wartung schreibgeschützt</span>
+        </summary>
+        <div class="hint-editor-body">
+          <div class="hint-editor-toolbar">
+            <label>Sprache
+              <select id="hintEditorLanguage" class="booking-select">
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+                <option value="it">Italiano</option>
+              </select>
+            </label>
+            <label>Rätsel
+              <select id="hintEditorRiddle" class="booking-select"></select>
+            </label>
+            <button id="hintEditorAdd" type="button">Tipp hinzufügen</button>
+            <button id="hintEditorSave" type="button" class="summary-email-btn">Änderungen speichern</button>
+          </div>
+          <div id="hintEditorStatus" class="hint-editor-status" aria-live="polite"></div>
+          <div id="hintEditorList" class="hint-editor-list"></div>
+        </div>
+      </details>
 
       <section id="emergencyPanel" class="panel emergency-panel hidden">
         <div class="section-heading-row">
@@ -193,7 +222,6 @@
           </fieldset>
 
           <div class="diagnostics-display-actions">
-            <button id="diagnosticsClearBtn" type="button">Anzeige leeren</button>
             <span id="diagnosticsCount" class="diagnostics-count">0 Einträge</span>
           </div>
         </div>
@@ -266,34 +294,6 @@
       </div>
     </details>
   </div>
-
-  <dialog id="confirmDialog" class="dashboard-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="eyebrow danger-eyebrow">Bestätigung erforderlich</div>
-      <h2 id="confirmDialogTitle">Aktion bestätigen</h2>
-      <p id="confirmDialogMessage"></p>
-      <div class="dialog-actions">
-        <button id="confirmDialogCancel" type="button">Abbrechen</button>
-        <button id="confirmDialogConfirm" type="button" class="danger-button">Bestätigen</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="bookingConfirmDialog" class="dashboard-dialog booking-confirm-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="eyebrow">Buchung kontrollieren</div>
-      <h2 id="bookingDialogTitle">Buchung auswählen</h2>
-      <p id="bookingDialogMessage"></p>
-      <label class="dialog-field-label" for="bookingConfirmSelect">Ausgewählte Buchung</label>
-      <select id="bookingConfirmSelect" class="booking-select"></select>
-      <div id="bookingConfirmInfo" class="booking-confirm-info"></div>
-      <div id="bookingSuggestionInfo" class="booking-suggestion-info"></div>
-      <div class="dialog-actions">
-        <button id="bookingDialogCancel" type="button">Abbrechen</button>
-        <button id="bookingDialogConfirm" type="button" class="summary-email-btn">Buchung bestätigen</button>
-      </div>
-    </form>
-  </dialog>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

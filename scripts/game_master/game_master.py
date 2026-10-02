@@ -9,10 +9,11 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
 
@@ -23,9 +24,11 @@ from phases import PHASES, ADMIN_TARGET_PHASE, RIDDLE_SOLVE_EVENTS
 
 LOG = logging.getLogger("game_master")
 
-RESETTABLE_RIDDLES = {"prison", "wheel", "chains", "tangram", "magnet"}
 CHECKPOINT_SCHEMA = "er1.game_master.active_run"
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
+LEGACY_CHECKPOINT_VERSION = 2
+LEGACY_RESETTABLE_RIDDLES = {"prison", "wheel", "chains", "tangram", "magnet"}
+GAME_START_DELAY_S = 5.0
 MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024
 CHECKPOINT_SIZE_MARGIN_BYTES = 64 * 1024
 MAX_RECOVERABLE_ELAPSED_S = 7 * 24 * 60 * 60
@@ -41,6 +44,19 @@ MAX_HINTS_BYTES = 48 * 1024
 MAX_BOOKING_BYTES = 65536
 MAX_BOOKING_FIELD_BYTES = 8192
 _CONTROL_CHAR_TRANSLATION = {codepoint: None for codepoint in range(32) if codepoint not in {9, 10}}
+RIDDLE_STAGES: tuple[tuple[str, ...], ...] = (
+    ("images",),
+    ("piano",),
+    ("prison",),
+    ("wheel",),
+    ("chains",),
+    ("tangram", "magnet"),
+    ("chess",),
+    ("knocking",),
+    ("candles",),
+    ("stars",),
+    ("sissi",),
+)
 
 
 class RecoveryPersistenceError(RuntimeError):
@@ -172,6 +188,7 @@ class GameMaster:
         db_path: str | Path | None = None,
         runs_dir: str | Path | None = None,
         checkpoint_path: str | Path | None = None,
+        auto_reboot_state_path: str | Path | None = None,
         mqtt_client: Any | None = None,
         monotonic_fn: Callable[[], float] | None = None,
         utc_now_fn: Callable[[], datetime] | None = None,
@@ -184,6 +201,16 @@ class GameMaster:
         _ensure_directory_durable(self.runs_dir)
         self.checkpoint_path = Path(checkpoint_path or config.ACTIVE_RUN_CHECKPOINT_PATH)
         self._checkpoint_interval_s = max(1.0, float(config.ACTIVE_RUN_CHECKPOINT_INTERVAL_S))
+        self.auto_reboot_state_path = Path(auto_reboot_state_path or config.AUTO_NODE_REBOOT_STATE_PATH)
+        self._auto_reboot_interval_s = max(1.0, float(config.AUTO_NODE_REBOOT_INTERVAL_S))
+        self._auto_reboot_interval_days = max(1, round(self._auto_reboot_interval_s / (24 * 60 * 60)))
+        self._auto_reboot_retry_s = max(1.0, float(config.AUTO_NODE_REBOOT_RETRY_S))
+        self._auto_reboot_timezone = ZoneInfo(str(config.AUTO_NODE_REBOOT_TIMEZONE))
+        self._auto_reboot_local_hour = max(0, min(23, int(config.AUTO_NODE_REBOOT_LOCAL_HOUR)))
+        self._last_auto_reboot_at = self._utc_timestamp()
+        self._last_auto_reboot_attempt_at: float | None = None
+        self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
+        self._load_auto_reboot_state()
 
         self._client = mqtt_client or mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="game-master")
         self._client.enable_logger(LOG)
@@ -207,6 +234,147 @@ class GameMaster:
         self._bootstrapped = False
         self._restored_checkpoint = self._load_active_checkpoint()
         self._scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+
+    def _utc_timestamp(self) -> float:
+        now = self._utc_now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return now.timestamp()
+
+    def _next_auto_reboot_after(self, anchor_ts: float) -> float:
+        anchor = datetime.fromtimestamp(anchor_ts, tz=self._auto_reboot_timezone)
+        next_date = anchor.date() + timedelta(days=self._auto_reboot_interval_days)
+        due = datetime(
+            next_date.year,
+            next_date.month,
+            next_date.day,
+            self._auto_reboot_local_hour,
+            tzinfo=self._auto_reboot_timezone,
+        )
+        return due.timestamp()
+
+    def _auto_reboot_state_payload(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "interval_days": self._auto_reboot_interval_days,
+            "timezone": str(config.AUTO_NODE_REBOOT_TIMEZONE),
+            "local_hour": self._auto_reboot_local_hour,
+            "last_completed_at": datetime.fromtimestamp(
+                self._last_auto_reboot_at, tz=timezone.utc
+            ).isoformat(timespec="seconds"),
+            "last_attempt_at": (
+                datetime.fromtimestamp(self._last_auto_reboot_attempt_at, tz=timezone.utc).isoformat(timespec="seconds")
+                if self._last_auto_reboot_attempt_at is not None
+                else None
+            ),
+            "next_due_at": datetime.fromtimestamp(
+                self._next_auto_reboot_at, tz=self._auto_reboot_timezone
+            ).isoformat(timespec="seconds"),
+        }
+
+    def _save_auto_reboot_state(self) -> bool:
+        try:
+            return _atomic_write_json(self.auto_reboot_state_path, self._auto_reboot_state_payload())
+        except Exception:
+            LOG.exception("Automatic node-reboot state could not be saved path=%s", self.auto_reboot_state_path)
+            return False
+
+    def _load_auto_reboot_state(self) -> None:
+        if not self.auto_reboot_state_path.exists():
+            self._save_auto_reboot_state()
+            return
+        try:
+            payload = json.loads(self.auto_reboot_state_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or int(payload.get("version", 0)) != 1:
+                raise ValueError("unsupported automatic node-reboot state")
+            completed = datetime.fromisoformat(str(payload["last_completed_at"]))
+            if completed.tzinfo is None:
+                completed = completed.replace(tzinfo=timezone.utc)
+            completed_ts = completed.timestamp()
+            if not math.isfinite(completed_ts) or completed_ts <= 0:
+                raise ValueError("invalid automatic node-reboot completion time")
+            now_ts = self._utc_timestamp()
+            self._last_auto_reboot_at = min(completed_ts, now_ts)
+            next_due_raw = payload.get("next_due_at")
+            if next_due_raw:
+                next_due = datetime.fromisoformat(str(next_due_raw))
+                if next_due.tzinfo is None:
+                    next_due = next_due.replace(tzinfo=self._auto_reboot_timezone)
+                next_due_ts = next_due.timestamp()
+                if not math.isfinite(next_due_ts) or next_due_ts <= self._last_auto_reboot_at:
+                    raise ValueError("invalid automatic node-reboot due time")
+                self._next_auto_reboot_at = next_due_ts
+            else:
+                self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
+            attempt_raw = payload.get("last_attempt_at")
+            if attempt_raw:
+                attempt = datetime.fromisoformat(str(attempt_raw))
+                if attempt.tzinfo is None:
+                    attempt = attempt.replace(tzinfo=timezone.utc)
+                attempt_ts = attempt.timestamp()
+                if math.isfinite(attempt_ts) and 0 < attempt_ts <= now_ts:
+                    self._last_auto_reboot_attempt_at = attempt_ts
+        except Exception:
+            LOG.exception(
+                "Automatic node-reboot state is invalid; starting a new interval path=%s",
+                self.auto_reboot_state_path,
+            )
+            self._last_auto_reboot_at = self._utc_timestamp()
+            self._last_auto_reboot_attempt_at = None
+            self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
+            self._save_auto_reboot_state()
+
+    def _automatic_node_reboot_if_due(self) -> None:
+        with self._checkpoint_io_lock:
+            self._automatic_node_reboot_if_due_locked()
+
+    def _automatic_node_reboot_if_due_locked(self) -> None:
+        if self._shutting_down.is_set() or self._hardware_effects_blocked:
+            return
+        now_ts = self._utc_timestamp()
+        if now_ts < self._next_auto_reboot_at:
+            return
+        if (
+            self._last_auto_reboot_attempt_at is not None
+            and now_ts - self._last_auto_reboot_attempt_at < self._auto_reboot_retry_s
+        ):
+            return
+        with self._lock:
+            if self.state.phase != 0:
+                return
+
+        # Persist the attempt before emitting commands so a process crash cannot
+        # create a tight reboot loop. Failed batches are retried after the cooldown.
+        self._last_auto_reboot_attempt_at = now_ts
+        if not self._save_auto_reboot_state():
+            return
+
+        queued_nodes: list[str] = []
+        failed_nodes: list[str] = []
+        success_code = int(getattr(mqtt, "MQTT_ERR_SUCCESS", 0))
+        for node_id in config.PHYSICAL_NODE_IDS:
+            try:
+                info = self._client.publish(f"{node_id}/sys/cmd", "REBOOT", qos=0, retain=False)
+                queued = int(getattr(info, "rc", -1)) == success_code
+            except Exception:
+                queued = False
+                LOG.exception("Automatic node reboot publish failed node=%s", node_id)
+            (queued_nodes if queued else failed_nodes).append(node_id)
+
+        if failed_nodes:
+            LOG.error(
+                "Automatic node reboot batch was incomplete queued=%s failed=%s",
+                queued_nodes,
+                failed_nodes,
+            )
+            return
+
+        self._last_auto_reboot_at = now_ts
+        while self._next_auto_reboot_at <= now_ts:
+            self._next_auto_reboot_at = self._next_auto_reboot_after(self._next_auto_reboot_at)
+        if not self._save_auto_reboot_state():
+            LOG.error("Automatic node reboot completed, but its completion timestamp is not crash-durable")
+        LOG.info("Automatic node reboot queued for all physical nodes nodes=%s", queued_nodes)
 
     def start(self) -> None:
         with self._checkpoint_io_lock:
@@ -341,6 +509,17 @@ class GameMaster:
         seconds = float(value)
         if not math.isfinite(seconds) or not 0.0 <= seconds <= MAX_RECOVERABLE_ELAPSED_S:
             raise ValueError(f"checkpoint {name} is outside the recoverable range")
+        return seconds
+
+    @staticmethod
+    def _checked_timer_elapsed(value: Any, name: str, *, allow_none: bool = False) -> float | None:
+        if value is None and allow_none:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"checkpoint {name} must be a number")
+        seconds = float(value)
+        if not math.isfinite(seconds) or not -GAME_START_DELAY_S <= seconds <= MAX_RECOVERABLE_ELAPSED_S:
+            raise ValueError(f"checkpoint {name} is outside the recoverable timer range")
         return seconds
 
     @classmethod
@@ -501,10 +680,10 @@ class GameMaster:
             timing = run.riddle_timings[riddle]
             first_elapsed = None
             if timing.first_started_monotonic is not None:
-                first_elapsed = round(max(0.0, now_mono - timing.first_started_monotonic), 3)
+                first_elapsed = round(now_mono - timing.first_started_monotonic, 3)
             segment_elapsed = None
             if timing.segment_started_monotonic is not None:
-                segment_elapsed = round(max(0.0, now_mono - timing.segment_started_monotonic), 3)
+                segment_elapsed = round(now_mono - timing.segment_started_monotonic, 3)
             status = timing.status()
             hints = self._truncate_utf8(timing.hints or "", MAX_HINTS_BYTES, keep_tail=True)
             if hints != timing.hints:
@@ -516,7 +695,6 @@ class GameMaster:
                 "hints": hints,
                 "skipped": bool(timing.skipped),
                 "not_solved": bool(timing.not_solved),
-                "reset_pending": bool(timing.reset_pending),
                 "status": status,
                 "first_elapsed_s": first_elapsed,
                 "segment_elapsed_s": segment_elapsed,
@@ -526,6 +704,8 @@ class GameMaster:
             }
 
         run_elapsed_s = self._compute_live_effective_duration_s(live_payloads)
+        if now_mono < run.started_monotonic:
+            run_elapsed_s = round(now_mono - run.started_monotonic, 3)
         booking = self._bounded_booking(run.booking)
         if booking != run.booking:
             run.booking = copy.deepcopy(booking)
@@ -678,9 +858,70 @@ class GameMaster:
             error,
         )
 
+    def _normalize_checkpoint_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        if payload.get("schema") != CHECKPOINT_SCHEMA or payload.get("version") != LEGACY_CHECKPOINT_VERSION:
+            return payload, False
+
+        normalized = copy.deepcopy(payload)
+        state_payload = normalized.get("state")
+        run_payload = normalized.get("run")
+        if not isinstance(state_payload, dict) or not isinstance(run_payload, dict):
+            raise ValueError("checkpoint state and run must be objects")
+        phase = state_payload.get("phase")
+        if type(phase) is not int or phase not in PHASES:
+            raise ValueError("legacy checkpoint phase is invalid")
+        raw_timings = run_payload.get("riddle_timings")
+        if not isinstance(raw_timings, dict) or set(raw_timings) != set(config.RIDDLES):
+            raise ValueError("checkpoint riddle set does not match configuration")
+
+        spec = PHASES[phase]
+        for riddle in config.RIDDLES:
+            item = raw_timings[riddle]
+            if not isinstance(item, dict):
+                raise ValueError(f"legacy checkpoint timing is invalid for {riddle}")
+            reset_pending = self._checked_bool(item.get("reset_pending"), f"{riddle}.reset_pending")
+            if not reset_pending:
+                item.pop("reset_pending")
+                continue
+
+            solve_time_s = self._checked_seconds(item.get("solve_time_s"), f"{riddle}.solve_time_s")
+            skipped = self._checked_bool(item.get("skipped"), f"{riddle}.skipped")
+            not_solved = self._checked_bool(item.get("not_solved"), f"{riddle}.not_solved")
+            first_elapsed = self._checked_seconds(
+                item.get("first_elapsed_s"), f"{riddle}.first_elapsed_s", allow_none=True
+            )
+            segment_elapsed = self._checked_seconds(
+                item.get("segment_elapsed_s"), f"{riddle}.segment_elapsed_s", allow_none=True
+            )
+            if (
+                item.get("status") != "reset"
+                or solve_time_s != 0
+                or skipped
+                or not_solved
+                or first_elapsed is None
+                or segment_elapsed is None
+                or segment_elapsed > first_elapsed + 0.001
+                or riddle not in LEGACY_RESETTABLE_RIDDLES
+                or riddle not in set(spec.active_riddles) | set(spec.solved_riddles)
+                or phase == 14
+            ):
+                raise ValueError(f"legacy checkpoint reset state is invalid for {riddle}")
+
+            item.pop("reset_pending")
+            if riddle in spec.active_riddles:
+                item["status"] = "active"
+            else:
+                item["solve_time_s"] = round(max(0.001, segment_elapsed), 3)
+                item["segment_elapsed_s"] = None
+                item["status"] = "solved"
+
+        normalized["version"] = CHECKPOINT_VERSION
+        return normalized, True
+
     def _load_active_checkpoint(self) -> bool:
         if not self.checkpoint_path.exists():
             return False
+        migrated = False
         try:
             if self.checkpoint_path.stat().st_size > MAX_CHECKPOINT_BYTES - CHECKPOINT_SIZE_MARGIN_BYTES:
                 raise ValueError("checkpoint exceeds size limit")
@@ -689,11 +930,38 @@ class GameMaster:
             if not isinstance(payload, dict):
                 raise ValueError("checkpoint root must be an object")
             self._reject_monotonic_fields(payload)
+            payload, migrated = self._normalize_checkpoint_payload(payload)
             restored = self._restore_checkpoint_payload(payload)
         except Exception as exc:
             self._quarantine_checkpoint(exc)
             self.state = RuntimeState(phase=config.DEFAULT_PHASE)
             return False
+        if migrated:
+            try:
+                migration_synced = _atomic_write_json(self.checkpoint_path, payload)
+            except Exception:
+                migration_synced = False
+                LOG.critical(
+                    "Valid legacy checkpoint could not be migrated durably; preserving it and starting in safe standby path=%s",
+                    self.checkpoint_path,
+                    exc_info=True,
+                )
+            if not migration_synced:
+                self._checkpoint_writes_blocked = True
+                self._hardware_effects_blocked = True
+                self._startup_recovery_fault = True
+                self.state = RuntimeState(
+                    phase=config.DEFAULT_PHASE,
+                    recovery_durability_degraded=True,
+                )
+                return False
+            self._persistence_revision += 1
+            LOG.warning(
+                "Migrated active-run checkpoint version=%s to version=%s path=%s",
+                LEGACY_CHECKPOINT_VERSION,
+                CHECKPOINT_VERSION,
+                self.checkpoint_path,
+            )
         try:
             _fsync_parent(self.checkpoint_path)
         except Exception:
@@ -790,7 +1058,9 @@ class GameMaster:
         except ValueError as exc:
             raise ValueError("checkpoint run.date must be YYYY-MM-DD") from exc
         started_at = self._validate_iso_datetime(run_payload.get("started_at"), "run.started_at")
-        run_elapsed_s = self._checked_seconds(run_payload.get("run_elapsed_s"), "run.run_elapsed_s")
+        run_elapsed_s = self._checked_timer_elapsed(run_payload.get("run_elapsed_s"), "run.run_elapsed_s")
+        if run_elapsed_s < 0 and not 3 <= phase < 14:
+            raise ValueError("checkpoint countdown is invalid outside an active game")
         players_count = self._checked_int(run_payload.get("players_count"), "run.players_count", 0, 1000)
         booking = run_payload.get("booking")
         if (
@@ -836,7 +1106,7 @@ class GameMaster:
             duration_s=duration_s,
         )
 
-        valid_statuses = {"pending", "active", "reset", "solved", "skipped", "not_solved"}
+        valid_statuses = {"pending", "active", "solved", "skipped", "not_solved"}
         for riddle in config.RIDDLES:
             item = raw_timings[riddle]
             if not isinstance(item, dict) or item.get("riddle_key") != riddle:
@@ -851,24 +1121,38 @@ class GameMaster:
                 raise ValueError(f"checkpoint hints are invalid for {riddle}")
             skipped = self._checked_bool(item.get("skipped"), f"{riddle}.skipped")
             not_solved = self._checked_bool(item.get("not_solved"), f"{riddle}.not_solved")
-            reset_pending = self._checked_bool(item.get("reset_pending"), f"{riddle}.reset_pending")
             status = item.get("status")
             if status not in valid_statuses:
                 raise ValueError(f"checkpoint status is invalid for {riddle}")
             if skipped and not_solved:
                 raise ValueError(f"checkpoint has conflicting outcomes for {riddle}")
-            first_elapsed = self._checked_seconds(
+            first_elapsed = self._checked_timer_elapsed(
                 item.get("first_elapsed_s"), f"{riddle}.first_elapsed_s", allow_none=True
             )
-            segment_elapsed = self._checked_seconds(
+            segment_elapsed = self._checked_timer_elapsed(
                 item.get("segment_elapsed_s"), f"{riddle}.segment_elapsed_s", allow_none=True
             )
+            phase_spec = PHASES[phase]
+            reached_during_countdown = (
+                run_elapsed_s < 0
+                and riddle in set(phase_spec.active_riddles) | set(phase_spec.solved_riddles)
+                and status in {"active", "solved", "skipped", "not_solved"}
+            )
+            if first_elapsed is not None and first_elapsed < 0 and not (
+                reached_during_countdown and abs(first_elapsed - run_elapsed_s) <= 0.001
+            ):
+                raise ValueError(f"checkpoint countdown timing is invalid for {riddle}")
+            if segment_elapsed is not None and segment_elapsed < 0 and not (
+                reached_during_countdown
+                and status == "active"
+                and riddle in phase_spec.active_riddles
+                and abs(segment_elapsed - run_elapsed_s) <= 0.001
+            ):
+                raise ValueError(f"checkpoint countdown timing is invalid for {riddle}")
             if segment_elapsed is not None and first_elapsed is None:
                 raise ValueError(f"checkpoint segment lacks first activation for {riddle}")
             if segment_elapsed is not None and first_elapsed is not None and segment_elapsed > first_elapsed + 0.001:
                 raise ValueError(f"checkpoint segment predates first activation for {riddle}")
-            if reset_pending and (skipped or not_solved or solve_time_s > 0):
-                raise ValueError(f"checkpoint reset state conflicts with final data for {riddle}")
             timing = RiddleTiming(
                 riddle_key=riddle,
                 solve_time_s=solve_time_s,
@@ -878,13 +1162,12 @@ class GameMaster:
                 not_solved=not_solved,
                 first_started_monotonic=None if first_elapsed is None else now_mono - first_elapsed,
                 segment_started_monotonic=None if segment_elapsed is None else now_mono - segment_elapsed,
-                reset_pending=reset_pending,
             )
             if timing.status() != status:
                 raise ValueError(f"checkpoint status metadata is inconsistent for {riddle}")
-            if status in {"active", "reset"} and segment_elapsed is None:
+            if status == "active" and segment_elapsed is None:
                 raise ValueError(f"checkpoint active timing lacks elapsed state for {riddle}")
-            if status not in {"active", "reset"} and segment_elapsed is not None:
+            if status != "active" and segment_elapsed is not None:
                 raise ValueError(f"checkpoint final timing has a running segment for {riddle}")
             run.riddle_timings[riddle] = timing
 
@@ -900,19 +1183,14 @@ class GameMaster:
         for riddle, timing in run.riddle_timings.items():
             status = timing.status()
             if riddle in solved_riddles:
-                if status not in final_statuses | {"reset"}:
+                if status not in final_statuses:
                     raise ValueError(f"checkpoint has an unfinished historical riddle in phase {phase}: {riddle}")
             elif riddle in active_riddles:
                 pending_candles_gate = phase == 10 and riddle == "candles" and status == "pending"
-                if status not in final_statuses | {"active", "reset"} and not pending_candles_gate:
+                if status not in final_statuses | {"active"} and not pending_candles_gate:
                     raise ValueError(f"checkpoint has an inactive current riddle in phase {phase}: {riddle}")
             elif status != "pending":
                 raise ValueError(f"checkpoint has riddle state outside phase {phase}: {riddle}")
-            if status == "reset" and (
-                riddle not in RESETTABLE_RIDDLES
-                or riddle not in active_riddles | solved_riddles
-            ):
-                raise ValueError(f"checkpoint has an impossible historical reset: {riddle}")
 
         sissi_timing = run.riddle_timings["sissi"]
         if phase < 13 and sissi_timing.status() != "pending":
@@ -924,8 +1202,8 @@ class GameMaster:
                 raise ValueError("finished checkpoint must come directly from phase 13")
             if sissi_timing.status() != "solved" or not sissi_timing.is_final():
                 raise ValueError("finished checkpoint requires a genuine solved Sissi timing")
-            if any(not timing.is_final() or timing.reset_pending for timing in run.riddle_timings.values()):
-                raise ValueError("finished checkpoint contains an unfinished or reset riddle")
+            if any(not timing.is_final() for timing in run.riddle_timings.values()):
+                raise ValueError("finished checkpoint contains an unfinished riddle")
 
         restored = RuntimeState(
             phase=phase,
@@ -1089,15 +1367,15 @@ class GameMaster:
         for key, timing in run.riddle_timings.items():
             status = timing.status()
             final_time = float(timing.solve_time_s or 0)
-            if status in {"active", "reset"} and timing.segment_started_monotonic is not None:
-                live_time = round(max(0.0, now_mono - timing.segment_started_monotonic), 3)
+            if status == "active" and timing.segment_started_monotonic is not None:
+                live_time = round(now_mono - timing.segment_started_monotonic, 3)
             else:
                 live_time = round(max(0.0, final_time), 3)
             riddle_payloads[key] = {
                 "riddle_key": timing.riddle_key,
                 "solve_time_s": round(max(0.0, final_time), 3),
                 "live_time_s": live_time,
-                "display_time_s": live_time if status in {"active", "reset"} else round(max(0.0, final_time), 3),
+                "display_time_s": live_time if status == "active" else round(max(0.0, final_time), 3),
                 "hint_count": int(timing.hint_count or 0),
                 "hints": timing.hints or "",
                 "skipped": bool(timing.skipped),
@@ -1106,7 +1384,6 @@ class GameMaster:
                 "solved": status == "solved",
                 "final": status in {"solved", "skipped", "not_solved"},
                 "active": status == "active",
-                "reset_pending": bool(timing.reset_pending),
             }
 
         active_riddles = tuple(PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE]).active_riddles or ())
@@ -1120,9 +1397,12 @@ class GameMaster:
                 break
 
         live_duration_s = self._compute_live_effective_duration_s(riddle_payloads)
+        if now_mono < run.started_monotonic:
+            live_duration_s = round(now_mono - run.started_monotonic, 3)
         payload["players_count"] = int(run.players_count or 0)
         payload["current_riddle_name"] = current_riddle_name
-        payload["current_riddle_elapsed_s"] = round(max(0.0, current_riddle_elapsed_s), 3)
+        payload["current_riddle_elapsed_s"] = round(current_riddle_elapsed_s, 3)
+        payload["timer_elapsed_s"] = live_duration_s
         payload["run"] = {
             "id": run.run_id,
             "run_id": run.run_id,
@@ -1146,6 +1426,8 @@ class GameMaster:
             "tangram", "magnet", "chess", "knocking", "candles", "stars", "sissi",
         ]
         times = {key: float((riddle_payloads.get(key) or {}).get("display_time_s") or 0) for key in order}
+        if times["images"] < 0:
+            return round(max(-GAME_START_DELAY_S, times["images"]), 3)
         serial_before_parallel = times["images"] + times["piano"] + times["prison"] + times["wheel"] + times["chains"]
         duration_s = (
             serial_before_parallel
@@ -1195,16 +1477,20 @@ class GameMaster:
             self.state.recovery_restored = False
             self.state.recovery_checkpoint_saved_at = None
 
-    def _start_run_timer(self, *, publish: bool = True) -> None:
+    def _start_run_timer(self, *, delay_s: float = GAME_START_DELAY_S, publish: bool = True) -> None:
+        delay = float(delay_s)
+        if not math.isfinite(delay) or not 0 <= delay <= GAME_START_DELAY_S:
+            raise ValueError("game timer start delay is outside the supported range")
         with self._lock:
             if self.state.current_run is None:
                 self.state.current_run = self._new_run_shell()
             run = self.state.current_run
             now = self._utc_now()
-            started_at = now.isoformat(timespec="seconds")
-            run.date = now.date().isoformat()
+            start_time = now + timedelta(seconds=delay)
+            started_at = start_time.isoformat(timespec="seconds")
+            run.date = start_time.date().isoformat()
             run.started_at = started_at
-            run.started_monotonic = self._monotonic()
+            run.started_monotonic = self._monotonic() + delay
             run.ended_at = None
             run.duration_s = None
             run.events.clear()
@@ -1399,8 +1685,8 @@ class GameMaster:
             run = self.state.current_run
             if run is None:
                 return
-            now = self._monotonic()
             current_phase = int(self.state.phase)
+            now = max(self._monotonic(), run.started_monotonic)
             for node in nodes:
                 if node == "candles" and current_phase < 11:
                     continue
@@ -1435,10 +1721,9 @@ class GameMaster:
 
             if not timing.is_final() or float(timing.solve_time_s or 0) <= 0:
                 timing.solve_time_s = round(max(0.0, now_mono - segment_start), 3)
-                if outcome == "solved" and timing.solve_time_s <= 0:
+                if outcome in {"solved", "skipped"} and timing.solve_time_s <= 0:
                     timing.solve_time_s = 0.001
             timing.segment_started_monotonic = None
-            timing.reset_pending = False
             timing.skipped = outcome == "skipped"
             timing.not_solved = outcome == "not_solved"
             if timing.skipped and timing.not_solved:
@@ -1474,6 +1759,36 @@ class GameMaster:
     def _canonical_riddle_name(name: str) -> str:
         return "stars" if str(name).strip() == "star_slider" else str(name).strip()
 
+    def _operator_guard_matches(self, payload: dict[str, Any], cmd: str) -> bool:
+        expected_run_id = str(payload.get("expected_run_id") or "").strip()
+        raw_expected_phase = payload.get("expected_phase")
+        has_expected_phase = raw_expected_phase is not None and raw_expected_phase != ""
+        expected_phase: int | None = None
+        if type(raw_expected_phase) is int:
+            expected_phase = raw_expected_phase
+        elif isinstance(raw_expected_phase, str) and raw_expected_phase.strip():
+            try:
+                expected_phase = int(raw_expected_phase.strip())
+            except ValueError:
+                expected_phase = None
+
+        with self._lock:
+            current_phase = int(self.state.phase)
+            current_run_id = self.state.current_run.run_id if self.state.current_run is not None else ""
+        phase_matches = not has_expected_phase or expected_phase == current_phase
+        run_matches = not expected_run_id or expected_run_id == current_run_id
+        if phase_matches and run_matches:
+            return True
+
+        self.publish_debug("OPERATOR_COMMAND_IGNORED_STALE_STATE", {
+            "cmd": cmd,
+            "expected_run_id": expected_run_id,
+            "current_run_id": current_run_id,
+            "expected_phase": raw_expected_phase,
+            "current_phase": current_phase,
+        })
+        return False
+
     def handle_node_state(self, node_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
             previous = self.state.node_last_state.get(node_id)
@@ -1494,6 +1809,8 @@ class GameMaster:
         cmd = str(payload.get("cmd", "")).strip().lower()
         if not cmd:
             raise ValueError("game/cmd requires cmd")
+        if not self._operator_guard_matches(payload, cmd):
+            return
         if cmd in {"set_phase", "phase"}:
             self._enter_phase(int(payload["phase"]), "admin_set_phase")
             return
@@ -1556,7 +1873,7 @@ class GameMaster:
             action = str(payload.get("action", "")).strip()
             out = {"cmd": action}
             for k, v in payload.items():
-                if k not in {"cmd", "action"}:
+                if k not in {"cmd", "action", "expected_run_id", "expected_phase"}:
                     out[k] = v
             self.publish_lighting_cmd(out)
             return
@@ -1564,38 +1881,31 @@ class GameMaster:
             action = str(payload.get("action", "")).strip()
             out = {"cmd": action}
             for k, v in payload.items():
-                if k not in {"cmd", "action"}:
+                if k not in {"cmd", "action", "expected_run_id", "expected_phase"}:
                     out[k] = v
             self.publish_maglock_cmd(out)
             return
-        if cmd == "set_hint_count":
-            self.set_hint_count(str(payload.get("riddle", "")).strip(), int(payload.get("count", 0) or 0))
+        if cmd in {"adjust_hint_count", "set_hint_count"}:
+            if "count" in payload:
+                raise ValueError("MQTT hint count changes require delta +1 or -1")
+            delta = payload.get("delta")
+            if type(delta) is not int or delta not in {-1, 1}:
+                raise ValueError("MQTT hint count delta must be +1 or -1")
+            self.adjust_hint_count(str(payload.get("riddle", "")).strip(), delta)
             return
         if cmd in {"set_riddle_time", "set_solve_time"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
-            raw_seconds = payload.get("solve_time_s", payload.get("time_s", payload.get("seconds", 0)))
-            self.set_riddle_time(riddle, float(raw_seconds or 0))
+            riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
+            raw_seconds = payload.get("solve_time_s", payload.get("time_s", payload.get("seconds")))
+            self.set_riddle_time(riddle, float(raw_seconds))
             return
         if cmd in {"set_riddle_outcome", "set_outcome"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
+            riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
             outcome = str(payload.get("outcome", payload.get("status", ""))).strip()
-            self.set_riddle_outcome(riddle, outcome, advance=bool(payload.get("advance", False)))
+            self.set_riddle_outcome(riddle, outcome)
             return
         if cmd in {"skip_riddle", "skip"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
-            self.set_riddle_outcome(riddle, "skipped", advance=True)
-            return
-        if cmd in {"mark_not_solved", "not_solved"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
-            self.set_riddle_outcome(riddle, "not_solved", advance=bool(payload.get("advance", False)))
-            return
-        if cmd in {"reset_riddle", "reset_riddle_timing"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
-            self.reset_riddle(riddle)
-            return
-        if cmd in {"clear_riddle_outcome", "clear_outcome"}:
-            riddle = str(payload.get("riddle", payload.get("node", ""))).strip()
-            self.set_riddle_outcome(riddle, "clear")
+            riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
+            self.set_riddle_outcome(riddle, "skipped")
             return
         if cmd == "list_games":
             self.publish_debug("GAMES", {"games": self.db.list_games()})
@@ -1610,7 +1920,7 @@ class GameMaster:
         rejected_run_id = ""
         with self._lock:
             current_run_id = self.state.current_run.run_id if self.state.current_run is not None else ""
-            if expected_run_id and (current_run_id != expected_run_id or not 3 <= self.state.phase <= 13):
+            if expected_run_id and (current_run_id != expected_run_id or not 2 <= self.state.phase <= 13):
                 rejected_run_id = current_run_id
             elif self.state.current_run is None:
                 self.state.current_run = self._new_run_shell(cleaned_count)
@@ -1637,7 +1947,7 @@ class GameMaster:
         rejected_run_id = ""
         with self._lock:
             current_run_id = self.state.current_run.run_id if self.state.current_run is not None else ""
-            if expected_run_id and (current_run_id != expected_run_id or not 3 <= self.state.phase <= 13):
+            if expected_run_id and (current_run_id != expected_run_id or not 2 <= self.state.phase <= 13):
                 rejected_run_id = current_run_id
             else:
                 existing_players = int(self.state.current_run.players_count or 0) if self.state.current_run is not None else 0
@@ -1720,14 +2030,44 @@ class GameMaster:
         self.publish_game_state()
 
     @_serialized_mutation
+    def adjust_hint_count(self, riddle: str, delta: int) -> None:
+        riddle = self._canonical_riddle_name(riddle)
+        if not riddle:
+            raise ValueError("adjust_hint_count requires riddle")
+        if type(delta) is not int or delta not in {-1, 1}:
+            raise ValueError("hint count delta must be +1 or -1")
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                raise ValueError("No current run")
+            timing = run.riddle_timings.get(riddle)
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            previous_count = max(0, int(timing.hint_count or 0))
+            next_count = max(0, previous_count + delta)
+            if next_count > 100000:
+                raise ValueError("hint count exceeds the recoverable limit")
+            timing.hint_count = next_count
+        self._record_event("hint_count_adjusted", {
+            "riddle": riddle,
+            "delta": delta,
+            "previous_count": previous_count,
+            "count": next_count,
+        })
+        self._checkpoint_after_mutation("hint_count_adjusted")
+        self.publish_game_state()
+
+    @_serialized_mutation
     def set_riddle_time(self, riddle: str, solve_time_s: float) -> None:
         riddle = self._canonical_riddle_name(riddle)
         if not riddle:
             raise ValueError("set_riddle_time requires riddle")
-        raw_seconds = float(solve_time_s or 0)
-        if not math.isfinite(raw_seconds) or raw_seconds > MAX_RECOVERABLE_ELAPSED_S:
-            raise ValueError("riddle time exceeds the recoverable range")
-        seconds = round(max(0.0, raw_seconds), 3)
+        raw_seconds = float(solve_time_s)
+        if not math.isfinite(raw_seconds) or not 1.0 <= raw_seconds <= MAX_RECOVERABLE_ELAPSED_S:
+            raise ValueError("riddle time must be between 1 second and the recoverable limit")
+        seconds = round(raw_seconds, 3)
+        if seconds < 1.0:
+            raise ValueError("riddle time must be at least 1 second")
         with self._lock:
             run = self.state.current_run
             if run is None:
@@ -1736,55 +2076,116 @@ class GameMaster:
             if timing is None:
                 raise ValueError(f"Unknown riddle: {riddle}")
             current_status = timing.status()
-            if current_status == "pending" and seconds > 0:
-                raise ValueError(f"Cannot set a positive time for pending riddle: {riddle}")
-            if current_status in {"active", "reset"} and not timing.is_final():
-                adjusted_start = self._monotonic() - seconds
-                timing.segment_started_monotonic = adjusted_start
-                timing.first_started_monotonic = adjusted_start
-                timing.solve_time_s = 0.0
-            else:
-                timing.solve_time_s = seconds
-                timing.reset_pending = False
-                if seconds > 0:
-                    timing.first_started_monotonic = self._monotonic() - seconds
-                if seconds <= 0 and not (timing.skipped or timing.not_solved):
-                    spec = PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE])
-                    if riddle not in spec.active_riddles:
-                        timing.segment_started_monotonic = None
+            if current_status == "pending":
+                raise ValueError(f"Cannot set time for pending riddle: {riddle}")
+
+            now_mono = self._monotonic()
+            source_was_final = timing.is_final()
+            source_previous_s = self._timing_elapsed_s(timing, now_mono)
+            source_stage_index = next(
+                index for index, stage in enumerate(RIDDLE_STAGES) if riddle in stage
+            )
+            source_stage = RIDDLE_STAGES[source_stage_index]
+            old_stage_effective_s = max(
+                self._timing_elapsed_s(run.riddle_timings[key], now_mono)
+                for key in source_stage
+            )
+            self._set_timing_elapsed_locked(timing, seconds, now_mono)
+            new_stage_effective_s = max(
+                self._timing_elapsed_s(run.riddle_timings[key], now_mono)
+                for key in source_stage
+            )
+            stage_delta_s = round(new_stage_effective_s - old_stage_effective_s, 3)
+
+            target_riddle: str | None = None
+            target_previous_s: float | None = None
+            target_new_s: float | None = None
+            if source_was_final and abs(stage_delta_s) >= 0.0005:
+                for target_stage in RIDDLE_STAGES[source_stage_index + 1:]:
+                    reached = [
+                        key for key in target_stage
+                        if run.riddle_timings[key].status() != "pending"
+                    ]
+                    if not reached:
+                        continue
+                    target_riddle = max(
+                        reached,
+                        key=lambda key: self._timing_elapsed_s(run.riddle_timings[key], now_mono),
+                    )
+                    target_timing = run.riddle_timings[target_riddle]
+                    target_previous_s = self._timing_elapsed_s(target_timing, now_mono)
+                    target_stage_previous_s = max(
+                        self._timing_elapsed_s(run.riddle_timings[key], now_mono)
+                        for key in reached
+                    )
+                    desired_stage_s = round(target_stage_previous_s - stage_delta_s, 3)
+                    if desired_stage_s < 1.0:
+                        raise ValueError(
+                            f"Time correction would reduce receiving riddle {target_riddle} below 1 second"
+                        )
+                    sibling_floor_s = max(
+                        (
+                            self._timing_elapsed_s(run.riddle_timings[key], now_mono)
+                            for key in reached if key != target_riddle
+                        ),
+                        default=0.0,
+                    )
+                    if desired_stage_s < sibling_floor_s:
+                        raise ValueError(
+                            f"Time correction cannot reduce parallel receiving stage below {sibling_floor_s:.3f} seconds"
+                        )
+                    if desired_stage_s > MAX_RECOVERABLE_ELAPSED_S:
+                        raise ValueError("receiving riddle time exceeds the recoverable range")
+                    target_new_s = desired_stage_s
+                    self._set_timing_elapsed_locked(target_timing, target_new_s, now_mono)
+                    break
             run.duration_s = self.db._compute_effective_duration_s(run)
-        self._record_event("riddle_time_set", {"riddle": riddle, "solve_time_s": seconds})
-        self._checkpoint_after_mutation("riddle_time_set")
+        self._record_event("riddle_time_corrected", {
+            "source_riddle": riddle,
+            "source_previous_s": source_previous_s,
+            "source_new_s": seconds,
+            "source_delta_s": round(seconds - source_previous_s, 3),
+            "source_stage_delta_s": stage_delta_s,
+            "target_riddle": target_riddle,
+            "target_previous_s": target_previous_s,
+            "target_new_s": target_new_s,
+            "target_delta_s": (
+                None if target_previous_s is None or target_new_s is None
+                else round(target_new_s - target_previous_s, 3)
+            ),
+        })
+        self._checkpoint_after_mutation("riddle_time_corrected")
         self.publish_game_state()
 
+    @staticmethod
+    def _timing_elapsed_s(timing: RiddleTiming, now_mono: float) -> float:
+        if timing.status() == "active" and timing.segment_started_monotonic is not None:
+            return round(now_mono - timing.segment_started_monotonic, 3)
+        return round(float(timing.solve_time_s or 0), 3)
+
+    @staticmethod
+    def _set_timing_elapsed_locked(timing: RiddleTiming, seconds: float, now_mono: float) -> None:
+        if timing.status() == "active":
+            adjusted_start = now_mono - seconds
+            timing.first_started_monotonic = adjusted_start
+            timing.segment_started_monotonic = adjusted_start
+            timing.solve_time_s = 0.0
+            return
+        timing.solve_time_s = seconds
+
     @_serialized_mutation
-    def set_riddle_outcome(self, riddle: str, outcome: str, *, advance: bool = False) -> None:
+    def set_riddle_outcome(self, riddle: str, outcome: str) -> None:
         riddle = self._canonical_riddle_name(riddle)
         if riddle == "sissi":
             raise ValueError("Sissi can only be completed through the normal solve command")
         outcome = str(outcome or "").strip().lower().replace("-", "_")
         if outcome in {"skip", "skipped"}:
             outcome = "skipped"
-        elif outcome in {"not_solved", "not solved", "failed", "fail"}:
-            outcome = "not_solved"
-        elif outcome in {"clear", "reset", "pending"}:
-            outcome = "clear"
         elif outcome == "solved":
             outcome = "solved"
         else:
             raise ValueError(f"Unknown riddle outcome: {outcome}")
 
-        if advance and outcome in {"skipped", "not_solved", "solved"}:
-            with self._lock:
-                run = self.state.current_run
-                timing = run.riddle_timings.get(riddle) if run is not None else None
-                is_current_active = riddle in PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE]).active_riddles
-                can_advance = timing is not None and timing.status() in {"active", "reset"} and is_current_active
-            if can_advance:
-                self._complete_active_riddle(riddle, source=f"admin_{outcome}", outcome=outcome)
-                return
-            advance = False
-
         with self._lock:
             run = self.state.current_run
             if run is None:
@@ -1792,76 +2193,62 @@ class GameMaster:
             timing = run.riddle_timings.get(riddle)
             if timing is None:
                 raise ValueError(f"Unknown riddle: {riddle}")
-            if outcome == "clear":
-                # Clearing an outcome does not rewind phase progression or timing.
-                timing.skipped = False
-                timing.not_solved = False
-                timing.reset_pending = False
-                if float(timing.solve_time_s or 0) <= 0:
-                    spec = PHASES.get(self.state.phase, PHASES[config.DEFAULT_PHASE])
-                    if riddle in spec.active_riddles and timing.segment_started_monotonic is None:
-                        now_mono = self._monotonic()
-                        timing.first_started_monotonic = timing.first_started_monotonic or now_mono
-                        timing.segment_started_monotonic = timing.first_started_monotonic
-            elif outcome == "solved":
-                timing.skipped = False
-                timing.not_solved = False
-                if float(timing.solve_time_s or 0) <= 0:
-                    segment_start = timing.segment_started_monotonic or timing.first_started_monotonic or run.started_monotonic
-                    timing.first_started_monotonic = timing.first_started_monotonic or segment_start
-                    timing.solve_time_s = round(max(0.0, self._monotonic() - segment_start), 3)
-                    if timing.solve_time_s <= 0:
-                        timing.solve_time_s = 0.001
-                timing.segment_started_monotonic = None
-                timing.reset_pending = False
-            else:
-                if float(timing.solve_time_s or 0) <= 0:
-                    segment_start = timing.segment_started_monotonic or timing.first_started_monotonic or run.started_monotonic
-                    timing.first_started_monotonic = timing.first_started_monotonic or segment_start
-                    timing.solve_time_s = round(max(0.0, self._monotonic() - segment_start), 3)
-                timing.skipped = outcome == "skipped"
-                timing.not_solved = outcome == "not_solved"
-                timing.reset_pending = False
-                if timing.skipped and timing.not_solved:
-                    timing.not_solved = False
-                timing.segment_started_monotonic = None
+            status = timing.status()
+            is_current_active = riddle in PHASES.get(
+                self.state.phase, PHASES[config.DEFAULT_PHASE]
+            ).active_riddles
+        if status == "active" and is_current_active:
+            self._complete_active_riddle(riddle, source=f"admin_{outcome}", outcome=outcome)
+            return
+        if status == "pending":
+            raise ValueError(f"Cannot set outcome for pending riddle: {riddle}")
+
+        with self._lock:
+            timing.skipped = outcome == "skipped"
+            timing.not_solved = False
             run.duration_s = self.db._compute_effective_duration_s(run)
-        self._record_event("riddle_outcome_set", {"riddle": riddle, "outcome": outcome, "advance": bool(advance)})
+        self._record_event("riddle_outcome_set", {
+            "riddle": riddle,
+            "outcome": outcome,
+            "phase_unchanged": True,
+        })
         self._checkpoint_after_mutation("riddle_outcome_set")
         self.publish_game_state()
 
     @_serialized_mutation
-    def reset_riddle(self, riddle: str) -> None:
+    def handle_solve(self, riddle: str, source: str) -> None:
         riddle = self._canonical_riddle_name(riddle)
-        if riddle not in RESETTABLE_RIDDLES:
-            raise ValueError(f"Riddle cannot be reset safely: {riddle}")
+        if riddle not in config.RIDDLES:
+            raise ValueError(f"Unknown riddle node: {riddle}")
+        if self.state.phase == 1:
+            self._handle_maintenance_solve(riddle, source)
+            return
         with self._lock:
             run = self.state.current_run
-            if run is None:
-                raise ValueError("No current run")
-            timing = run.riddle_timings.get(riddle)
-            if timing is None:
-                raise ValueError(f"Unknown riddle: {riddle}")
-            if timing.status() not in {"solved", "skipped", "not_solved", "reset"}:
-                raise ValueError(f"Only a completed riddle can be reset: {riddle}")
-            now_mono = self._monotonic()
-            timing.solve_time_s = 0.0
-            timing.skipped = False
-            timing.not_solved = False
-            timing.reset_pending = True
-            timing.first_started_monotonic = now_mono
-            timing.segment_started_monotonic = now_mono
-            event_name = RIDDLE_SOLVE_EVENTS.get(riddle)
-            if event_name:
-                self.state.completed_phase_events.discard(event_name)
-            run.duration_s = self.db._compute_effective_duration_s(run)
-        self._record_event("riddle_reset", {"riddle": riddle, "phase_unchanged": True})
-        self._checkpoint_after_mutation("riddle_reset")
-        self.publish_game_state()
-
-    @_serialized_mutation
-    def handle_solve(self, riddle: str, source: str) -> None:
+            timing = run.riddle_timings.get(riddle) if run is not None else None
+            historical_skip = timing is not None and timing.status() == "skipped"
+        if historical_skip:
+            self.set_riddle_outcome(riddle, "solved")
+            return
         self._complete_active_riddle(riddle, source=source, outcome="solved")
+
+    def _handle_maintenance_solve(self, riddle: str, source: str) -> None:
+        lock = {
+            "images": "images",
+            "piano": "r2",
+            "chess": "r3",
+            "knocking": "knocking",
+            "stars": "slider",
+        }.get(riddle)
+        if lock is not None:
+            self.publish_maglock_cmd({"cmd": "open", "lock": lock})
+        self.publish_debug("MAINTENANCE_SOLVE", {
+            "riddle": riddle,
+            "source": source,
+            "lock": lock,
+            "phase_unchanged": True,
+        })
+        self.publish_game_state()
 
     def _complete_active_riddle(self, riddle: str, source: str, outcome: str) -> None:
         if riddle not in config.RIDDLES:
@@ -1910,6 +2297,7 @@ class GameMaster:
                 self._run_due_actions()
                 if not self._shutting_down.is_set():
                     self._checkpoint_if_due()
+                    self._automatic_node_reboot_if_due()
             except Exception:
                 LOG.exception("Scheduler iteration failed")
             self._stop.wait(config.SCHEDULER_TICK_MS / 1000.0)
@@ -2043,7 +2431,7 @@ class GameMaster:
             self._prepare_new_run()
             return
         if kind == "timer_start":
-            self._start_run_timer()
+            self._start_run_timer(delay_s=float(payload.get("delay_s", GAME_START_DELAY_S)))
             return
         if kind == "timer_stop":
             self._finalize_current_run()
@@ -2133,7 +2521,10 @@ class GameMaster:
                 self._prepare_new_run()
                 prehandled_actions.add(index)
             elif action.kind == "timer_start":
-                self._start_run_timer(publish=False)
+                self._start_run_timer(
+                    delay_s=float(action.payload.get("delay_s", GAME_START_DELAY_S)),
+                    publish=False,
+                )
                 prehandled_actions.add(index)
             elif action.kind == "log_solve_time":
                 self._mark_solved(action.payload["riddle"], source="phase")

@@ -10,8 +10,8 @@ using namespace Core;
 
 // ======================= FIRMWARE INFO =======================
 static const char* NODE_ID = "stop_timer";
-static const char* FW_VERSION = "1.7";
-static const char* FW_DESC = "stop_timer 1.7 - OTA JSON command, PSK removed";
+static const char* FW_VERSION = "1.8";
+static const char* FW_DESC = "stop_timer 1.8 - MQTT recovery and OTA JSON command";
 
 // ======================= NETWORK CONFIG ======================
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x53};  // stop_timer node MAC - must stay unique

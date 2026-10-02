@@ -311,6 +311,7 @@ void KnockingRiddle::registerKnock(int idx, uint16_t /*raw*/, uint32_t nowMs) {
     seqBuf_[seqLen_++] = idx;
   }
   lastSeqActivityMs_ = nowMs;
+  publishState();
 }
 
 void KnockingRiddle::playKnockSound(int idx) {

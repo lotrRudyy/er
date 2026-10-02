@@ -22,16 +22,11 @@ class RiddleTiming:
     not_solved: bool = False
     segment_started_monotonic: float | None = None
     first_started_monotonic: float | None = None
-    reset_pending: bool = False
 
     def is_final(self) -> bool:
-        if self.reset_pending:
-            return False
         return bool(self.skipped or self.not_solved or float(self.solve_time_s or 0) > 0)
 
     def status(self) -> str:
-        if self.reset_pending:
-            return "reset"
         if self.skipped:
             return "skipped"
         if self.not_solved:

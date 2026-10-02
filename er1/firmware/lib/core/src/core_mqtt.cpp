@@ -114,7 +114,10 @@ void MqttClient::startEthernet() {
   digitalWrite(rstPin, HIGH);
   delay(50);
 
-  SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI, ETH_CS);
+  if (!spiReady_) {
+    SPI.begin(ETH_SCK, ETH_MISO, ETH_MOSI, ETH_CS);
+    spiReady_ = true;
+  }
   Ethernet.init(ETH_CS);
   Ethernet.begin(cfg_.mac, cfg_.ip, cfg_.dns, cfg_.gateway, cfg_.subnet);
   ethernetReady_ = true;
@@ -143,9 +146,8 @@ void MqttClient::ensureConnected() {
 
   const uint32_t offlineMs = now - disconnectedSinceMs_;
 
-  // Last-resort recovery: if MQTT has been continuously offline for one minute,
-  // reboot the ESP. This also reinitializes SPI, Ethernet and all node state.
-  if (offlineMs >= ESP_RESTART_AFTER_MS) {
+  // Last-resort recovery for nodes whose outputs are safe across an ESP reset.
+  if (cfg_.restartOnMqttLoss && offlineMs >= ESP_RESTART_AFTER_MS) {
     serialMqttLog(String("MQTT offline for ") + offlineMs + "ms; restarting ESP");
     delay(50);
     ESP.restart();

@@ -24,6 +24,7 @@ const state = {
     language: 'de',
     label: 'Keine Buchung ausgewählt',
   },
+  hint_templates: { version: 1, templates: {} },
   start_assignment: { active: false, status: 'idle', message: '' },
   meta: { persistence_degraded: false },
 };
@@ -36,8 +37,11 @@ const ui = {
 
 const TEST_BOOKING_ID = '__test__';
 const EMPTY_BOOKING_ID = '__empty__';
-const RESETTABLE_RIDDLES = new Set(['prison', 'wheel', 'chains', 'tangram', 'magnet']);
 const HINT_LANGUAGE_LABELS = Object.freeze({ de: 'Deutsch', en: 'English', it: 'Italiano' });
+const HINT_RIDDLE_ORDER = Object.freeze([
+  'images', 'piano', 'prison', 'wheel', 'chains', 'tangram',
+  'magnet', 'chess', 'knocking', 'candles', 'stars', 'sissi',
+]);
 const NO_HINT_TEMPLATE_TEXT = Object.freeze({
   de: 'Für dieses Rätsel ist keine Tippvorlage hinterlegt.',
   en: 'No hint template is available for this riddle.',
@@ -65,120 +69,6 @@ const diagnostics = {
   requestController: null,
 };
 
-function immutableHintSet(de, en, it) {
-  return Object.freeze({
-    de: Object.freeze(de),
-    en: Object.freeze(en),
-    it: Object.freeze(it),
-  });
-}
-
-const HINT_TEMPLATES = Object.freeze({
-  images: immutableHintSet(
-    ['Fällt euch irgendetwas Ungewöhnliches im Raum auf? Was könnte man damit machen?'],
-    ['Do you notice anything unusual in the room? What could you do with it?'],
-    ["Notate qualcosa di insolito nella stanza? Che cosa si potrebbe fare con quell'elemento?"],
-  ),
-  piano: immutableHintSet(
-    ['Ihr sucht keine Zahlenfolge, sondern müsst die Holzscheiben auf eine Zahl einstellen und dann die Melodie entschlüsseln. Diese Zahl habt ihr schon einmal irgendwo gelesen. Danach dürft ihr sie nicht mehr verändern.'],
-    ['You are not looking for a sequence of numbers. Set the wooden discs to a single number and then decode the melody. You have seen that number somewhere before. Once it is set, do not change it again.'],
-    ['Non state cercando una sequenza di numeri: dovete impostare i dischi di legno su un unico numero e poi decifrare la melodia. Quel numero lo avete già letto da qualche parte. Una volta impostato, non dovete più cambiarlo.'],
-  ),
-  prison: immutableHintSet(
-    ['Habt ihr die Tische genau durchsucht?'],
-    ['Have you searched the tables carefully?'],
-    ['Avete controllato attentamente i tavoli?'],
-  ),
-  wheel: immutableHintSet(
-    ['Was könnte man mit dem Wagenrad tun?'],
-    ['What could you do with the wagon wheel?'],
-    ['Che cosa si potrebbe fare con la ruota del carro?'],
-  ),
-  chains: immutableHintSet(
-    [
-      'Als Erstes müsst ihr den Würfel in einen der drei Baumstämme stecken und richtig ausrichten. Bei jedem Baumstamm gibt es drei Hälften eines Symbols; die jeweils andere Hälfte befindet sich auf dem Würfel.',
-      'Sobald ihr ihn ausgerichtet habt, zeigt euch das Seil auf dem Würfel den Pfad, den das andere Seil in Wirklichkeit nehmen muss. Arbeitet dabei konzentriert und achtet auf die drei Ebenen.',
-      'Das Seil ist jetzt richtig eingefädelt. Nun müsst ihr auf dem Würfel den letzten Hinweis finden: Sucht das richtige Auge – hier das Auge mit dem Dreieck. Es zeigt euch, aus welcher Richtung ihr auf das Gerüst schauen müsst.',
-      'Falls ihr etwas nur schwer erkennen könnt, könnt ihr das Seil mit der Tafel nachzeichnen. Achtung: immer nur von der ersten bis zur letzten Holzscheibe.',
-    ],
-    [
-      'First, place the cube into one of the three tree trunks and orient it correctly. Each trunk shows three halves of symbols; the matching other halves are on the cube.',
-      'Once the cube is aligned, the rope on it shows the route that the real rope must follow. Work carefully and pay attention to the three levels.',
-      'The rope is now threaded correctly. Find the final clue on the cube: look for the correct eye – here, the eye with the triangle. It tells you from which direction to view the frame.',
-      'If the route is hard to see, use the board to trace the rope. Important: trace only from the first wooden disc to the last.',
-    ],
-    [
-      'Per prima cosa dovete inserire il cubo in uno dei tre tronchi e orientarlo correttamente. Su ogni tronco ci sono tre metà di simboli; le rispettive altre metà si trovano sul cubo.',
-      'Quando il cubo è orientato correttamente, la corda sul cubo vi mostra il percorso che deve seguire la corda vera. Procedete con attenzione e distinguete i tre livelli.',
-      "Ora la corda è infilata correttamente. Sul cubo dovete trovare l'ultimo indizio: cercate l'occhio giusto – in questo caso quello con il triangolo. Vi indica da quale direzione dovete guardare la struttura.",
-      "Se fate fatica a distinguere il percorso, potete riprodurre la corda sulla lavagna. Attenzione: sempre e soltanto dal primo disco di legno all'ultimo.",
-    ],
-  ),
-  tangram: immutableHintSet([], [], []),
-  magnet: immutableHintSet(
-    ['Habt ihr alle Tische schon durchsucht?'],
-    ['Have you searched all the tables?'],
-    ['Avete già controllato tutti i tavoli?'],
-  ),
-  chess: immutableHintSet(
-    [
-      'Achtung: Zeile und Spalte nicht verwechseln. Das Pferd steht in derselben Zeile wie die Dame, und die Dame muss mit drei anderen Figuren in einer Zeile stehen. Wo könnte das sein?',
-      'Das Pferd muss auf einem Randfeld stehen. Der König steht auf einem weißen Feld und ist diagonal mit dem Pferd verbunden. Das heißt …?',
-      'Der König darf nur mit dem schwarzen Pferd diagonal verbunden sein.',
-    ],
-    [
-      'Be careful not to mix up rows and columns. The knight is in the same row as the queen, and the queen must be in a row with three other pieces. Where could that be?',
-      'The knight must be on an edge square. The king is on a white square and is diagonally connected to the knight. What does that imply?',
-      'The king may be diagonally connected only to the black knight.',
-    ],
-    [
-      'Attenzione a non confondere righe e colonne. Il cavallo si trova nella stessa riga della regina, e la regina deve trovarsi in una riga con altri tre pezzi. Dove potrebbe essere?',
-      'Il cavallo deve trovarsi su una casella del bordo. Il re si trova su una casella bianca ed è collegato diagonalmente al cavallo. Questo significa …?',
-      'Il re può essere collegato diagonalmente soltanto al cavallo nero.',
-    ],
-  ),
-  knocking: immutableHintSet(
-    [
-      'Ihr müsst die Pfade so legen, dass die 1 zur 1, die 2 zur 2 und die 3 zur 3 führt.',
-      'Dann müsst ihr die Scheiben umdrehen und zählen.',
-    ],
-    [
-      'Arrange the paths so that 1 connects to 1, 2 to 2, and 3 to 3.',
-      'Then turn the discs over and count.',
-    ],
-    [
-      "Dovete disporre i percorsi in modo che l'1 arrivi all'1, il 2 al 2 e il 3 al 3.",
-      'Poi dovete girare i dischi e contare.',
-    ],
-  ),
-  candles: immutableHintSet(
-    [
-      'Wie kann man Kerzen löschen?',
-      'Jetzt müsst ihr noch die richtige Reihenfolge herausfinden.',
-      'Für jede Kerze gibt es drei Löcher: ein Loch für die zwei Holzscheiben und zwei Löcher für das kleine Holzfenster mit den Augen. Richtet die Holzscheiben richtig aus und schaut dann durch das Fenster.',
-      'Wenn ihr anschließend die Striche zählt, erhaltet ihr für jede Kerze eine Zahl von 1 bis 4.',
-    ],
-    [
-      'How can candles be extinguished?',
-      'Now you still need to determine the correct order.',
-      'Each candle has three holes: one hole for the two wooden discs and two holes for the small wooden window with the eyes. Align the wooden discs correctly, then look through the window.',
-      'Then count the lines. This gives you a number from 1 to 4 for each candle.',
-    ],
-    [
-      'Come si possono spegnere le candele?',
-      "Ora dovete ancora trovare l'ordine corretto.",
-      'Per ogni candela ci sono tre fori: un foro per i due dischi di legno e due fori per la piccola finestrella di legno con gli occhi. Allineate correttamente i dischi di legno e poi guardate attraverso la finestrella.',
-      'Contando poi le linee, ottenete per ogni candela un numero da 1 a 4.',
-    ],
-  ),
-  stars: immutableHintSet(
-    ['Eine gute Strategie ist, zuerst die Sterne zu zählen. Dann müsst ihr die richtige Holzscheibe nicht mehr unter allen sieben, sondern nur noch unter zwei oder drei Holzscheiben suchen.'],
-    ['A good strategy is to count the stars first. Then you only need to find the correct wooden disc among two or three instead of all seven.'],
-    ['Una buona strategia è contare prima le stelle. In questo modo non dovrete più cercare il disco di legno corretto fra tutti e sette, ma soltanto fra due o tre.'],
-  ),
-  sissi: immutableHintSet([], [], []),
-});
-
 let lastSnapshot = null;
 let queuedSnapshot = null;
 let pollInFlight = false;
@@ -191,8 +81,10 @@ let summaryEmailBusy = false;
 let bookingBusy = false;
 let bookingOptions = [];
 let bookingOptionsLoaded = false;
-let bookingDraftSaveTimer = null;
 let startInFlight = false;
+let hintEditorDraft = null;
+let hintEditorDirty = false;
+let hintEditorSignature = '';
 
 let localTimerBaseElapsed = 0;
 let localTimerSyncedAt = 0;
@@ -227,6 +119,9 @@ async function api(path, options = {}) {
 
   if (!response.ok || data.ok === false) {
     let message = data.error || text || `HTTP ${response.status}`;
+    if (response.status === 409 && !/aktualisieren/i.test(message)) {
+      message += ' Bitte die Ansicht aktualisieren und die Aktion erneut prüfen.';
+    }
     if (Number.isInteger(data.command_count) && Number.isInteger(data.queued_count)) {
       message += ` MQTT-Teilbefehle: ${data.queued_count}/${data.command_count} eingereiht; keine Rücknahme und keine Gerätebestätigung.`;
     }
@@ -262,6 +157,23 @@ function fmtTime(totalSeconds) {
   const minutes = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const seconds = String(total % 60).padStart(2, '0');
   return `${hours}:${minutes}:${seconds}`;
+}
+
+function fmtGameTime(totalSeconds) {
+  const numeric = Number(totalSeconds) || 0;
+  const sign = numeric < 0 ? '-' : '';
+  const total = Math.floor(Math.abs(numeric));
+  const hours = Math.floor(total / 3600);
+  const minutes = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const seconds = String(total % 60).padStart(2, '0');
+  return hours > 0 ? `${sign}${hours}:${minutes}:${seconds}` : `${sign}${minutes}:${seconds}`;
+}
+
+function actionGuard() {
+  return {
+    expected_phase: Number(state.game.phase || 0),
+    expected_run_id: currentRunId(),
+  };
 }
 
 function stableStringify(value) {
@@ -319,7 +231,7 @@ function isLiveGame() {
 }
 
 function shouldConfirmPhaseChange() {
-  return Number(state.game.phase || 0) >= 3;
+  return isLiveGame();
 }
 
 function hasFocusedEditor() {
@@ -332,12 +244,8 @@ function hasFocusedEditor() {
   return Boolean(active.matches('input, select, textarea, [contenteditable="true"]'));
 }
 
-function isDialogOpen() {
-  return Boolean(document.querySelector('dialog[open]'));
-}
-
 function shouldDeferPatch() {
-  return interactionActive || actionDepth > 0 || hasFocusedEditor() || isDialogOpen();
+  return interactionActive || actionDepth > 0 || hasFocusedEditor();
 }
 
 function rerenderRiddleViews() {
@@ -388,7 +296,9 @@ async function pollLoop() {
   } catch (error) {
     showFeedback(`Live-Aktualisierung fehlgeschlagen: ${error.message || error}`, 'error');
   } finally {
-    window.setTimeout(pollLoop, 1000);
+    const knockingIsCurrent = Number(state.game.phase || 0) === 10
+      || String(state.game.current_riddle_name || '') === 'knocking';
+    window.setTimeout(pollLoop, knockingIsCurrent ? 250 : 1000);
   }
 }
 
@@ -458,45 +368,8 @@ function installInteractionGuard() {
   window.addEventListener('focus', flushQueuedSnapshot);
 }
 
-function confirmAction({ title, message, confirmLabel = 'Bestätigen', danger = true }) {
-  const dialog = document.getElementById('confirmDialog');
-  const titleNode = document.getElementById('confirmDialogTitle');
-  const messageNode = document.getElementById('confirmDialogMessage');
-  const cancelButton = document.getElementById('confirmDialogCancel');
-  const confirmButton = document.getElementById('confirmDialogConfirm');
-
-  if (!dialog || !titleNode || !messageNode || !cancelButton || !confirmButton) {
-    return Promise.resolve(window.confirm(message));
-  }
-
-  if (dialog.open) dialog.close();
-  titleNode.textContent = title;
-  messageNode.textContent = message;
-  confirmButton.textContent = confirmLabel;
-  confirmButton.classList.toggle('danger-button', danger);
-  confirmButton.classList.toggle('summary-email-btn', !danger);
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      if (dialog.open) dialog.close();
-      window.setTimeout(flushQueuedSnapshot, 0);
-      resolve(value);
-    };
-
-    cancelButton.onclick = () => finish(false);
-    confirmButton.onclick = () => finish(true);
-    dialog.oncancel = (event) => {
-      event.preventDefault();
-      finish(false);
-    };
-    dialog.onclose = () => {
-      if (!settled) finish(false);
-    };
-    dialog.showModal();
-  });
+function confirmAction({ title, message }) {
+  return Promise.resolve(window.confirm(`${title}\n\n${message}`));
 }
 
 function syncLocalTimers(game) {
@@ -509,7 +382,7 @@ function syncLocalTimers(game) {
 
   if (gameSignature !== lastGameTimerSignature) {
     lastGameTimerSignature = gameSignature;
-    localTimerBaseElapsed = Math.max(0, Number(game.elapsed_s || 0));
+    localTimerBaseElapsed = Number(game.elapsed_s || 0);
     localTimerSyncedAt = Date.now();
   }
 
@@ -530,7 +403,7 @@ function syncLocalTimers(game) {
 
 function readLocalTimer() {
   if (!state.game.timer_running || !localTimerSyncedAt) return Math.floor(localTimerBaseElapsed || 0);
-  return Math.max(0, Math.floor(localTimerBaseElapsed + ((Date.now() - localTimerSyncedAt) / 1000)));
+  return Math.floor(localTimerBaseElapsed + ((Date.now() - localTimerSyncedAt) / 1000));
 }
 
 function readLocalRiddleTimer() {
@@ -557,7 +430,8 @@ function normalizeHintLanguage(value) {
 function normalizeBooking(raw = {}) {
   const rawKind = String(raw.kind || raw.type || '').toLowerCase();
   const rawId = String(raw.id || raw.bookingCode || raw.booking_code || '');
-  const kind = rawKind === 'empty' || rawId === EMPTY_BOOKING_ID
+  const hasBookingIdentity = Boolean(rawKind || rawId || raw.date || raw.slot || raw.customerEmail || raw.customer_email);
+  const kind = !hasBookingIdentity || rawKind === 'empty' || rawId === EMPTY_BOOKING_ID
     ? 'empty'
     : (rawKind === 'test' || rawId === TEST_BOOKING_ID ? 'test' : 'booking');
   const players = kind === 'empty'
@@ -615,19 +489,8 @@ function bookingCompactLabel(booking) {
     .join(' · ');
 }
 
-function selectedBookingDraft(baseBooking = state.booking) {
-  const selected = normalizeBooking(baseBooking || {});
-  const emailInput = document.getElementById('testBookingEmail');
-  const playersInput = document.getElementById('testBookingPlayers');
-  return normalizeBooking({
-    ...selected,
-    customerEmail: String(emailInput?.value || selected.customerEmail || (selected.kind === 'test' ? 'rudolf.dosser@gmail.com' : '')).trim(),
-    players: selected.kind === 'empty' ? 0 : Math.max(1, safeInt(playersInput?.value, selected.players || (selected.kind === 'test' ? 2 : 1))),
-    label: selected.kind === 'test' ? 'Testbuchung' : selected.label,
-  });
-}
-
 async function loadBookings({ silent = false } = {}) {
+  const empty = normalizeBooking({ kind: 'empty', id: EMPTY_BOOKING_ID, players: 0, label: 'Keine Buchung ausgewählt' });
   const fallback = normalizeBooking({
     kind: 'test',
     id: TEST_BOOKING_ID,
@@ -642,12 +505,13 @@ async function loadBookings({ silent = false } = {}) {
   try {
     const result = await api('/api/bookings');
     const loaded = Array.isArray(result.bookings) ? result.bookings.map(normalizeBooking) : [];
-    bookingOptions = loaded.length ? loaded : [fallback];
+    bookingOptions = loaded.length ? loaded : [empty, fallback];
+    if (!bookingOptions.some((item) => item.kind === 'empty')) bookingOptions.unshift(empty);
     if (!bookingOptions.some((item) => item.kind === 'test')) bookingOptions.unshift(fallback);
     bookingOptionsLoaded = true;
     if (!silent) setBookingFeedback(result.warning || '', result.warning ? 'warn' : '');
   } catch (error) {
-    bookingOptions = [fallback];
+    bookingOptions = [empty, fallback];
     bookingOptionsLoaded = true;
     if (!silent) setBookingFeedback(error.message || 'Buchungen konnten nicht geladen werden.', 'warn');
   } finally {
@@ -674,9 +538,9 @@ async function saveSelectedBooking(booking, { expectedRunId = '', languageOnly =
   renderBookingControls();
   try {
     const requestBody = languageOnly
-      ? { hint_language: normalized.language }
-      : { booking: normalized };
-    if (scopedRunId) requestBody.expected_run_id = scopedRunId;
+      ? { hint_language: normalized.language, ...actionGuard() }
+      : { booking: normalized, ...actionGuard() };
+    requestBody.expected_run_id = scopedRunId || actionGuard().expected_run_id;
     const result = await api('/api/select-booking', {
       method: 'POST',
       body: JSON.stringify(requestBody),
@@ -726,11 +590,17 @@ function renderBookingControls() {
   const emailInput = document.getElementById('testBookingEmail');
   const playersInput = document.getElementById('testBookingPlayers');
   const refreshButton = document.getElementById('refreshBookingsBtn');
+  const applyButton = document.getElementById('applyBookingBtn');
   const compact = document.getElementById('bookingCompactValue');
   if (!select) return;
 
   if (!bookingOptionsLoaded && !bookingOptions.length) {
     bookingOptions = [normalizeBooking({
+      kind: 'empty',
+      id: EMPTY_BOOKING_ID,
+      players: 0,
+      label: 'Keine Buchung ausgewählt',
+    }), normalizeBooking({
       kind: 'test',
       id: TEST_BOOKING_ID,
       customerEmail: 'rudolf.dosser@gmail.com',
@@ -761,6 +631,7 @@ function renderBookingControls() {
     languageSelect.disabled = bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
   }
   if (refreshButton) refreshButton.disabled = bookingBusy;
+  if (applyButton) applyButton.disabled = bookingBusy;
   if (fields) fields.classList.toggle('hidden', current.kind === 'empty');
 
   if (emailInput && document.activeElement !== emailInput) {
@@ -785,86 +656,29 @@ function renderBookingControls() {
   if (compact) compact.textContent = bookingCompactLabel(current) || 'Keine Buchung ausgewählt';
 }
 
-function openSummaryBookingConfirmation() {
-  const dialog = document.getElementById('bookingConfirmDialog');
-  const title = document.getElementById('bookingDialogTitle');
-  const message = document.getElementById('bookingDialogMessage');
-  const select = document.getElementById('bookingConfirmSelect');
-  const info = document.getElementById('bookingConfirmInfo');
-  const suggestionInfo = document.getElementById('bookingSuggestionInfo');
-  const cancelButton = document.getElementById('bookingDialogCancel');
-  const confirmButton = document.getElementById('bookingDialogConfirm');
+function bookingOverrideMessage(booking) {
+  const item = normalizeBooking(booking);
+  const details = [bookingOptionLabel(item)];
+  if (item.matchStatus) details.push(`Zeitabstand: ${item.matchStatus}`);
+  const statuses = [item.bookingStatus, item.paymentStatus].filter(Boolean).join(' / ');
+  if (statuses) details.push(`Status: ${statuses}`);
+  if (item.kind === 'test') details.push('Status: Testbuchung');
+  if (item.kind === 'empty') details.push('Status: ohne Buchung fortfahren');
+  details.push('Diese manuelle Auswahl überschreibt eine automatische Zuordnung, falls eine läuft.');
+  return details.join('\n');
+}
 
-  if (!dialog || !title || !message || !select || !cancelButton || !confirmButton) {
-    return Promise.resolve(normalizeBooking(state.booking));
-  }
-
-  // Email confirmation uses the stored start-time choice; it never ranks by time again.
-  const selectedAtStart = normalizeBooking(state.booking);
-  const orderedKeys = new Set();
-  const ordered = [];
-  for (const item of [selectedAtStart, ...bookingOptions.map(normalizeBooking)]) {
-    const key = bookingKey(item);
-    if (!key || orderedKeys.has(key)) continue;
-    orderedKeys.add(key);
-    ordered.push(item);
-  }
-  const suggested = ordered[0] || selectedAtStart;
-
-  select.innerHTML = ordered
-    .map((item) => `<option value="${escapeAttr(bookingKey(item))}">${escapeHtml(bookingOptionLabel(item))}</option>`)
-    .join('');
-  select.value = bookingKey(suggested);
-
-  title.textContent = 'Buchung vor dem Senden bestätigen';
-  message.textContent = 'Kontrolliere die Buchung. Erst nach deiner Bestätigung wird die Spielzusammenfassung versendet.';
-  confirmButton.textContent = 'Buchung bestätigen und senden';
-
-  const updateInfo = () => {
-    const selected = ordered.find((item) => bookingKey(item) === select.value) || suggested;
-    const normalized = normalizeBooking(selected);
-    if (info) {
-      const first = bookingOptionLabel(normalized);
-      const second = [normalized.customerEmail, normalized.bookingStatus, normalized.paymentStatus].filter(Boolean).join(' · ');
-      info.textContent = [first, second].filter(Boolean).join(' | ');
-    }
-  };
-  select.onchange = updateInfo;
-  updateInfo();
-
-  if (suggestionInfo) {
-    if (selectedAtStart.kind === 'booking') {
-      suggestionInfo.textContent = `Beim Spielstart automatisch zugeordnet: ${bookingOptionLabel(selectedAtStart)}. Hier wird nichts neu berechnet; ändere die Auswahl nur, falls sie falsch ist.`;
-    } else {
-      suggestionInfo.textContent = 'Beim Spielstart konnte keine normale Buchung automatisch zugeordnet werden. Bitte jetzt die richtige Buchung auswählen.';
-    }
-  }
-
-  if (dialog.open) dialog.close();
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      if (dialog.open) dialog.close();
-      window.setTimeout(flushQueuedSnapshot, 0);
-      resolve(value);
-    };
-
-    cancelButton.onclick = () => finish(null);
-    confirmButton.onclick = () => {
-      const selected = ordered.find((item) => bookingKey(item) === select.value) || suggested;
-      finish(normalizeBooking(selected));
-    };
-    dialog.oncancel = (event) => {
-      event.preventDefault();
-      finish(null);
-    };
-    dialog.onclose = () => {
-      if (!settled) finish(null);
-    };
-    dialog.showModal();
+async function confirmAndSaveBooking(booking) {
+  const normalized = normalizeBooking(booking);
+  const confirmed = await confirmAction({
+    title: 'Buchung manuell übernehmen?',
+    message: bookingOverrideMessage(normalized),
   });
+  if (!confirmed) {
+    renderBookingControls();
+    return null;
+  }
+  return saveSelectedBooking(normalized);
 }
 
 function renderSummaryControls() {
@@ -910,7 +724,7 @@ function renderTop() {
       ? '—'
       : `${state.game.last_phase}: ${state.game.last_phase_name_pretty || state.game.last_phase_name || ''}`.trim();
   }
-  if (timerValue) timerValue.textContent = fmtTime(readLocalTimer());
+  if (timerValue) timerValue.textContent = fmtGameTime(readLocalTimer());
   if (riddleTimerValue) riddleTimerValue.textContent = fmtTime(readLocalRiddleTimer());
 
   const phase = Number(state.game.phase || 0);
@@ -964,10 +778,64 @@ function renderNodes() {
   const wrap = document.getElementById('nodesList');
   if (!wrap) return;
   wrap.innerHTML = '';
+  const phase = Number(state.game.phase || 0);
+  const phaseZero = phase === 0;
+  const rebootAll = document.createElement('button');
+  rebootAll.type = 'button';
+  rebootAll.className = 'node-reboot-btn node-reboot-all';
+  rebootAll.textContent = 'Alle Steuergeräte neu starten';
+  rebootAll.disabled = !phaseZero;
+  rebootAll.title = phaseZero
+    ? 'REBOOT an alle physischen Steuergeräte senden'
+    : 'Ein Neustart aller Steuergeräte ist nur in Phase 0 möglich.';
+  rebootAll.addEventListener('click', async () => {
+    const confirmed = await confirmAction({
+      title: 'Alle Steuergeräte neu starten?',
+      message: 'Die Zeichenfolge REBOOT wird an alle <node>/sys/cmd-Themen gesendet. OTA wird nicht gestartet.',
+    });
+    if (!confirmed) return;
+    await runAction(rebootAll, async () => {
+      const result = await api('/api/node-reboot', {
+        method: 'POST',
+        body: JSON.stringify({ node: 'all', ...actionGuard() }),
+      });
+      showFeedback(`${result.queued_count} Neustartbefehle an MQTT übergeben; die Geräteneustarts sind nicht bestätigt.`, 'warn');
+      return result;
+    });
+  });
+  wrap.appendChild(rebootAll);
   for (const item of state.nodes || []) {
     const line = document.createElement('div');
     line.className = `node-line ${item.online ? 'node-on' : 'node-off'}`;
-    line.textContent = `${item.label} (${item.status})`;
+    const status = document.createElement('span');
+    status.textContent = `${item.label} (${item.status})`;
+    const reboot = document.createElement('button');
+    reboot.type = 'button';
+    reboot.className = 'node-reboot-btn';
+    reboot.textContent = 'Neustart';
+    const phaseRestricted = item.id === 'maglock' && !phaseZero;
+    reboot.disabled = !item.online || phaseRestricted;
+    reboot.title = phaseRestricted
+      ? 'Die Schlosssteuerung darf nur in Phase 0 neu gestartet werden.'
+      : (item.online
+        ? 'REBOOT über MQTT einreihen'
+        : 'Knoten ist offline; Neustart ist deaktiviert. Diagnose-Logs bleiben verfügbar.');
+    reboot.addEventListener('click', async () => {
+      const confirmed = await confirmAction({
+        title: `${item.label} neu starten?`,
+        message: `Es wird ausschließlich die Zeichenfolge REBOOT an ${item.id}/sys/cmd gesendet. OTA wird nicht gestartet.`,
+      });
+      if (!confirmed) return;
+      await runAction(reboot, async () => {
+        const result = await api('/api/node-reboot', {
+          method: 'POST',
+          body: JSON.stringify({ node: item.id, ...actionGuard() }),
+        });
+        showFeedback(`${item.label}: MQTT-Befehl eingereiht; der Neustart ist vom Gerät nicht bestätigt.`, 'warn');
+        return result;
+      });
+    });
+    line.append(status, reboot);
     wrap.appendChild(line);
   }
 }
@@ -977,8 +845,6 @@ async function confirmManualControl(title, message) {
   return confirmAction({
     title,
     message: `${message} Das Spiel läuft gerade; dieser Eingriff kann den normalen Ablauf verändern.`,
-    confirmLabel: 'Manuell ausführen',
-    danger: true,
   });
 }
 
@@ -993,13 +859,20 @@ function renderLocks() {
     const open = lock.is_open === true;
     const action = lock.kind === 'toggle' && open ? 'close' : 'open';
     const actionLabel = action === 'close' ? 'schließen' : 'öffnen';
+    const commandBlocked = Boolean(lock.command_blocked);
+    const protectionLabel = lock.boot_guard
+      ? 'STARTSPERRE'
+      : (lock.cooldown ? 'SPERRZEIT' : (lock.pulsing ? 'IMPULS AKTIV' : ''));
     card.innerHTML = `
-      <button class="control-button ${open ? 'is-open' : 'is-closed'}" type="button">
+      <button class="control-button ${open ? 'is-open' : 'is-closed'}" type="button" ${commandBlocked ? 'disabled' : ''}>
         ${escapeHtml(lock.label)}
-        <span class="state-line">${escapeHtml(String(lock.state_label || 'unbekannt').toUpperCase())}</span>
+        <span class="state-line">${escapeHtml(protectionLabel || String(lock.state_label || 'unbekannt').toUpperCase())}</span>
       </button>
     `;
     const button = card.querySelector('button');
+    button.title = commandBlocked
+      ? 'Öffnen ist durch Impuls, Sperrzeit oder Startschutz vorübergehend blockiert.'
+      : `${lock.label} ${actionLabel}`;
     button.addEventListener('click', async () => {
       const confirmed = await confirmManualControl(
         'Schloss manuell betätigen?',
@@ -1008,7 +881,7 @@ function renderLocks() {
       if (!confirmed) return;
       await runAction(button, () => api('/api/lock', {
         method: 'POST',
-        body: JSON.stringify({ lock: lock.id, action }),
+        body: JSON.stringify({ lock: lock.id, action, ...actionGuard() }),
       }));
     });
     wrap.appendChild(card);
@@ -1070,7 +943,7 @@ function renderLights() {
         dimDrafts[light.id] = action === 'off' ? 0 : pct;
         await runAction(toggleButton, () => api('/api/light', {
           method: 'POST',
-          body: JSON.stringify({ group: light.id, action, pct }),
+          body: JSON.stringify({ group: light.id, action, pct, ...actionGuard() }),
         }));
       });
 
@@ -1092,7 +965,7 @@ function renderLights() {
         dimEditing[light.id] = false;
         await runAction(applyButton, () => api('/api/light', {
           method: 'POST',
-          body: JSON.stringify({ group: light.id, action: 'set_pct', pct }),
+          body: JSON.stringify({ group: light.id, action: 'set_pct', pct, ...actionGuard() }),
         }));
       };
 
@@ -1119,7 +992,7 @@ function renderLights() {
         if (!confirmed) return;
         await runAction(button, () => api('/api/light', {
           method: 'POST',
-          body: JSON.stringify({ group: light.id, action }),
+          body: JSON.stringify({ group: light.id, action, ...actionGuard() }),
         }));
       });
     }
@@ -1144,7 +1017,7 @@ function renderChessSlots(slots) {
   return `
     <div class="inline-info inline-info-wrap">
       ${slots.map((slot) => `
-        <span>${escapeHtml(slot.slot)}: <span class="inline-status ${slot.correct ? 'inline-status-good' : 'inline-status-bad'}">${escapeHtml(slot.value)}</span></span>
+        <span>${escapeHtml(slot.slot)}: <span class="inline-status ${slot.correct ? 'inline-status-good' : 'inline-status-bad'}">${escapeHtml(slot.value)}</span><small class="chess-expected">Soll: ${escapeHtml(slot.expected || slot.slot)}</small></span>
       `).join('<span class="inline-sep">|</span>')}
     </div>
   `;
@@ -1155,6 +1028,30 @@ function renderAttemptsSummary(summary) {
   const attempts = (summary.attempts || []).map(escapeHtml).join(' <span class="inline-sep">|</span> ');
   if (!attempts) return '<span class="muted-info">Noch kein vollständiger Versuch.</span>';
   return `<div class="inline-info"><b>Versuche:</b> ${attempts}</div>`;
+}
+
+function renderKnockingSummary(summary) {
+  const expected = [1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3];
+  const current = Array.isArray(summary?.sequence_current)
+    ? summary.sequence_current.map((value) => Number(value)).filter((value) => [1, 2, 3].includes(value))
+    : [];
+  const prefixCorrect = current.every((value, index) => value === expected[index]);
+  const dots = expected.map((sensor, index) => {
+    const entered = index < current.length;
+    const stateClass = !entered ? 'knocking-dot-pending' : (prefixCorrect ? 'knocking-dot-good' : 'knocking-dot-bad');
+    return `<span class="knocking-dot ${stateClass}" title="Sensor ${sensor}, Position ${index + 1}">${sensor}</span>`;
+  });
+  const groups = [dots.slice(0, 6), dots.slice(6, 8), dots.slice(8, 12)];
+  const attempts = renderAttemptsSummary(summary);
+  return `
+    <div class="knocking-telemetry ${current.length && !prefixCorrect ? 'knocking-attempt-wrong' : ''}">
+      <div class="knocking-sequence" aria-label="Erwartete Klopffolge: sechsmal Sensor 1, zweimal Sensor 2, viermal Sensor 3">
+        ${groups.map((group, index) => `<span class="knocking-group" data-sensor="${index + 1}">${group.join('')}</span>`).join('')}
+      </div>
+      ${current.length && !prefixCorrect ? '<strong class="knocking-error">Aktueller Versuch weicht von der erwarteten Folge ab.</strong>' : ''}
+      ${attempts}
+    </div>
+  `;
 }
 
 function renderStarSliderSummary(summary) {
@@ -1188,7 +1085,8 @@ function renderRiddleInfo(riddle) {
   if (riddle.id === 'images') return renderImagesButtons(riddle.images_buttons);
   if (riddle.id === 'piano') return renderPianoSummary(riddle.piano_summary);
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
-  if (riddle.id === 'knocking' || riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
+  if (riddle.id === 'knocking') return renderKnockingSummary(riddle.attempts_summary);
+  if (riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
   if (riddle.id === 'stars' || riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
   return riddle.info ? `<span>${escapeHtml(riddle.info)}</span>` : '<span class="muted-info">Keine zusätzlichen Live-Daten.</span>';
 }
@@ -1197,19 +1095,25 @@ function riddleTimeText(riddle) {
   if (riddleTimeEditing[riddle.id] || riddleTimeDrafts[riddle.id] != null) {
     return String(riddleTimeDrafts[riddle.id] ?? '');
   }
-  return fmtTime(riddle.display_time_s ?? riddle.time_s ?? riddle.live_time_s ?? riddle.solve_time_s ?? 0);
+  const seconds = Number(riddle.display_time_s ?? riddle.time_s ?? riddle.live_time_s ?? riddle.solve_time_s ?? 0);
+  return seconds >= 1 ? String(Math.round(seconds * 1000) / 1000) : '';
 }
 
 function hintTemplatesFor(riddleId, language = state.booking?.language) {
   const selectedLanguage = normalizeHintLanguage(language);
-  const templates = HINT_TEMPLATES[String(riddleId || '')];
+  const templates = state.hint_templates?.templates?.[String(riddleId || '')];
   return templates?.[selectedLanguage] || [];
+}
+
+function riddleMutationsAvailable() {
+  return Number(state.game.phase || 0) >= 3 && Boolean(currentRunId());
 }
 
 function hintPanelHtml(riddle) {
   const language = normalizeHintLanguage(state.booking?.language);
   const templates = hintTemplatesFor(riddle.id, language);
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
+  const canMutate = riddleMutationsAvailable();
   const templateContent = templates.length
     ? `<ol class="hint-template-list">${templates.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ol>`
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
@@ -1219,10 +1123,10 @@ function hintPanelHtml(riddle) {
       ${templateContent}
       <div class="hint-given-block">
         <div class="hint-given-label">Gegebene Tipps: <strong class="hint-counter-value">${count}</strong></div>
-        <div class="hint-counter-buttons">
-          <button class="hint-counter-btn" type="button" data-delta="1">Tipp gegeben</button>
-          <button class="hint-counter-btn" type="button" data-delta="-1" ${count === 0 ? 'disabled' : ''}>Letzten zurücknehmen</button>
-        </div>
+        ${canMutate ? `<div class="hint-counter-buttons">
+          <button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippzähler um eins erhöhen">+1</button>
+          <button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippzähler um eins verringern" ${count === 0 ? 'disabled' : ''}>-1</button>
+        </div>` : ''}
       </div>
     </section>
   `;
@@ -1231,73 +1135,66 @@ function hintPanelHtml(riddle) {
 function riddleActionsHtml(riddle, compact = false) {
   const stateName = String(riddle.phase_state || 'pending');
   const canSolve = Boolean(riddle.can_solve);
-  const showSkip = riddle.id !== 'sissi';
-  const canToggleSkip = showSkip && stateName !== 'pending';
-  const skipLabel = riddle.skipped ? 'Überspringen aufheben' : 'Überspringen';
-  const solveLabel = riddle.manual
-    ? (stateName === 'reset' ? 'Erneut gelöst' : 'Gelöst')
-    : (stateName === 'reset' ? 'Erneut gelöst' : 'Manuell lösen');
-  const resettable = Boolean(riddle.resettable || RESETTABLE_RIDDLES.has(riddle.id));
-  const canReset = resettable && ['solved', 'skipped', 'not_solved'].includes(stateName);
+  const canSkip = riddleMutationsAvailable()
+    && riddle.id !== 'sissi'
+    && stateName !== 'pending'
+    && stateName !== 'skipped';
 
   return `
     <div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
-      <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>${solveLabel}</button>
-      ${showSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button" ${canToggleSkip ? '' : 'disabled'}>${skipLabel}</button>` : ''}
-      ${resettable ? `<button class="reset-riddle-btn" type="button" ${canReset ? '' : 'disabled'}>Zurücksetzen</button>` : ''}
+      <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>Rätsel gelöst</button>
+      ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button">Übersprungen</button>` : ''}
+    </div>
+  `;
+}
+
+function riddleTimeEditorHtml(riddle) {
+  const timeEditable = riddleMutationsAvailable() && String(riddle.phase_state || 'pending') !== 'pending';
+  if (!timeEditable) return '<span class="muted-info">—</span>';
+  return `
+    <div class="riddle-time-edit">
+      <input class="riddle-time-input" type="number" inputmode="decimal" min="1" step="0.001" value="${escapeAttr(riddleTimeText(riddle))}" placeholder="Min. 1 Sek." aria-label="Rätselzeit in Sekunden, mindestens eine Sekunde" />
+      <button class="riddle-time-save" type="button">OK</button>
     </div>
   `;
 }
 
 async function solveRiddle(riddle, button) {
   if (!riddle.can_solve) return;
-  if (!riddle.manual && riddle.solve_advances) {
-    const confirmed = await confirmAction({
-      title: 'Elektronisches Rätsel manuell lösen?',
-      message: `${riddle.label} schaltet normalerweise automatisch weiter. Nur bestätigen, wenn die Elektronik übergangen werden soll.`,
-      confirmLabel: 'Manuell lösen',
-      danger: true,
-    });
-    if (!confirmed) return;
-  }
 
   await runAction(button, () => {
     if (riddle.solve_advances) {
       return api('/api/solve', {
         method: 'POST',
-        body: JSON.stringify({ node: riddle.id }),
+        body: JSON.stringify({ node: riddle.id, ...actionGuard() }),
       });
     }
     return api('/api/riddle-outcome', {
       method: 'POST',
-      body: JSON.stringify({ riddle: riddle.id, outcome: 'solved', advance: false }),
+      body: JSON.stringify({ riddle: riddle.id, outcome: 'solved', advance: false, ...actionGuard() }),
     });
   });
 }
 
 async function toggleSkip(riddle, button) {
   const stateName = String(riddle.phase_state || 'pending');
-  if (stateName === 'pending') return;
-  const body = riddle.skipped
-    ? { riddle: riddle.id, outcome: 'solved', advance: false }
-    : { riddle: riddle.id, outcome: 'skipped', advance: Boolean(riddle.solve_advances) };
+  if (stateName === 'pending' || stateName === 'skipped') return;
+  const confirmed = await confirmAction({
+    title: `${riddle.label} überspringen?`,
+    message: riddle.solve_advances
+      ? 'Das aktive Rätsel wird als übersprungen markiert und der Spielablauf wird fortgesetzt.'
+      : 'Das bereits erreichte Rätsel wird nachträglich als übersprungen markiert.',
+  });
+  if (!confirmed) return;
+  const body = {
+    riddle: riddle.id,
+    outcome: 'skipped',
+    advance: Boolean(riddle.solve_advances),
+    ...actionGuard(),
+  };
   await runAction(button, () => api('/api/riddle-outcome', {
     method: 'POST',
     body: JSON.stringify(body),
-  }));
-}
-
-async function resetRiddle(riddle, button) {
-  const confirmed = await confirmAction({
-    title: `${riddle.label} zurücksetzen?`,
-    message: 'Der Rätselstatus und die Rätselzeit werden zurückgesetzt. Die ursprüngliche Startzeit bleibt erhalten. Phase, Licht und bereits geöffnete Mechanik werden nicht zurückgeschaltet.',
-    confirmLabel: 'Rätsel zurücksetzen',
-    danger: true,
-  });
-  if (!confirmed) return;
-  await runAction(button, () => api('/api/riddle-outcome', {
-    method: 'POST',
-    body: JSON.stringify({ riddle: riddle.id, outcome: 'reset' }),
   }));
 }
 
@@ -1307,18 +1204,16 @@ async function saveRiddleTime(riddle, input, button) {
     return;
   }
   const value = input.value.trim();
-  const confirmed = await confirmAction({
-    title: `Zeit für ${riddle.label} ändern?`,
-    message: `Die gespeicherte Rätselzeit wird auf „${value || '0'}“ gesetzt. Dies ist eine manuelle Korrektur.`,
-    confirmLabel: 'Zeit ändern',
-    danger: true,
-  });
-  if (!confirmed) return;
+  if (!Number.isFinite(Number(value)) || Number(value) < 1) {
+    showFeedback('Die Rätselzeit muss mindestens eine Sekunde betragen.', 'error');
+    input.focus();
+    return;
+  }
 
   await runAction(button, async () => {
     await api('/api/riddle-time', {
       method: 'POST',
-      body: JSON.stringify({ riddle: riddle.id, time_text: value }),
+      body: JSON.stringify({ riddle: riddle.id, time_text: value, ...actionGuard() }),
     });
     delete riddleTimeDrafts[riddle.id];
     riddleTimeEditing[riddle.id] = false;
@@ -1328,7 +1223,7 @@ async function saveRiddleTime(riddle, input, button) {
 async function changeHint(riddle, delta, button) {
   await runAction(button, () => api('/api/hints', {
     method: 'POST',
-    body: JSON.stringify({ riddle: riddle.id, delta }),
+    body: JSON.stringify({ riddle: riddle.id, delta, ...actionGuard() }),
   }));
 }
 
@@ -1341,11 +1236,6 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
   const skipButton = container.querySelector('.skip-btn');
   if (skipButton && !skipButton.disabled) {
     skipButton.addEventListener('click', () => toggleSkip(riddle, skipButton).catch(() => {}));
-  }
-
-  const resetButton = container.querySelector('.reset-riddle-btn');
-  if (resetButton && !resetButton.disabled) {
-    resetButton.addEventListener('click', () => resetRiddle(riddle, resetButton).catch(() => {}));
   }
 
   container.querySelectorAll('.hint-counter-btn').forEach((button) => {
@@ -1389,18 +1279,12 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
 
 function buildRiddleRow(riddle) {
   const row = document.createElement('tr');
-  const timeEditable = String(riddle.phase_state || 'pending') !== 'pending';
   row.dataset.riddleId = riddle.id;
   row.className = riddle.phase_state === 'active' ? 'current-riddle-row' : '';
   row.innerHTML = `
     <td>${escapeHtml(riddle.label)}</td>
     <td><span class="status-badge ${escapeAttr(riddle.phase_state_class || '')}">${escapeHtml(riddle.phase_state_label || riddle.phase_state)}</span></td>
-    <td>
-      <div class="riddle-time-edit ${timeEditable ? '' : 'riddle-time-edit-disabled'}" ${timeEditable ? '' : 'title="Zeit erst ab Aktivierung änderbar"'}>
-        <input class="riddle-time-input" type="text" inputmode="numeric" value="${escapeAttr(riddleTimeText(riddle))}" placeholder="00:00:00" ${timeEditable ? '' : 'disabled'} />
-        <button class="riddle-time-save" type="button" ${timeEditable ? '' : 'disabled'}>Speichern</button>
-      </div>
-    </td>
+    <td>${riddleTimeEditorHtml(riddle)}</td>
     <td>${riddleActionsHtml(riddle)}</td>
     <td><div class="riddle-info-cell">${renderRiddleInfo(riddle)}</div></td>
     <td>${hintPanelHtml(riddle)}</td>
@@ -1426,10 +1310,10 @@ function buildCurrentRiddleCard(riddle) {
     </div>
     <div class="current-riddle-info">${renderRiddleInfo(riddle)}</div>
     ${!riddle.manual ? '<div class="electronic-note">Dieses Rätsel schaltet bei korrekter Lösung automatisch weiter.</div>' : ''}
-    <div class="current-riddle-controls">${riddleActionsHtml(riddle, true)}</div>
+    <div class="current-riddle-controls">${riddleActionsHtml(riddle, true)}${riddleTimeEditorHtml(riddle)}</div>
     ${hintPanelHtml(riddle)}
   `;
-  bindRiddleActions(card, riddle, { includeTimeEditor: false });
+  bindRiddleActions(card, riddle, { includeTimeEditor: true });
   return card;
 }
 
@@ -1445,7 +1329,7 @@ function renderCurrentRiddles() {
   if (!wrap) return;
   wrap.innerHTML = '';
   const current = (state.riddles || []).filter((riddle) => (
-    riddle.phase_state === 'active' || (riddle.phase_state === 'reset' && riddle.solve_advances)
+    riddle.phase_state === 'active'
   ));
   if (!current.length) {
     wrap.innerHTML = '<div class="viewer-message">Für diese Phase ist derzeit kein aktives Rätsel gemeldet.</div>';
@@ -1454,13 +1338,152 @@ function renderCurrentRiddles() {
   for (const riddle of current) wrap.appendChild(buildCurrentRiddleCard(riddle));
 }
 
+function copyHintTemplateMap(payload = state.hint_templates) {
+  const source = payload?.templates && typeof payload.templates === 'object' ? payload.templates : {};
+  const copy = {};
+  for (const riddle of HINT_RIDDLE_ORDER) {
+    copy[riddle] = {};
+    for (const language of Object.keys(HINT_LANGUAGE_LABELS)) {
+      copy[riddle][language] = Array.isArray(source?.[riddle]?.[language])
+        ? source[riddle][language].map((tip) => String(tip))
+        : [];
+    }
+  }
+  return copy;
+}
+
+function selectedHintEditorValues() {
+  const language = normalizeHintLanguage(document.getElementById('hintEditorLanguage')?.value || 'de');
+  const selectedRiddle = String(document.getElementById('hintEditorRiddle')?.value || 'images');
+  const riddle = HINT_RIDDLE_ORDER.includes(selectedRiddle) ? selectedRiddle : 'images';
+  return { language, riddle };
+}
+
+function renderHintEditor() {
+  const panel = document.getElementById('maintenanceHintEditor');
+  const languageSelect = document.getElementById('hintEditorLanguage');
+  const riddleSelect = document.getElementById('hintEditorRiddle');
+  const list = document.getElementById('hintEditorList');
+  const addButton = document.getElementById('hintEditorAdd');
+  const saveButton = document.getElementById('hintEditorSave');
+  const status = document.getElementById('hintEditorStatus');
+  if (!panel || !languageSelect || !riddleSelect || !list || !addButton || !saveButton || !status) return;
+
+  const serverSignature = stableStringify(state.hint_templates || {});
+  if (!hintEditorDraft || (!hintEditorDirty && serverSignature !== hintEditorSignature)) {
+    hintEditorDraft = copyHintTemplateMap();
+    hintEditorSignature = serverSignature;
+  }
+  const previousRiddle = riddleSelect.value || 'images';
+  const labels = new Map((state.riddles || []).map((riddle) => [riddle.id, riddle.label]));
+  const optionSignature = HINT_RIDDLE_ORDER.map((id) => `${id}:${labels.get(id) || id}`).join('|');
+  if (riddleSelect.dataset.signature !== optionSignature) {
+    riddleSelect.innerHTML = HINT_RIDDLE_ORDER
+      .map((id) => `<option value="${escapeAttr(id)}">${escapeHtml(labels.get(id) || id)}</option>`)
+      .join('');
+    riddleSelect.dataset.signature = optionSignature;
+    riddleSelect.value = HINT_RIDDLE_ORDER.includes(previousRiddle) ? previousRiddle : 'images';
+  }
+
+  const maintenance = Number(state.game.phase || 0) === 1;
+  const phaseKey = String(Number(state.game.phase || 0));
+  if (panel.dataset.phase !== phaseKey) {
+    panel.dataset.phase = phaseKey;
+    panel.open = maintenance;
+  }
+  const { language, riddle } = selectedHintEditorValues();
+  const tips = hintEditorDraft?.[riddle]?.[language] || [];
+  list.innerHTML = tips.length
+    ? tips.map((tip, index) => `
+      <div class="hint-editor-row" data-index="${index}">
+        <textarea class="hint-editor-text" rows="3" maxlength="2000" ${maintenance ? '' : 'disabled'}>${escapeHtml(tip)}</textarea>
+        <div class="hint-editor-row-actions">
+          <button type="button" data-editor-action="up" ${!maintenance || index === 0 ? 'disabled' : ''} aria-label="Tipp nach oben">↑</button>
+          <button type="button" data-editor-action="down" ${!maintenance || index === tips.length - 1 ? 'disabled' : ''} aria-label="Tipp nach unten">↓</button>
+          <button type="button" data-editor-action="delete" ${maintenance ? '' : 'disabled'}>Löschen</button>
+        </div>
+      </div>
+    `).join('')
+    : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
+  languageSelect.disabled = false;
+  riddleSelect.disabled = false;
+  addButton.disabled = !maintenance;
+  saveButton.disabled = !maintenance || !hintEditorDirty;
+  status.textContent = maintenance
+    ? (hintEditorDirty ? 'Ungespeicherte Änderungen.' : 'Bearbeitung ist in Wartung freigeschaltet.')
+    : 'Schreibgeschützt. Bearbeitung ist nur in Phase 1 (Wartung) möglich.';
+  panel.classList.toggle('hint-editor-readonly', !maintenance);
+}
+
+function wireHintEditor() {
+  const languageSelect = document.getElementById('hintEditorLanguage');
+  const riddleSelect = document.getElementById('hintEditorRiddle');
+  const list = document.getElementById('hintEditorList');
+  const addButton = document.getElementById('hintEditorAdd');
+  const saveButton = document.getElementById('hintEditorSave');
+  languageSelect?.addEventListener('change', renderHintEditor);
+  riddleSelect?.addEventListener('change', renderHintEditor);
+  list?.addEventListener('input', (event) => {
+    const input = event.target.closest?.('.hint-editor-text');
+    if (!input || Number(state.game.phase || 0) !== 1) return;
+    const index = safeInt(input.closest('.hint-editor-row')?.dataset.index, -1);
+    const { language, riddle } = selectedHintEditorValues();
+    if (index < 0 || !hintEditorDraft?.[riddle]?.[language]) return;
+    hintEditorDraft[riddle][language][index] = input.value;
+    hintEditorDirty = true;
+    if (saveButton) saveButton.disabled = false;
+    const status = document.getElementById('hintEditorStatus');
+    if (status) status.textContent = 'Ungespeicherte Änderungen.';
+  });
+  list?.addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-editor-action]');
+    if (!button || button.disabled || Number(state.game.phase || 0) !== 1) return;
+    const index = safeInt(button.closest('.hint-editor-row')?.dataset.index, -1);
+    const { language, riddle } = selectedHintEditorValues();
+    const tips = hintEditorDraft?.[riddle]?.[language];
+    if (!tips || index < 0 || index >= tips.length) return;
+    if (button.dataset.editorAction === 'delete') tips.splice(index, 1);
+    if (button.dataset.editorAction === 'up' && index > 0) [tips[index - 1], tips[index]] = [tips[index], tips[index - 1]];
+    if (button.dataset.editorAction === 'down' && index < tips.length - 1) [tips[index], tips[index + 1]] = [tips[index + 1], tips[index]];
+    hintEditorDirty = true;
+    renderHintEditor();
+  });
+  addButton?.addEventListener('click', () => {
+    if (Number(state.game.phase || 0) !== 1) return;
+    const { language, riddle } = selectedHintEditorValues();
+    hintEditorDraft[riddle][language].push('Neuer Tipp');
+    hintEditorDirty = true;
+    renderHintEditor();
+    list?.querySelector('.hint-editor-row:last-child .hint-editor-text')?.focus();
+  });
+  saveButton?.addEventListener('click', async () => {
+    if (Number(state.game.phase || 0) !== 1 || !hintEditorDirty) return;
+    try {
+      await runAction(saveButton, async () => {
+        const result = await api('/api/hint-templates', {
+          method: 'POST',
+          body: JSON.stringify({ templates: hintEditorDraft, ...actionGuard() }),
+        });
+        state.hint_templates = result.hint_templates;
+        hintEditorDirty = false;
+        hintEditorSignature = stableStringify(state.hint_templates);
+        rerenderRiddleViews();
+        renderHintEditor();
+        showFeedback('Tippvorlagen atomar gespeichert.', result.directory_synced ? 'ok' : 'warn');
+      });
+    } catch (_error) {
+      renderHintEditor();
+    }
+  });
+}
+
 function updateRiddleTimeDisplays() {
   for (const riddle of state.riddles || []) {
     const seconds = riddle.display_time_s ?? riddle.time_s ?? riddle.live_time_s ?? riddle.solve_time_s ?? 0;
     const row = document.querySelector(`#riddlesBody tr[data-riddle-id="${CSS.escape(riddle.id)}"]`);
     const input = row?.querySelector('.riddle-time-input');
     if (input && !riddleTimeEditing[riddle.id] && riddleTimeDrafts[riddle.id] == null) {
-      input.value = fmtTime(seconds);
+      input.value = seconds >= 1 ? String(Math.round(Number(seconds) * 1000) / 1000) : '';
     }
     const card = document.querySelector(`#currentRiddlesGrid .current-riddle-card[data-riddle-id="${CSS.escape(riddle.id)}"]`);
     const cardTime = card?.querySelector('.current-card-time');
@@ -1471,11 +1494,12 @@ function updateRiddleTimeDisplays() {
 function patchState(data) {
   const initialRender = !lastSnapshot;
   const rerenderTop = sectionChanged(data, 'game') || sectionChanged(data, 'booking') || sectionChanged(data, 'start_assignment') || sectionChanged(data, 'meta');
-  const rerenderNodes = sectionChanged(data, 'nodes');
+  const rerenderNodes = sectionChanged(data, 'nodes') || sectionChanged(data, 'game');
   const rerenderLocks = sectionChanged(data, 'locks');
   const rerenderLights = sectionChanged(data, 'lights');
   const riddlesChanged = sectionChanged(data, 'riddles');
   const riddlesStructurallyChanged = riddleStructureChanged(data);
+  const hintTemplatesChanged = sectionChanged(data, 'hint_templates');
   const previousLanguage = normalizeHintLanguage(state.booking?.language);
   const nextBooking = normalizeBooking(data.booking || state.booking);
   const languageChanged = previousLanguage !== nextBooking.language;
@@ -1487,6 +1511,7 @@ function patchState(data) {
   state.lights = data.lights || [];
   state.riddles = data.riddles || [];
   state.booking = nextBooking;
+  state.hint_templates = data.hint_templates || state.hint_templates;
   state.start_assignment = data.start_assignment || state.start_assignment;
   state.meta = data.meta || state.meta;
 
@@ -1502,6 +1527,7 @@ function patchState(data) {
     renderLocks();
     renderLights();
     rerenderRiddleViews();
+    renderHintEditor();
   } else {
     if (rerenderTop) renderTop();
     if (rerenderNodes) renderNodes();
@@ -1511,6 +1537,12 @@ function patchState(data) {
       rerenderRiddleViews();
     } else if (riddlesChanged) {
       updateRiddleTimeDisplays();
+    }
+    if (hintTemplatesChanged) {
+      if (!hintEditorDirty) rerenderRiddleViews();
+      renderHintEditor();
+    } else if (rerenderTop) {
+      renderHintEditor();
     }
   }
 
@@ -1539,7 +1571,7 @@ async function handleStart(button) {
     const result = await runAction(button, async () => {
       const response = await api('/api/phase', {
         method: 'POST',
-        body: JSON.stringify({ action: 'start', start_clicked_at_ms: startClickedAtMs }),
+        body: JSON.stringify({ action: 'start', start_clicked_at_ms: startClickedAtMs, ...actionGuard() }),
       });
       if (response.start_assignment) {
         state.start_assignment = response.start_assignment;
@@ -1576,9 +1608,7 @@ async function handlePhaseAction(action, button) {
     }[action] || action;
     const confirmed = await confirmAction({
       title: `Phase auf „${label}“ ändern?`,
-      message: 'Das Spiel wurde bereits gestartet oder beendet. Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.',
-      confirmLabel: 'Phase ändern',
-      danger: true,
+      message: 'Das Spiel läuft gerade. Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.',
     });
     if (!confirmed) return;
   }
@@ -1586,7 +1616,7 @@ async function handlePhaseAction(action, button) {
   startInFlight = false;
   await runAction(button, () => api('/api/phase', {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...actionGuard() }),
   })).catch(() => {});
 }
 
@@ -1597,12 +1627,7 @@ async function sendSummaryEmail(button) {
   try {
     await runAction(button, async () => {
       await loadBookings({ silent: true });
-      const selected = await openSummaryBookingConfirmation();
-      if (!selected) {
-        setSummaryFeedback('Senden abgebrochen.', 'warn');
-        return;
-      }
-      const saved = await saveSelectedBooking(selected);
+      const saved = normalizeBooking(state.booking);
       setSummaryFeedback('Spielzusammenfassung wird gesendet…');
       const result = await api('/api/send-summary-email', {
         method: 'POST',
@@ -1617,7 +1642,10 @@ async function sendSummaryEmail(button) {
       }
     }, { silent: true });
   } catch (error) {
-    setSummaryFeedback(error.message || 'Spielzusammenfassung konnte nicht gesendet werden.', 'error');
+    setSummaryFeedback(
+      error.message || 'E-Mail derzeit nicht verfügbar. Das Spiel bleibt gespeichert und der Versand kann später erneut versucht werden.',
+      'warn',
+    );
   } finally {
     summaryEmailBusy = false;
     renderSummaryControls();
@@ -1650,6 +1678,7 @@ function wireTopControls() {
   const bookingSelect = document.getElementById('bookingSelect');
   const languageSelect = document.getElementById('hintLanguageSelect');
   const refreshBookingsButton = document.getElementById('refreshBookingsBtn');
+  const applyBookingButton = document.getElementById('applyBookingBtn');
   const emailInput = document.getElementById('testBookingEmail');
   const playersInput = document.getElementById('testBookingPlayers');
 
@@ -1657,9 +1686,8 @@ function wireTopControls() {
     const selected = bookingOptions.find((item) => bookingKey(item) === bookingSelect.value);
     if (!selected) return;
     const normalized = normalizeBooking(selected);
-    const booking = normalized.kind === 'test' ? selectedBookingDraft(normalized) : normalized;
     try {
-      await saveSelectedBooking(booking);
+      await confirmAndSaveBooking(normalized);
       await fetchAndPatch();
     } catch (error) {
       setBookingFeedback(error.message || 'Buchung konnte nicht gespeichert werden.', 'error');
@@ -1679,37 +1707,37 @@ function wireTopControls() {
     await runAction(refreshBookingsButton, () => loadBookings()).catch(() => {});
   });
 
-  const saveBookingDraft = async () => {
+  const applyBookingDraft = async () => {
     if (bookingBusy) return;
+    const option = bookingOptions.find((item) => bookingKey(item) === bookingSelect?.value) || state.booking;
+    const selected = normalizeBooking(option);
+    const draft = selected.kind === 'empty' ? selected : normalizeBooking({
+      ...selected,
+      customerEmail: String(emailInput?.value || selected.customerEmail || '').trim(),
+      players: Math.max(1, safeInt(playersInput?.value, selected.players || 1)),
+    });
     try {
-      await saveSelectedBooking(selectedBookingDraft(state.booking));
+      await confirmAndSaveBooking(draft);
+      await fetchAndPatch();
     } catch (error) {
       setBookingFeedback(error.message || 'Buchung konnte nicht gespeichert werden.', 'error');
     }
   };
 
-  const queueBookingDraftSave = () => {
-    if (bookingDraftSaveTimer) window.clearTimeout(bookingDraftSaveTimer);
-    bookingDraftSaveTimer = window.setTimeout(saveBookingDraft, 500);
-  };
-
-  emailInput?.addEventListener('input', queueBookingDraftSave);
-  emailInput?.addEventListener('blur', saveBookingDraft);
+  applyBookingButton?.addEventListener('click', applyBookingDraft);
   emailInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    saveBookingDraft();
+    applyBookingDraft();
   });
 
   playersInput?.addEventListener('input', () => {
     playersInput.value = playersInput.value.replace(/[^0-9]/g, '');
-    queueBookingDraftSave();
   });
-  playersInput?.addEventListener('blur', saveBookingDraft);
   playersInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    saveBookingDraft();
+    applyBookingDraft();
   });
 }
 
@@ -2074,15 +2102,6 @@ function wireDiagnostics() {
     document.querySelectorAll('.diagnostics-node-filter').forEach((input) => { input.checked = false; });
     restartDiagnosticsForFilters();
   });
-  document.getElementById('diagnosticsClearBtn')?.addEventListener('click', () => {
-    stopDiagnosticsPolling();
-    diagnostics.after = Math.max(diagnostics.after, diagnostics.newestSeq || 0);
-    diagnostics.entries = [];
-    replaceDiagnosticsLogs();
-    setDiagnosticsStatus('Lokale Anzeige geleert. Auf den Geräten und im Serverpuffer wurde nichts gelöscht.');
-    startDiagnosticsPolling();
-  });
-
   document.querySelectorAll('.diagnostics-level-row').forEach((row) => {
     const node = row.dataset.logLevelNode;
     const select = row.querySelector('.diagnostics-level-select');
@@ -2098,7 +2117,7 @@ function updateFastTimers() {
   const timerValue = document.getElementById('timerValue');
   const riddleTimerValue = document.getElementById('riddleTimerValue');
   const prepareCounter = document.getElementById('prepareCounterValue');
-  if (timerValue) timerValue.textContent = fmtTime(readLocalTimer());
+  if (timerValue) timerValue.textContent = fmtGameTime(readLocalTimer());
   if (riddleTimerValue) riddleTimerValue.textContent = fmtTime(readLocalRiddleTimer());
   if (prepareCounter && Number(state.game.phase || 0) === 2) {
     prepareCounter.textContent = String(Math.floor(Date.now() / 1000) % 11);
@@ -2107,6 +2126,7 @@ function updateFastTimers() {
 
 installInteractionGuard();
 wireTopControls();
+wireHintEditor();
 wireDiagnostics();
 window.setInterval(updateFastTimers, 200);
 loadBookings().catch(() => {});

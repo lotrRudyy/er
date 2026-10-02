@@ -8,9 +8,12 @@ Single-page Flask dashboard for ER1.
 - Booking selector that pulls customer email and player count from the website
 - Password-based SSH/SFTP booking sync via Paramiko, no local ssh/scp binary required
 - Test booking with editable email/player count
-- Lock controls
+- Lock controls that honor the retained pulse cooldown and boot-guard state
 - Light group controls
-- Solve/skip buttons where allowed, safe reset controls, and live riddle time editing
+- Immediate solve, confirmed skip, and minimum-one-second riddle time correction controls
+- Maintenance-only hint-template editor backed by atomic local persistence
+- Whitelisted physical-node restart controls using `<node>/sys/cmd` with the plain `REBOOT` payload
+- Confirmed manual bulk restart in phase 0; individual physical nodes remain restartable in other phases except for the maglock controller. The Game Master also schedules the same command every 14 days at 04:00 Europe/Rome and waits for phase 0 if necessary
 - Single-flight server-side booking assignment when an accepted game start creates the active run
 - MQTT state polling backend
 
@@ -65,23 +68,27 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - `ER1_MQTT_HOST` default: `192.168.0.10`
 - `ER1_MQTT_PORT` default: `1883`
 - `ER1_DASHBOARD_PORT` default: `8080`
-- `ER1_WEBSITE_API_BASE` website URL used for bookings and summary emails
-- `ER1_WEBSITE_API_TOKEN` optional shared token, matching `GAME_SUMMARY_API_TOKEN` on the website
+- `ER1_WEBSITE_API_BASE` optional website URL used only when `ER1_SUMMARY_EMAIL_MODE=http`
+- `ER1_WEBSITE_API_TOKEN` optional shared token for HTTP summary email mode, matching `GAME_SUMMARY_API_TOKEN` on the website
 
 ## Notes
 
-- Uses `game/cmd` for mode, selected booking/player count, solve, skip, per-riddle reset, hints, and live time corrections.
+- Uses `game/cmd` for mode, selected booking/player count, solve, skip, hints, and live time corrections.
 - Uses `maglock/cmd` for lock control.
 - Uses `lighting/cmd` for light control.
 - Uses `star_sky/sys/cmd` plus `lighting/cmd` for the `star sky` row.
-- A full-game `reset` command is intentionally omitted. Only Gefängnis, Rad, Ketten, Tangram, and Magnetschlüssel use the safe `reset_riddle` command.
+- Reset and clear controls are intentionally omitted from the live dashboard.
+- In maintenance, riddle rows expose only immediate Solve; skip, time, and hint-count mutations require a started or completed run. Hint-template editing remains available in maintenance.
+- Restarting all nodes or the maglock controller is restricted to phase 0. Other individual physical nodes can still be restarted in later phases.
 - Lock, light, and diagnostics commands report local MQTT queue failures and possible partial batches; QoS 0 still provides no physical-device acknowledgment.
+- Automatic booking matching is restricted to an inclusive ±30-minute Europe/Rome window. Cached SSH copies are eligible for automatic matching only while younger than `ER1_BOOKINGS_CACHE_MAX_AGE_S` (default 900 seconds); older copies remain available for warned manual selection.
+- If the website server is unreachable, the locally started game continues without automatic booking assignment. Cached, test, or empty bookings remain available for manual selection. Summary-email failures do not change the completed run and can be retried later.
 - Deferred security boundary: the dashboard control APIs have no application-level authentication and rely on the trusted escape-room LAN/deployment boundary. Adding authentication requires a coordinated deployment/client migration and is intentionally not changed here.
 
 
-## Booking lookup from Debian website
+## Optional HTTP summary delivery
 
-Do not point `ER1_WEBSITE_API_BASE` at `192.168.0.111:3002` unless the Node app is actually listening on the LAN. In the normal nginx setup, use:
+This section applies only when `ER1_SUMMARY_EMAIL_MODE=http`. Do not point `ER1_WEBSITE_API_BASE` at `192.168.0.111:3002` unless the Node app is actually listening on the LAN. In the normal nginx setup, use:
 
 ```env
 ER1_WEBSITE_API_BASE=https://escapeschenna.com
@@ -97,6 +104,8 @@ ER1_WEBSITE_API_TOKEN=replace-with-the-same-token
 GAME_SUMMARY_API_TOKEN=replace-with-the-same-token
 GAME_DASHBOARD_API_TOKEN=replace-with-the-same-token
 ```
+
+## Booking lookup from Debian website
 
 For booking selection, the dashboard copies the website SQLite DB over SSH/SFTP and reads the copied DB locally:
 
