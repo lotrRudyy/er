@@ -125,7 +125,7 @@ PHASES: dict[PhaseId, PhaseSpec] = {
             TransitionAction("set_all_lights", {"pct": 100}),
         ),
         timer_action="unchanged",
-        game_data_action="maintenance solves auto-unsolve after 10s",
+        game_data_action="maintenance solve opens mapped lock without changing phase",
     ),
     2: PhaseSpec(
         phase=2,
@@ -161,9 +161,9 @@ PHASES: dict[PhaseId, PhaseSpec] = {
         next_phase=4,
         on_enter=(
             TransitionAction("set_lights_scene_ingame_start", {}),
-            TransitionAction("timer_start", {}),
+            TransitionAction("timer_start", {"delay_s": 5}),
         ),
-        timer_action="running",
+        timer_action="countdown_then_running",
     ),
     4: PhaseSpec(
         phase=4,

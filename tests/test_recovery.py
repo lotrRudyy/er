@@ -183,10 +183,61 @@ class RecoveryTestCase(unittest.TestCase):
             db=db or self.db,
             runs_dir=self.runs_dir,
             checkpoint_path=self.checkpoint,
+            auto_reboot_state_path=self.root / "auto_node_reboot.json",
             mqtt_client=client or FakeMqttClient(),
             monotonic_fn=clock.monotonic,
             utc_now_fn=clock.utc_now,
         )
+
+    def test_automatic_node_reboot_waits_for_phase_zero_and_persists_completion(self) -> None:
+        clock = FakeClock(100.0)
+        client = FakeMqttClient()
+        gm = self.make_game_master(clock, client=client)
+        client.published.clear()
+
+        state_path = self.root / "auto_node_reboot.json"
+        initial_state = json.loads(state_path.read_text(encoding="utf-8"))
+        due_at = datetime.fromisoformat(initial_state["next_due_at"])
+        self.assertEqual(due_at.hour, 4)
+        self.assertEqual(initial_state["timezone"], "Europe/Rome")
+
+        clock.advance(due_at.timestamp() - clock.wall.timestamp() - 1)
+        gm.state.phase = 0
+        gm._automatic_node_reboot_if_due()
+        self.assertEqual(client.published, [])
+
+        clock.advance(1)
+        gm.state.phase = 3
+        gm._automatic_node_reboot_if_due()
+        self.assertEqual(client.published, [])
+
+        gm.state.phase = 0
+        gm._automatic_node_reboot_if_due()
+        reboot_messages = [item for item in client.published if item[0].endswith("/sys/cmd")]
+        self.assertEqual(
+            reboot_messages,
+            [(f"{node_id}/sys/cmd", "REBOOT", False) for node_id in config.PHYSICAL_NODE_IDS],
+        )
+
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["version"], 1)
+        self.assertIsNotNone(state["last_completed_at"])
+        next_due_at = datetime.fromisoformat(state["next_due_at"])
+        self.assertEqual(next_due_at.hour, 4)
+        self.assertEqual(next_due_at.date(), due_at.date() + timedelta(days=14))
+
+        client.published.clear()
+        restored = self.make_game_master(clock, client=client)
+        restored._automatic_node_reboot_if_due()
+        self.assertEqual(client.published, [])
+
+    def test_automatic_node_reboot_keeps_four_oclock_across_dst(self) -> None:
+        clock = FakeClock(100.0, datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc))
+        self.make_game_master(clock)
+        state = json.loads((self.root / "auto_node_reboot.json").read_text(encoding="utf-8"))
+        due_at = datetime.fromisoformat(state["next_due_at"])
+        self.assertEqual(due_at.hour, 4)
+        self.assertEqual(due_at.utcoffset(), timedelta(hours=2))
 
     @staticmethod
     def live_riddle_seconds(gm: GameMaster, riddle: str) -> float:
@@ -225,7 +276,7 @@ class RecoveryTestCase(unittest.TestCase):
         checkpoint_text = self.checkpoint.read_text(encoding="utf-8")
         self.assertNotIn("monotonic", checkpoint_text.lower())
         before = json.loads(checkpoint_text)
-        self.assertAlmostEqual(before["run"]["riddle_timings"]["images"]["segment_elapsed_s"], 12.25)
+        self.assertAlmostEqual(before["run"]["riddle_timings"]["images"]["segment_elapsed_s"], 7.25)
 
         restored_clock = FakeClock(9000.0, clock.wall + timedelta(hours=9))
         client = FakeMqttClient()
@@ -235,10 +286,10 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertEqual(restored.state.current_run.players_count, 4)
         self.assertEqual(restored.state.current_run.booking["bookingCode"], "BOOK-7")
         self.assertEqual(restored.state.current_run.riddle_timings["images"].hint_count, 1)
-        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 12.25)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 7.25)
 
         restored_clock.advance(2.5)
-        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 14.75)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 9.75)
         started_at = restored.state.current_run.started_at
         event_count = len(restored.state.current_run.events)
         restored.start()
@@ -273,7 +324,7 @@ class RecoveryTestCase(unittest.TestCase):
         ))
         restored.stop()
 
-    def test_phase_8_retains_gate_outcomes_hints_reset_and_elapsed(self) -> None:
+    def test_phase_8_retains_gate_outcomes_hints_and_elapsed(self) -> None:
         clock = FakeClock(200.0)
         gm = self.make_game_master(clock)
         gm._enter_phase(2, "admin_prepare")
@@ -302,7 +353,6 @@ class RecoveryTestCase(unittest.TestCase):
             tangram.solve_time_s = 7.0
             tangram.first_started_monotonic = clock.monotonic() - 7.0
             magnet = run.riddle_timings["magnet"]
-            magnet.reset_pending = True
             magnet.first_started_monotonic = clock.monotonic() - 6.0
             magnet.segment_started_monotonic = clock.monotonic() - 6.0
             magnet.hint_count = 3
@@ -321,7 +371,7 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertTrue(restored_run.riddle_timings["wheel"].not_solved)
         self.assertEqual(restored_run.riddle_timings["prison"].hint_count, 2)
         self.assertEqual(restored_run.riddle_timings["prison"].hints, "first\n---\nsecond")
-        self.assertEqual(restored_run.riddle_timings["magnet"].status(), "reset")
+        self.assertEqual(restored_run.riddle_timings["magnet"].status(), "active")
         self.assertEqual(restored_run.riddle_timings["magnet"].hint_count, 3)
         self.assertAlmostEqual(self.live_riddle_seconds(restored, "magnet"), 6.0)
 
@@ -391,8 +441,117 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertEqual(quarantined[0].read_bytes(), malformed)
         self.assertIn("quarantined", "\n".join(captured.output).lower())
 
-    def test_previous_checkpoint_schema_version_is_explicitly_quarantined(self) -> None:
-        self.assertEqual(CHECKPOINT_VERSION, 2)
+    def test_v2_checkpoint_is_migrated_without_reset_runtime_state(self) -> None:
+        self.assertEqual(CHECKPOINT_VERSION, 3)
+        clock = FakeClock(10.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        run_id = gm.state.current_run.run_id
+        payload = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        payload["version"] = 2
+        for item in payload["run"]["riddle_timings"].values():
+            item["reset_pending"] = False
+        self.checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertLogs("game_master", level="WARNING") as captured:
+            restored = self.make_game_master(FakeClock(20.0, clock.wall + timedelta(minutes=1)))
+        self.assertEqual(restored.state.phase, 2)
+        self.assertEqual(restored.state.current_run.run_id, run_id)
+        migrated = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["version"], 3)
+        self.assertFalse(any(
+            "reset_pending" in item for item in migrated["run"]["riddle_timings"].values()
+        ))
+        self.assertEqual(list(self.root.glob("active.json.invalid.*")), [])
+        self.assertIn("migrated active-run checkpoint", "\n".join(captured.output).lower())
+
+    def test_v2_reset_state_is_normalized_to_active_or_solved(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel", "chains"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        self.assertEqual(gm.state.phase, 8)
+
+        payload = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        payload["version"] = 2
+        for item in payload["run"]["riddle_timings"].values():
+            item["reset_pending"] = False
+        tangram = payload["run"]["riddle_timings"]["tangram"]
+        tangram.update({
+            "solve_time_s": 0.0,
+            "skipped": False,
+            "not_solved": False,
+            "reset_pending": True,
+            "status": "reset",
+            "first_elapsed_s": 2.0,
+            "segment_elapsed_s": 2.0,
+        })
+        chains = payload["run"]["riddle_timings"]["chains"]
+        chains.update({
+            "solve_time_s": 0.0,
+            "skipped": False,
+            "not_solved": False,
+            "reset_pending": True,
+            "status": "reset",
+            "first_elapsed_s": 1.0,
+            "segment_elapsed_s": 1.0,
+        })
+        self.checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+        restored = self.make_game_master(FakeClock(500.0, clock.wall + timedelta(hours=1)))
+        self.assertEqual(restored.state.phase, 8)
+        self.assertEqual(restored.state.current_run.riddle_timings["tangram"].status(), "active")
+        self.assertEqual(restored.state.current_run.riddle_timings["chains"].status(), "solved")
+        self.assertEqual(restored.state.current_run.riddle_timings["chains"].solve_time_s, 1.0)
+        migrated = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["version"], 3)
+        self.assertFalse(any(
+            "reset_pending" in item for item in migrated["run"]["riddle_timings"].values()
+        ))
+
+    def test_malformed_v2_checkpoint_is_quarantined(self) -> None:
+        clock = FakeClock(10.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        payload = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        payload["version"] = 2
+        for item in payload["run"]["riddle_timings"].values():
+            item["reset_pending"] = False
+        payload["run"]["riddle_timings"]["images"]["reset_pending"] = "false"
+        self.checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertLogs("game_master", level="ERROR") as captured:
+            restored = self.make_game_master(FakeClock(20.0, clock.wall + timedelta(minutes=1)))
+        self.assertEqual(restored.state.phase, 0)
+        self.assertFalse(self.checkpoint.exists())
+        self.assertEqual(len(list(self.root.glob("active.json.invalid.*"))), 1)
+        self.assertIn("reset_pending", "\n".join(captured.output))
+
+    def test_v2_migration_write_failure_preserves_source_and_blocks_recovery(self) -> None:
+        clock = FakeClock(10.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        payload = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        payload["version"] = 2
+        for item in payload["run"]["riddle_timings"].values():
+            item["reset_pending"] = False
+        self.checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+        with mock.patch("game_master._atomic_write_json", side_effect=OSError("migration disk failure")):
+            with self.assertLogs("game_master", level="CRITICAL"):
+                restored = self.make_game_master(FakeClock(20.0, clock.wall + timedelta(minutes=1)))
+        self.assertEqual(restored.state.phase, 0)
+        self.assertTrue(restored._startup_recovery_fault)
+        self.assertTrue(restored._hardware_effects_blocked)
+        self.assertTrue(self.checkpoint.exists())
+        self.assertEqual(json.loads(self.checkpoint.read_text(encoding="utf-8"))["version"], 2)
+        self.assertEqual(list(self.root.glob("active.json.invalid.*")), [])
+
+    def test_unsupported_checkpoint_version_is_quarantined(self) -> None:
         clock = FakeClock(10.0)
         gm = self.make_game_master(clock)
         gm._enter_phase(2, "admin_prepare")
@@ -522,7 +681,7 @@ class RecoveryTestCase(unittest.TestCase):
         gm.stop()
         payload = json.loads(self.checkpoint.read_text(encoding="utf-8"))
         self.assertEqual(payload["reason"], "graceful_stop")
-        self.assertAlmostEqual(payload["run"]["riddle_timings"]["images"]["segment_elapsed_s"], 1.75)
+        self.assertAlmostEqual(payload["run"]["riddle_timings"]["images"]["segment_elapsed_s"], -3.25)
 
         with self.assertRaisesRegex(RuntimeError, "shutting down"):
             gm._enter_phase(0, "admin_standby")
@@ -739,21 +898,369 @@ class RecoveryTestCase(unittest.TestCase):
         gm._execute_action(action)
         self.assertFalse(any(topic == config.TOPIC_LIGHTING_CMD for topic, _payload, _retain in client.published))
 
-    def test_historical_reset_restarts_elapsed_time_at_reset(self) -> None:
+    def test_start_enters_phase_3_immediately_and_countdown_recovers(self) -> None:
+        clock = FakeClock(100.0)
+        client = FakeMqttClient()
+        gm = self.make_game_master(clock, client=client)
+        gm._enter_phase(2, "admin_prepare")
+        run_id = gm.state.current_run.run_id
+        client.published.clear()
+
+        gm.handle_game_cmd({
+            "cmd": "start",
+            "expected_run_id": run_id,
+            "expected_phase": 2,
+        })
+
+        self.assertEqual(gm.state.phase, 3)
+        self.assertTrue(any(
+            topic == config.TOPIC_LIGHTING_CMD and payload == {"cmd": "set_phase", "phase": 3}
+            for topic, payload, _retain in client.published
+        ))
+        self.assertTrue(any(
+            topic == config.TOPIC_MAGLOCK_CMD and payload == {"cmd": "set_phase", "phase": 3}
+            for topic, payload, _retain in client.published
+        ))
+        payload = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(payload)
+        self.assertAlmostEqual(payload["timer_elapsed_s"], -5.0)
+        self.assertAlmostEqual(payload["run"]["live_duration_s"], -5.0)
+        self.assertAlmostEqual(payload["current_riddle_elapsed_s"], -5.0)
+        self.assertAlmostEqual(payload["run"]["riddle_timings"]["images"]["live_time_s"], -5.0)
+        self.assertEqual(
+            datetime.fromisoformat(gm.state.game_started_at),
+            clock.wall + timedelta(seconds=5),
+        )
+
+        clock.advance(2.0)
+        self.assertTrue(gm._checkpoint_now("countdown"))
+        checkpoint = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertAlmostEqual(checkpoint["run"]["run_elapsed_s"], -3.0)
+
+        restored_clock = FakeClock(9000.0, clock.wall + timedelta(hours=1))
+        restored = self.make_game_master(restored_clock)
+        restored_payload = restored.state.to_game_state_payload()
+        restored._enrich_dashboard_state_payload_locked(restored_payload)
+        self.assertAlmostEqual(restored_payload["run"]["live_duration_s"], -3.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), -3.0)
+        restored_clock.advance(3.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 0.0)
+        restored_clock.advance(2.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "images"), 2.0)
+
+    def test_solve_during_countdown_keeps_next_riddle_anchored_to_run_start(self) -> None:
         clock = FakeClock(100.0)
         gm = self.make_game_master(clock)
         gm._enter_phase(2, "admin_prepare")
         gm._enter_phase(3, "admin_start")
-        for riddle in ("images", "piano", "prison"):
-            clock.advance(2.0)
-            gm.handle_solve(riddle, source="manual")
-        self.assertEqual(gm.state.phase, 6)
+        run = gm.state.current_run
 
-        clock.advance(120.0)
-        gm.reset_riddle("prison")
-        self.assertAlmostEqual(self.live_riddle_seconds(gm, "prison"), 0.0)
-        clock.advance(3.25)
-        self.assertAlmostEqual(self.live_riddle_seconds(gm, "prison"), 3.25)
+        gm.handle_solve("images", source="manual")
+        self.assertEqual(gm.state.phase, 4)
+        piano = run.riddle_timings["piano"]
+        self.assertEqual(piano.first_started_monotonic, run.started_monotonic)
+        self.assertEqual(piano.segment_started_monotonic, run.started_monotonic)
+
+        payload = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(payload)
+        self.assertAlmostEqual(payload["timer_elapsed_s"], -5.0)
+        self.assertAlmostEqual(payload["current_riddle_elapsed_s"], -5.0)
+        checkpoint = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertAlmostEqual(checkpoint["run"]["run_elapsed_s"], -5.0)
+        self.assertAlmostEqual(checkpoint["run"]["riddle_timings"]["piano"]["segment_elapsed_s"], -5.0)
+
+        clock.advance(4.0)
+        payload = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(payload)
+        self.assertAlmostEqual(payload["timer_elapsed_s"], -1.0)
+        self.assertAlmostEqual(payload["current_riddle_elapsed_s"], -1.0)
+        self.assertTrue(gm._checkpoint_now("early_solve_countdown"))
+
+        restored_clock = FakeClock(1000.0, clock.wall + timedelta(hours=1))
+        restored = self.make_game_master(restored_clock)
+        restored_payload = restored.state.to_game_state_payload()
+        restored._enrich_dashboard_state_payload_locked(restored_payload)
+        self.assertEqual(restored.state.phase, 4)
+        self.assertAlmostEqual(restored_payload["timer_elapsed_s"], -1.0)
+        self.assertAlmostEqual(restored_payload["current_riddle_elapsed_s"], -1.0)
+        restored_clock.advance(1.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "piano"), 0.0)
+        restored_clock.advance(2.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "piano"), 2.0)
+
+    def test_riddle_time_requires_one_second_and_transfers_to_next_reached_riddle(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        self.assertEqual(gm.state.phase, 7)
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["wheel"].solve_time_s = 120.0
+            run.riddle_timings["chains"].first_started_monotonic = clock.monotonic() - 60.0
+            run.riddle_timings["chains"].segment_started_monotonic = clock.monotonic() - 60.0
+
+        before = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(before)
+        gm.set_riddle_time("wheel", 90.0)
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 90.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 90.0)
+        after = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(after)
+        self.assertAlmostEqual(after["run"]["live_duration_s"], before["run"]["live_duration_s"])
+
+        gm.set_riddle_time("wheel", 120.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 60.0)
+        gm.set_riddle_time("wheel", 150.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
+        with self.assertRaisesRegex(ValueError, "below 1 second"):
+            gm.set_riddle_time("wheel", 180.0)
+        run = gm.state.current_run
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 150.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
+
+        for invalid in (0, -1, 0.999):
+            with self.subTest(seconds=invalid):
+                with self.assertRaisesRegex(ValueError, "at least 1 second|between 1 second"):
+                    gm.set_riddle_time("chains", invalid)
+        event = run.events[-1]
+        self.assertEqual(event["event"], "riddle_time_corrected")
+        self.assertEqual(event["source_riddle"], "wheel")
+        self.assertEqual(event["target_riddle"], "chains")
+        self.assertEqual(event["source_delta_s"], 30.0)
+        self.assertEqual(event["target_delta_s"], -30.0)
+
+        checkpoint_before = self.checkpoint.read_bytes()
+        with mock.patch("game_master._atomic_write_json", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("game_master", level="ERROR"):
+                with self.assertRaises(CheckpointPersistenceError):
+                    gm.set_riddle_time("wheel", 120.0)
+        self.assertEqual(self.checkpoint.read_bytes(), checkpoint_before)
+        self.assertEqual(gm.state.current_run.riddle_timings["wheel"].solve_time_s, 150.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
+
+        restored = self.make_game_master(FakeClock(9000.0, clock.wall + timedelta(hours=1)))
+        self.assertEqual(restored.state.current_run.riddle_timings["wheel"].solve_time_s, 150.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "chains"), 30.0)
+
+    def test_parallel_time_transfer_uses_stage_max_and_never_sibling(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in (
+            "images", "piano", "prison", "wheel", "chains", "tangram", "magnet",
+        ):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        self.assertEqual(gm.state.phase, 9)
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["tangram"].solve_time_s = 120.0
+            run.riddle_timings["magnet"].solve_time_s = 100.0
+            run.riddle_timings["chess"].first_started_monotonic = clock.monotonic() - 60.0
+            run.riddle_timings["chess"].segment_started_monotonic = clock.monotonic() - 60.0
+
+        before = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(before)
+        gm.set_riddle_time("tangram", 90.0)
+        self.assertEqual(run.riddle_timings["tangram"].solve_time_s, 90.0)
+        self.assertEqual(run.riddle_timings["magnet"].solve_time_s, 100.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chess"), 80.0)
+        after = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(after)
+        self.assertAlmostEqual(after["run"]["live_duration_s"], before["run"]["live_duration_s"])
+        event = run.events[-1]
+        self.assertEqual(event["target_riddle"], "chess")
+        self.assertEqual(event["source_delta_s"], -30.0)
+        self.assertEqual(event["source_stage_delta_s"], -20.0)
+        self.assertEqual(event["target_delta_s"], 20.0)
+
+    def test_skip_and_solve_toggle_preserves_time_without_rewinding(self) -> None:
+        clock = FakeClock(100.0)
+        client = FakeMqttClient()
+        gm = self.make_game_master(clock, client=client)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(7.0)
+        gm.set_riddle_outcome("images", "skipped")
+        timing = gm.state.current_run.riddle_timings["images"]
+        skipped_time = timing.solve_time_s
+        self.assertEqual(gm.state.phase, 4)
+        self.assertTrue(timing.skipped)
+        self.assertGreater(skipped_time, 0)
+
+        client.published.clear()
+        gm.handle_solve("images", source="manual")
+        self.assertEqual(gm.state.phase, 4)
+        self.assertEqual(timing.status(), "solved")
+        self.assertEqual(timing.solve_time_s, skipped_time)
+        self.assertFalse(any(
+            topic in {config.TOPIC_LIGHTING_CMD, config.TOPIC_MAGLOCK_CMD}
+            for topic, _payload, _retain in client.published
+        ))
+
+        gm.set_riddle_outcome("images", "skipped")
+        self.assertEqual(gm.state.phase, 4)
+        self.assertTrue(timing.skipped)
+        self.assertEqual(timing.solve_time_s, skipped_time)
+        gm.set_riddle_outcome("images", "solved")
+        self.assertEqual(timing.status(), "solved")
+        self.assertEqual(timing.solve_time_s, skipped_time)
+        checkpoint = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertFalse(checkpoint["run"]["riddle_timings"]["images"]["skipped"])
+
+    def test_reset_and_clear_operations_are_removed(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        self.assertFalse(hasattr(gm, "reset_riddle"))
+        for cmd in ("reset_riddle", "reset_riddle_timing", "clear_riddle_outcome", "clear_outcome"):
+            with self.subTest(cmd=cmd):
+                with self.assertRaisesRegex(ValueError, "Unknown command"):
+                    gm.handle_game_cmd({"cmd": cmd, "riddle": "images"})
+        for outcome in ("clear", "pending", "not_solved", "failed"):
+            with self.subTest(outcome=outcome):
+                with self.assertRaisesRegex(ValueError, "Unknown riddle outcome"):
+                    gm.set_riddle_outcome("images", outcome)
+
+    def test_mqtt_hint_count_accepts_only_plus_or_minus_one_and_persists(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        for delta in (1, 1, -1, -1, -1):
+            gm.handle_game_cmd({"cmd": "adjust_hint_count", "riddle": "images", "delta": delta})
+        timing = gm.state.current_run.riddle_timings["images"]
+        self.assertEqual(timing.hint_count, 0)
+        checkpoint = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        self.assertEqual(checkpoint["run"]["riddle_timings"]["images"]["hint_count"], 0)
+        gm.handle_game_cmd({"cmd": "set_hint_count", "riddle": "images", "delta": 1})
+        self.assertEqual(timing.hint_count, 1)
+        for payload in (
+            {"cmd": "set_hint_count", "riddle": "images", "count": 4},
+            {"cmd": "adjust_hint_count", "riddle": "images", "delta": 2},
+            {"cmd": "adjust_hint_count", "riddle": "images", "delta": True},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, "delta"):
+                    gm.handle_game_cmd(payload)
+        self.assertEqual(timing.hint_count, 1)
+
+    def test_stale_operator_guards_cover_every_mutating_game_command(self) -> None:
+        clock = FakeClock(100.0)
+        client = FakeMqttClient()
+        gm = self.make_game_master(clock, client=client)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        run_id = gm.state.current_run.run_id
+        checkpoint_before = self.checkpoint.read_bytes()
+        commands = (
+            {"cmd": "set_phase", "phase": 4},
+            {"cmd": "phase", "phase": 4},
+            {"cmd": "set_mode", "mode": "standby"},
+            {"cmd": "mode", "mode": "standby"},
+            {"cmd": "start"},
+            {"cmd": "start_game"},
+            {"cmd": "set_booking", "booking": {"id": "stale", "players": 9}},
+            {"cmd": "booking", "booking": {"id": "stale", "players": 9}},
+            {"cmd": "set_players_count", "players_count": 9},
+            {"cmd": "add_hint", "riddle": "images", "hint_text": "stale"},
+            {"cmd": "solve", "riddle": "images"},
+            {"cmd": "open_lock", "lock": "images"},
+            {"cmd": "close_lock", "lock": "images"},
+            {"cmd": "lighting", "action": "all_off"},
+            {"cmd": "maglock", "action": "open", "lock": "images"},
+            {"cmd": "adjust_hint_count", "riddle": "images", "delta": 1},
+            {"cmd": "set_hint_count", "riddle": "images", "delta": 1},
+            {"cmd": "set_riddle_time", "riddle": "images", "solve_time_s": 1},
+            {"cmd": "set_solve_time", "riddle": "images", "solve_time_s": 1},
+            {"cmd": "set_riddle_outcome", "riddle": "images", "outcome": "skipped"},
+            {"cmd": "set_outcome", "riddle": "images", "outcome": "skipped"},
+            {"cmd": "skip_riddle", "riddle": "images"},
+            {"cmd": "skip", "riddle": "images"},
+        )
+        for command in commands:
+            for stale_guard in (
+                {"expected_run_id": "run_stale", "expected_phase": 3},
+                {"expected_run_id": run_id, "expected_phase": 4},
+            ):
+                with self.subTest(cmd=command["cmd"], stale_guard=stale_guard):
+                    state_before = copy.deepcopy(gm.state)
+                    client.published.clear()
+                    gm.handle_game_cmd({**command, **stale_guard})
+                    self.assertEqual(gm.state, state_before)
+                    self.assertEqual(self.checkpoint.read_bytes(), checkpoint_before)
+                    self.assertEqual(len(client.published), 1)
+                    topic, payload, retained = client.published[0]
+                    self.assertEqual(topic, config.TOPIC_GAME_MASTER_DEBUG)
+                    self.assertEqual(payload["msg"], "OPERATOR_COMMAND_IGNORED_STALE_STATE")
+                    self.assertFalse(retained)
+
+        clock.advance(6.0)
+        gm.handle_game_cmd({
+            "cmd": "solve",
+            "riddle": "images",
+            "expected_run_id": run_id,
+            "expected_phase": 3,
+        })
+        self.assertEqual(gm.state.phase, 4)
+
+    def test_prepared_run_booking_and_player_updates_require_the_current_run_id(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        run_id = gm.state.current_run.run_id
+
+        self.assertFalse(gm.set_booking({"id": "stale", "players": 9}, expected_run_id="run_stale"))
+        self.assertFalse(gm.set_players_count(9, expected_run_id="run_stale"))
+        self.assertEqual(gm.state.current_run.booking, {})
+        self.assertEqual(gm.state.current_run.players_count, 0)
+
+        self.assertTrue(gm.set_booking({"id": "current", "players": 4}, expected_run_id=run_id))
+        self.assertTrue(gm.set_players_count(5, expected_run_id=run_id))
+        self.assertEqual(gm.state.current_run.booking["id"], "current")
+        self.assertEqual(gm.state.current_run.players_count, 5)
+
+    def test_maintenance_solves_open_only_defined_locks_without_phase_change(self) -> None:
+        clock = FakeClock(100.0)
+        client = FakeMqttClient()
+        gm = self.make_game_master(clock, client=client)
+        gm._enter_phase(1, "admin_maintenance")
+        client.published.clear()
+
+        for riddle, source in (
+            ("images", "node"),
+            ("piano", "manual"),
+            ("chess", "node"),
+            ("knocking", "manual"),
+            ("star_slider", "node"),
+            ("prison", "manual"),
+        ):
+            gm.handle_solve(riddle, source=source)
+            self.assertEqual(gm.state.phase, 1)
+
+        opens = [
+            payload for topic, payload, _retain in client.published
+            if topic == config.TOPIC_MAGLOCK_CMD and payload.get("cmd") == "open"
+        ]
+        self.assertEqual(opens, [
+            {"cmd": "open", "lock": "images"},
+            {"cmd": "open", "lock": "r2"},
+            {"cmd": "open", "lock": "r3"},
+            {"cmd": "open", "lock": "knocking"},
+            {"cmd": "open", "lock": "slider"},
+        ])
+        self.assertFalse(self.checkpoint.exists())
+        self.assertGreaterEqual(sum(
+            topic == config.TOPIC_DASHBOARD_STATE for topic, _payload, _retain in client.published
+        ), 6)
 
     def test_terminal_phase_requires_normal_sissi_solve_and_pending_completion_cannot_be_abandoned(self) -> None:
         clock = FakeClock(100.0)
@@ -762,7 +1269,7 @@ class RecoveryTestCase(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "genuine Sissi solve"):
             gm._enter_phase(14, "admin_set_phase")
-        for outcome in ("solved", "skipped", "not_solved", "clear"):
+        for outcome in ("solved", "skipped"):
             with self.subTest(outcome=outcome):
                 with self.assertRaisesRegex(ValueError, "normal solve"):
                     gm.set_riddle_outcome("sissi", outcome)
@@ -1035,6 +1542,8 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
             function.decorator_list = []
             module = ast.Module(body=[function], type_ignores=[])
             exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
+        if "api_phase" in function_names:
+            namespace["_stale_action_response"] = lambda _data: None
         return namespace
 
     @staticmethod
@@ -1298,7 +1807,11 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
         namespace["_maybe_resume_persisted_start_assignment"]()
         namespace["_maybe_resume_persisted_start_assignment"]()
         self.assertEqual(launches, [("claim-1", True)])
-        self.assertEqual(publishes, [("game/cmd", {"cmd": "start"})])
+        self.assertEqual(publishes, [("game/cmd", {
+            "cmd": "start",
+            "expected_phase": 2,
+            "expected_run_id": "run-1",
+        })])
         self.assertEqual(matching.start_assignment["intent_state"], "published")
         self.assertTrue(matching.start_assignment["start_published"])
 
@@ -1538,7 +2051,11 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["mqtt_queued"])
         self.assertTrue(response["assignment_worker_started"])
-        self.assertEqual(publishes, [("game/cmd", {"cmd": "start"})])
+        self.assertEqual(publishes, [("game/cmd", {
+            "cmd": "start",
+            "expected_phase": 2,
+            "expected_run_id": "run-1",
+        })])
         self.assertEqual(launches, ["claim-1"])
         self.assertFalse(response["start_assignment"]["start_published"])
         self.assertTrue(response["start_assignment"]["_start_published_runtime"])
@@ -1686,7 +2203,11 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
             thread.join(2.0)
 
         self.assertTrue(all(not thread.is_alive() for thread in threads))
-        self.assertEqual(publishes, [{"cmd": "start"}])
+        self.assertEqual(publishes, [{
+            "cmd": "start",
+            "expected_phase": 2,
+            "expected_run_id": "run-1",
+        }])
         self.assertEqual(launches, ["claim-1"])
 
     def test_idempotent_start_api_ensures_existing_claim_worker(self) -> None:
@@ -1823,10 +2344,17 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
 
         store = Store()
 
-        def publish_booking(booking: dict[str, Any], *, expected_run_id: str = "") -> dict[str, Any]:
+        def publish_booking(
+            booking: dict[str, Any],
+            *,
+            expected_run_id: str = "",
+            expected_phase: int | None = None,
+        ) -> dict[str, Any]:
             self.assertEqual(store.start_assignment.get("booking_snapshot"), selected)
             self.assertEqual(store.start_assignment.get("candidate_state"), "selected")
             self.assertTrue(store.start_assignment.get("_candidate_directory_synced"))
+            self.assertEqual(expected_run_id, "run-1")
+            self.assertEqual(expected_phase, 3)
             publishes.append(copy.deepcopy(booking))
             store.game_state["run"]["booking"] = copy.deepcopy(booking)
             return copy.deepcopy(booking)
@@ -1848,6 +2376,52 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
         self.assertEqual(publishing_write["booking_snapshot"], selected)
         self.assertEqual(store.start_assignment["status"], "assigned")
         self.assertEqual(store.selected_booking, selected)
+
+    def test_offline_booking_lookup_ends_assignment_without_stopping_game(self) -> None:
+        namespace = self.extracted_namespace({"_run_start_booking_assignment"})
+
+        class Store:
+            def __init__(self) -> None:
+                self.lock = threading.RLock()
+                self.start_assignment = {
+                    "active": True,
+                    "cancel_requested": False,
+                    "intent_state": "published",
+                    "candidate_state": "none",
+                    "claim_id": "claim-offline",
+                    "run_id": "run-1",
+                    "start_clicked_at_ms": 1000,
+                }
+                self.game_state = {"phase": 3, "run": {"run_id": "run-1", "booking": {}}}
+
+            def get_start_assignment(self) -> dict[str, Any]:
+                return copy.deepcopy(self.start_assignment)
+
+            def _set_start_assignment_locked(self, value: dict[str, Any]) -> bool:
+                self.start_assignment = copy.deepcopy(value)
+                return True
+
+            def update_start_assignment(self, claim_id: str, **updates: Any) -> bool:
+                if claim_id != self.start_assignment.get("claim_id"):
+                    return False
+                return self._set_start_assignment_locked({**self.start_assignment, **updates})
+
+        store = Store()
+        namespace.update({
+            "store": store,
+            "time": types.SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _seconds: None),
+            "_rome_datetime_from_timestamp": lambda _timestamp: datetime.now(timezone.utc),
+            "load_bookings_for_start_assignment": lambda _limit: (_ for _ in ()).throw(RuntimeError("network offline")),
+        })
+
+        with self.assertLogs("dashboard_assignment_test", level="WARNING"):
+            namespace["_run_start_booking_assignment"]("claim-offline")
+
+        self.assertEqual(store.game_state["phase"], 3)
+        self.assertFalse(store.start_assignment["active"])
+        self.assertEqual(store.start_assignment["intent_state"], "terminal")
+        self.assertEqual(store.start_assignment["status"], "no_match")
+        self.assertIn("läuft", store.start_assignment["message"])
 
     def test_candidate_persistence_faults_publish_nothing_and_retry_exact_snapshot(self) -> None:
         namespace = self.extracted_namespace({"_run_start_booking_assignment"})
@@ -1924,7 +2498,14 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
                     snapshot = claim.get("booking_snapshot")
                     return copy.deepcopy(snapshot if isinstance(snapshot, dict) else (bookings[0] if bookings else None))
 
-                def publish(booking: dict[str, Any], *, expected_run_id: str = "") -> dict[str, Any]:
+                def publish(
+                    booking: dict[str, Any],
+                    *,
+                    expected_run_id: str = "",
+                    expected_phase: int | None = None,
+                ) -> dict[str, Any]:
+                    self.assertEqual(expected_run_id, "run-1")
+                    self.assertEqual(expected_phase, 3)
                     publishes.append(copy.deepcopy(booking))
                     store.game_state["run"]["booking"] = copy.deepcopy(booking)
                     return copy.deepcopy(booking)

@@ -508,10 +508,10 @@ function Invoke-Er1Mode {
     param([Parameter(Mandatory=$true)][string]$Mode)
     $modeKey = $Mode.ToLowerInvariant()
     $map = @{
-        "maintenance" = "MODE_MAINTENANCE"
-        "standby"     = "MODE_STANDBY"
-        "prepare"     = "MODE_PREPARE"
-        "ingame"      = "MODE_INGAME"
+        "maintenance" = "maintenance"
+        "standby"     = "standby"
+        "prepare"     = "prepare"
+        "ingame"      = "start"
     }
     if (-not $map.ContainsKey($modeKey)) {
         throw "Usage: er1 mode maintenance|ingame|prepare|standby"

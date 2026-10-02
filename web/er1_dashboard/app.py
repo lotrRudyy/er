@@ -128,6 +128,10 @@ def bookings_http_timeout() -> int:
     return max(1, _read_int_env("ER1_BOOKINGS_HTTP_TIMEOUT", 6))
 
 
+def booking_cache_max_age_s() -> int:
+    return max(1, _read_int_env("ER1_BOOKINGS_CACHE_MAX_AGE_S", DEFAULT_BOOKING_CACHE_MAX_AGE_S))
+
+
 def booking_source_mode() -> str:
     _load_env_files()
     # The Pi dashboard should get bookings by SSH-copying the website DB, not by calling the public/admin website API.
@@ -317,7 +321,18 @@ _load_env_files()
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
 MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
-HINTS_PATH = BASE_DIR / "dashboard_hint_counts.json"
+HINTS_PATH = BASE_DIR / "data" / "dashboard_hint_counts.json"
+HINT_TEMPLATE_DEFAULTS_PATH = BASE_DIR / "hint_templates.defaults.json"
+HINT_TEMPLATE_RUNTIME_PATH = BASE_DIR / "data" / "hint_templates.json"
+HINT_TEMPLATE_VERSION = 1
+HINT_TEMPLATE_LANGUAGES = ("de", "en", "it")
+HINT_TEMPLATE_RIDDLES = (
+    "images", "piano", "prison", "wheel", "chains", "tangram",
+    "magnet", "chess", "knocking", "candles", "stars", "sissi",
+)
+MAX_HINT_TEMPLATE_BYTES = 96 * 1024
+MAX_HINT_TIPS_PER_LANGUAGE = 20
+MAX_HINT_TIP_CHARS = 2000
 SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
 START_ASSIGNMENT_PATH = Path(
     os.getenv("ER1_START_ASSIGNMENT_PATH", str(BASE_DIR / "data" / "start_assignment.json"))
@@ -330,6 +345,9 @@ START_ASSIGNMENT_VERSION = 2
 START_INTENT_STATES = {"none", "authorized", "published", "terminal"}
 START_CANDIDATE_STATES = {"none", "selected", "published"}
 MAX_START_BOOKING_BYTES = 32768
+AUTOMATIC_BOOKING_WINDOW_S = 30 * 60
+DEFAULT_BOOKING_CACHE_MAX_AGE_S = 15 * 60
+GAME_COUNTDOWN_S = 5
 START_CLICK_MAX_AGE_S = 5 * 60
 START_CLICK_MAX_FUTURE_S = 60
 _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED = False
@@ -628,10 +646,13 @@ def load_selected_booking() -> dict[str, Any]:
 
 def save_selected_booking(booking: dict[str, Any]) -> bool:
     return _atomic_write_dashboard_json(SELECTED_BOOKING_PATH, normalize_booking_selection(booking))
+_repo_game_db_path = BASE_DIR.parents[1] / "scripts" / "game_master" / "data" / "game_master.sqlite3"
+_installed_game_db_path = BASE_DIR.parent / "scripts" / "game_master" / "data" / "game_master.sqlite3"
+_default_game_db_path = _repo_game_db_path if _repo_game_db_path.parent.is_dir() else _installed_game_db_path
 GAME_DB_PATH = Path(
     os.getenv(
         "ER1_GAME_DB_PATH",
-        str(BASE_DIR.parent / "scripts" / "game_master" / "data" / "game_master.sqlite3")
+        str(_default_game_db_path)
     )
 ).resolve()
 
@@ -699,7 +720,7 @@ def normalize_booking_selection(raw: Any | None) -> dict[str, Any]:
         raw = {}
     kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
     raw_id = str(raw.get("id") or raw.get("bookingCode") or raw.get("booking_code") or "").strip()
-    is_empty = kind == "empty" or raw_id == "__empty__"
+    is_empty = not raw or kind == "empty" or raw_id == "__empty__"
     is_test = kind == "test" or raw_id == "__test__"
     players = 0 if is_empty else max(1, _safe_int(raw.get("players", raw.get("players_count", raw.get("playerCount", 2 if is_test else 1))), 2 if is_test else 1))
     booking_code = str(raw.get("bookingCode") or raw.get("booking_code") or "").strip()
@@ -890,6 +911,10 @@ LOG_NODE_LABELS = {
 }
 LOG_NODE_IDS = tuple(LOG_NODE_LABELS)
 LOG_NODE_ID_SET = frozenset(LOG_NODE_IDS)
+REBOOT_NODE_IDS = frozenset({
+    "lighting", "maglock", "images_piano", "chess", "knocking",
+    "candles", "star_slider", "star_sky", "stop_timer",
+})
 LOG_LEVELS = ("DBG", "INF", "WRN", "ERR")
 LOG_LEVEL_SET = frozenset(LOG_LEVELS)
 LOG_STREAM_ID = uuid.uuid4().hex
@@ -1152,6 +1177,91 @@ def validate_log_level_request(data: Any) -> tuple[str, str]:
     return node, level
 
 
+def _validate_hint_templates(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Die Tippvorlagen müssen als Objekt übergeben werden.")
+    raw_templates = payload.get("templates") if "templates" in payload else payload
+    if not isinstance(raw_templates, dict):
+        raise ValueError("Die Tippvorlagen fehlen.")
+    unknown_riddles = sorted(set(raw_templates) - set(HINT_TEMPLATE_RIDDLES))
+    if unknown_riddles:
+        raise ValueError(f"Unbekannte Rätsel in den Tippvorlagen: {', '.join(unknown_riddles)}")
+
+    templates: dict[str, dict[str, list[str]]] = {}
+    for riddle in HINT_TEMPLATE_RIDDLES:
+        raw_languages = raw_templates.get(riddle, {})
+        if not isinstance(raw_languages, dict):
+            raise ValueError(f"Die Tippvorlagen für {riddle} müssen ein Objekt sein.")
+        unknown_languages = sorted(set(raw_languages) - set(HINT_TEMPLATE_LANGUAGES))
+        if unknown_languages:
+            raise ValueError(f"Unbekannte Sprache für {riddle}: {', '.join(unknown_languages)}")
+        templates[riddle] = {}
+        for language in HINT_TEMPLATE_LANGUAGES:
+            tips = raw_languages.get(language, [])
+            if not isinstance(tips, list) or len(tips) > MAX_HINT_TIPS_PER_LANGUAGE:
+                raise ValueError(
+                    f"{riddle}/{language} darf höchstens {MAX_HINT_TIPS_PER_LANGUAGE} Tipptexte enthalten."
+                )
+            cleaned: list[str] = []
+            for tip in tips:
+                if not isinstance(tip, str):
+                    raise ValueError(f"Jeder Tipptext für {riddle}/{language} muss Text sein.")
+                text = tip.strip()
+                if not text:
+                    raise ValueError(f"Leere Tipptexte sind für {riddle}/{language} nicht erlaubt.")
+                if len(text) > MAX_HINT_TIP_CHARS:
+                    raise ValueError(
+                        f"Ein Tipptext für {riddle}/{language} ist länger als {MAX_HINT_TIP_CHARS} Zeichen."
+                    )
+                cleaned.append(text)
+            templates[riddle][language] = cleaned
+    result = {"version": HINT_TEMPLATE_VERSION, "templates": templates}
+    encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > MAX_HINT_TEMPLATE_BYTES:
+        raise ValueError("Die Tippvorlagen überschreiten die zulässige Gesamtgröße.")
+    return result
+
+
+def _read_hint_templates(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if path.stat().st_size > MAX_HINT_TEMPLATE_BYTES:
+        raise ValueError(f"Die Tippvorlagendatei ist zu groß: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("version") != HINT_TEMPLATE_VERSION:
+        raise ValueError(f"Nicht unterstützte Tippvorlagen-Version in {path}")
+    return _validate_hint_templates(payload)
+
+
+def load_hint_templates() -> dict[str, Any]:
+    defaults = _read_hint_templates(HINT_TEMPLATE_DEFAULTS_PATH)
+    if not HINT_TEMPLATE_RUNTIME_PATH.is_file():
+        return defaults
+    try:
+        return _read_hint_templates(HINT_TEMPLATE_RUNTIME_PATH)
+    except Exception:
+        LOG.error("Invalid runtime hint templates; using canonical defaults", exc_info=True)
+        return defaults
+
+
+_hint_templates_lock = threading.RLock()
+_hint_templates = load_hint_templates()
+
+
+def get_hint_templates() -> dict[str, Any]:
+    with _hint_templates_lock:
+        return json.loads(json.dumps(_hint_templates, ensure_ascii=False))
+
+
+def save_hint_templates(payload: Any) -> tuple[dict[str, Any], bool]:
+    global _hint_templates
+    cleaned = _validate_hint_templates(payload)
+    with _hint_templates_lock:
+        directory_synced = _atomic_write_dashboard_json(HINT_TEMPLATE_RUNTIME_PATH, cleaned)
+        _hint_templates = cleaned
+        return json.loads(json.dumps(cleaned, ensure_ascii=False)), directory_synced
+
+
 def load_hint_store() -> dict[str, int]:
     if not HINTS_PATH.exists():
         return {}
@@ -1180,7 +1290,7 @@ def load_hint_store() -> dict[str, int]:
 
 def save_hint_store(data: dict[str, int]) -> None:
     cleaned = {str(k): max(0, int(v or 0)) for k, v in (data or {}).items()}
-    HINTS_PATH.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2))
+    _atomic_write_dashboard_json(HINTS_PATH, cleaned)
 
 
 def pretty_phase_name(name: str) -> str:
@@ -1595,7 +1705,8 @@ class DashboardStore:
 
     def update_lock_state(self, lock_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
-            self.locks[lock_id] = payload
+            previous = self.locks.get(lock_id, {}) if isinstance(self.locks.get(lock_id), dict) else {}
+            self.locks[lock_id] = {**previous, **payload}
 
     def update_light_state(self, light_name: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -1619,6 +1730,7 @@ class DashboardStore:
             "lights": self._build_light_summary(lights, node_states),
             "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
             "booking": self.get_selected_booking(),
+            "hint_templates": get_hint_templates(),
             "start_assignment": start_assignment,
             "meta": {
                 "broker": BROKER_HOST,
@@ -1687,7 +1799,7 @@ class DashboardStore:
                 if value in {None, ""}:
                     continue
                 try:
-                    return max(0, int(round(float(value))))
+                    return int(round(float(value)))
                 except Exception:
                     continue
             return None
@@ -1705,6 +1817,8 @@ class DashboardStore:
         if recovery_restored:
             phase_display += " (nach Neustart wiederhergestellt)"
 
+        elapsed_s = live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0)
+
         return {
             "phase": phase,
             "phase_name": phase_meta["name"],
@@ -1715,7 +1829,8 @@ class DashboardStore:
             "last_phase_name_pretty": last_name_pretty,
             "players_count": int(run.get("players_count") if run.get("players_count") is not None else (game.get("players_count") or 0)),
             "timer_running": timer_running,
-            "elapsed_s": live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0),
+            "elapsed_s": elapsed_s,
+            "game_countdown_s": GAME_COUNTDOWN_S,
             "started_at": started_at,
             "last_riddle_solved_at": last_riddle_solved_at,
             "current_riddle_elapsed_s": current_elapsed if current_elapsed is not None else (_seconds_since(current_riddle_started_at) if timer_running else 0),
@@ -1747,6 +1862,10 @@ class DashboardStore:
         for item in LOCKS:
             payload = locks.get(item["id"], {})
             state = str(payload.get("state", "")).upper()
+            def flag(name: str) -> bool:
+                value = payload.get(name)
+                return value is True or value == 1 or str(value).strip().lower() in {"1", "true", "yes", "on"}
+
             if state == "OPEN":
                 is_open = True
                 state_label = "open"
@@ -1757,11 +1876,18 @@ class DashboardStore:
                 is_open = None
                 state_label = "unknown"
             action = "close" if item["kind"] == "toggle" and is_open else "open"
+            cooldown = flag("cooldown")
+            boot_guard = flag("bootGuard") or flag("boot_guard")
+            pulsing = flag("pulse") or flag("pulsing")
             out.append({
                 "id": item["id"],
                 "label": item["label"],
                 "kind": item["kind"],
                 "is_open": is_open,
+                "cooldown": cooldown,
+                "boot_guard": boot_guard,
+                "pulsing": pulsing,
+                "command_blocked": item["kind"] == "pulse" and (cooldown or boot_guard or pulsing),
                 "state_label": state_label,
                 "button": "Schließen" if action == "close" else "Öffnen",
                 "state_class": "is-open" if is_open else ("is-closed" if is_open is False else "is-unknown"),
@@ -1891,13 +2017,10 @@ class DashboardStore:
 
             skipped = bool(timing.get("skipped", False)) or timing_status == "skipped"
             not_solved = bool(timing.get("not_solved", False)) or timing_status == "not_solved"
-            reset_pending = bool(timing.get("reset_pending", False)) or timing_status == "reset"
             solved_by_timing = bool(timing.get("solved", False)) or timing_status == "solved"
             active_by_timing = bool(timing.get("active", False)) or timing_status == "active"
 
-            if reset_pending:
-                phase_state = "reset"
-            elif skipped:
+            if skipped:
                 phase_state = "skipped"
             elif not_solved:
                 phase_state = "not_solved"
@@ -1942,7 +2065,6 @@ class DashboardStore:
                 "pending": "Ausstehend",
                 "skipped": "Übersprungen",
                 "not_solved": "Nicht gelöst",
-                "reset": "Zurückgesetzt",
             }.get(phase_state, phase_state)
 
             out.append({
@@ -1968,10 +2090,8 @@ class DashboardStore:
                 "live_time_s": _first_seconds(timing.get("live_time_s")),
                 "skipped": skipped,
                 "not_solved": not_solved,
-                "reset_pending": reset_pending,
-                "resettable": riddle_id in {"prison", "wheel", "chains", "tangram", "magnet"},
-                "can_solve": phase_state in {"active", "reset"},
-                "solve_advances": phase_state == "active" or (phase_state == "reset" and riddle_id in active),
+                "can_solve": phase_state == "active",
+                "solve_advances": phase_state == "active",
             })
         return out
 
@@ -2084,6 +2204,7 @@ class DashboardStore:
             normalized_value = "HORSE" if value in {"HORSE", "KNIGHT"} else value
             out.append({
                 "slot": slot_labels.get(slot, slot.capitalize()),
+                "expected": value_labels.get(target, target),
                 "value": value_labels.get(value, value_labels.get(normalized_value, normalized_value)),
                 "correct": normalized_value == target,
             })
@@ -2101,7 +2222,18 @@ class DashboardStore:
             text = cls._normalize_knocking_attempt(item) if riddle_id == "knocking" else cls._normalize_flat_attempt(item)
             if text:
                 attempts.append(text)
-        return {"tries": tries, "attempts": attempts}
+        current_sequence: list[int] = []
+        if riddle_id == "knocking":
+            raw_current = state_payload.get("sequence_current")
+            current_items = raw_current if isinstance(raw_current, (list, tuple)) else cls._string_list(raw_current)
+            for item in current_items:
+                try:
+                    sensor = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if sensor in {1, 2, 3}:
+                    current_sequence.append(sensor)
+        return {"tries": tries, "attempts": attempts, "sequence_current": current_sequence}
 
     @classmethod
     def _extract_star_slider_values(cls, value: Any) -> list[str]:
@@ -3148,6 +3280,15 @@ def _handle_mqtt_message(msg: mqtt.MQTTMessage) -> None:
             light_name = data.get("light") or LIGHT_NAME_BY_ID.get(parts[2]) or parts[2]
             store.update_light_state(str(light_name), data)
         return
+    if topic == "maglock/state":
+        for item in data.get("locks") or []:
+            if not isinstance(item, dict):
+                continue
+            lock_id = str(item.get("id") or "").strip()
+            if lock_id:
+                store.update_lock_state(lock_id, item)
+        store.update_node_state("maglock", data)
+        return
     if topic.endswith("/state"):
         node_id = topic.split("/", 1)[0]
         store.update_node_state(node_id, data)
@@ -3458,8 +3599,11 @@ def nearest_booking_for_start(bookings: list[dict[str, Any]], reference_time: da
         appointment = _booking_start_in_rome(booking)
         if appointment is None:
             continue
+        difference_s = abs((appointment - reference).total_seconds())
+        if difference_s > AUTOMATIC_BOOKING_WINDOW_S:
+            continue
         candidates.append((
-            abs((appointment - reference).total_seconds()),
+            difference_s,
             appointment,
             str(booking.get("id") or booking.get("bookingCode") or ""),
             booking,
@@ -3497,12 +3641,45 @@ def load_bookings_for_start_assignment(limit: int = 1000) -> list[dict[str, Any]
         local_db = Path(booking_ssh_config()["local_db_path"]).expanduser()
         try:
             if local_db.exists():
+                age_s = max(0.0, time.time() - local_db.stat().st_mtime)
+                max_age_s = booking_cache_max_age_s()
+                if age_s > max_age_s:
+                    raise RuntimeError(
+                        f"Der Buchungs-Zwischenspeicher ist {int(age_s)} Sekunden alt und damit älter als die zulässigen {max_age_s} Sekunden."
+                    )
                 return list_bookings_from_local_db(local_db, limit)
         except Exception as cache_error:
             raise RuntimeError(
                 f"Buchungen konnten weder aktuell noch aus dem Zwischenspeicher geladen werden: {fresh_error}; Zwischenspeicher: {cache_error}"
             ) from cache_error
         raise RuntimeError(f"Buchungen konnten nicht geladen werden: {fresh_error}") from fresh_error
+
+
+def booking_match_metadata(booking: dict[str, Any], reference_time: datetime) -> dict[str, Any]:
+    selected = normalize_booking_selection(booking)
+    if selected.get("kind") != "booking":
+        selected["matchDifferenceSeconds"] = None
+        selected["matchStatus"] = "Testbuchung" if selected.get("kind") == "test" else "Keine Buchung"
+        selected["withinAutomaticWindow"] = False
+        return selected
+    appointment = _booking_start_in_rome(selected)
+    if appointment is None:
+        selected["matchDifferenceSeconds"] = None
+        selected["matchStatus"] = "Buchungszeit nicht lesbar"
+        selected["withinAutomaticWindow"] = False
+        return selected
+    reference = _rome_datetime_from_local(reference_time)
+    difference_s = int(round((appointment - reference).total_seconds()))
+    selected["matchDifferenceSeconds"] = difference_s
+    selected["withinAutomaticWindow"] = abs(difference_s) <= AUTOMATIC_BOOKING_WINDOW_S
+    direction = "später" if difference_s > 0 else ("früher" if difference_s < 0 else "zeitgleich")
+    minutes = abs(difference_s) / 60
+    selected["matchStatus"] = (
+        f"{minutes:.0f} Minuten {direction}; innerhalb ±30 Minuten"
+        if selected["withinAutomaticWindow"]
+        else f"{minutes:.0f} Minuten {direction}; außerhalb ±30 Minuten"
+    )
+    return selected
 
 
 def _booking_selection_key(booking: dict[str, Any]) -> tuple[Any, ...]:
@@ -3527,6 +3704,7 @@ def publish_booking_selection(
     booking: dict[str, Any],
     *,
     expected_run_id: str = "",
+    expected_phase: int | None = None,
     supersede_automatic: bool = False,
 ) -> dict[str, Any]:
     selected = normalize_booking_selection(booking)
@@ -3537,19 +3715,17 @@ def publish_booking_selection(
             phase = int(store.game_state.get("phase", 0) or 0)
         except Exception:
             phase = 0
+        command_phase = phase if expected_phase is None else int(expected_phase)
+        if command_phase != phase:
+            raise ValueError("Die Buchungszuordnung gehört nicht mehr zur erwarteten Spielphase.")
         if expected_run_id:
-            if current_run_id != expected_run_id or not 3 <= phase <= 13:
+            if current_run_id != expected_run_id or not 2 <= phase <= 13:
                 raise ValueError("Die Buchungszuordnung gehört nicht mehr zum aktiven Spiel.")
         cancellation_pending = store.start_assignment.get("cancellation_durability_pending") is True
         if supersede_automatic and (store.start_assignment.get("active") or cancellation_pending):
             assignment_run_id = str(store.start_assignment.get("run_id") or "").strip()
             if not current_run_id or assignment_run_id != current_run_id:
                 raise ValueError("Die automatische Zuordnung gehört zu einem anderen vorbereiteten Lauf.")
-            current_selection = normalize_booking_selection(store.selected_booking)
-            if selected.get("kind") in {"empty", "test"}:
-                raise ValueError("Während der automatischen Zuordnung kann keine leere oder Testbuchung gespeichert werden.")
-            if _booking_selection_identity(current_selection) == _booking_selection_identity(selected):
-                raise ValueError("Die Tipp-Sprache kann erst nach der automatischen Buchungszuordnung geändert werden.")
             cancellation_synced = store._set_start_assignment_locked({
                 **store.start_assignment,
                 "active": False,
@@ -3571,15 +3747,23 @@ def publish_booking_selection(
                 expected_run_id=expected_run_id,
                 require_durable=True,
             )
-        payload: dict[str, Any] = {"cmd": "set_booking", "booking": selected}
-        if expected_run_id:
-            payload["expected_run_id"] = expected_run_id
+        payload: dict[str, Any] = {
+            "cmd": "set_booking",
+            "booking": selected,
+            "expected_phase": command_phase,
+            "expected_run_id": expected_run_id,
+        }
         if not mqtt_publish(TOPIC_GAME_CMD, payload):
             raise RuntimeError("Der Buchungsbefehl konnte nicht an MQTT übergeben werden.")
     return selected
 
 
-def update_hint_language_selection(language: Any, *, expected_run_id: str = "") -> dict[str, Any]:
+def update_hint_language_selection(
+    language: Any,
+    *,
+    expected_run_id: str = "",
+    expected_phase: int | None = None,
+) -> dict[str, Any]:
     with store.lock:
         if store.start_assignment.get("active"):
             raise ValueError("Die Tipp-Sprache kann erst nach der automatischen Buchungszuordnung geändert werden.")
@@ -3604,23 +3788,41 @@ def update_hint_language_selection(language: Any, *, expected_run_id: str = "") 
             expected_run_id=scoped_run_id,
             require_durable=True,
         )
-        return publish_booking_selection(selected, expected_run_id=scoped_run_id)
+        return publish_booking_selection(
+            selected,
+            expected_run_id=scoped_run_id,
+            expected_phase=phase if expected_phase is None else expected_phase,
+        )
 
 
-def publish_hint_count_change(riddle: str, *, delta: int | None = None, count: int | None = None) -> int:
+def publish_hint_count_change(
+    riddle: str,
+    *,
+    delta: int,
+    expected_phase: int,
+    expected_run_id: str,
+) -> int:
     name = str(riddle or "").strip()
     if not name:
         raise ValueError("Rätsel-ID fehlt")
+    if type(delta) is not int or delta not in {-1, 1}:
+        raise ValueError("Der Tippzähler akzeptiert nur delta -1 oder +1.")
     with store.lock:
         previous = max(0, int(store.local_hint_counts.get(name, 0) or 0))
-        value = max(0, int(count or 0)) if count is not None else max(0, previous + int(delta or 0))
+        value = max(0, previous + delta)
         store.local_hint_counts[name] = value
         try:
             save_hint_store(store.local_hint_counts)
         except Exception:
             store.local_hint_counts[name] = previous
             raise
-        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_hint_count", "riddle": name, "count": value}):
+        if not mqtt_publish(TOPIC_GAME_CMD, {
+            "cmd": "adjust_hint_count",
+            "riddle": name,
+            "delta": delta,
+            "expected_phase": expected_phase,
+            "expected_run_id": expected_run_id,
+        }):
             store.local_hint_counts[name] = previous
             try:
                 save_hint_store(store.local_hint_counts)
@@ -3687,7 +3889,11 @@ def _publish_start_for_claim(claim_id: str) -> bool:
         if claim.get("_start_published_runtime"):
             return True
 
-        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "start"}):
+        if not mqtt_publish(TOPIC_GAME_CMD, {
+            "cmd": "start",
+            "expected_phase": 2,
+            "expected_run_id": str(claim.get("run_id") or "").strip(),
+        }):
             try:
                 store._set_start_assignment_locked({
                     **claim,
@@ -3835,7 +4041,21 @@ def _run_start_booking_assignment(claim_id: str) -> None:
             return
         retry_snapshot = claim.get("_candidate_retry_snapshot")
         has_exact_candidate = isinstance(claim.get("booking_snapshot"), dict) or isinstance(retry_snapshot, dict)
-        bookings = [] if has_exact_candidate else load_bookings_for_start_assignment(1000)
+        try:
+            bookings = [] if has_exact_candidate else load_bookings_for_start_assignment(1000)
+        except Exception as exc:
+            LOG.warning("Automatic booking lookup unavailable; game continues without assignment claim_id=%s error=%s", claim_id, exc)
+            store.update_start_assignment(
+                claim_id,
+                active=False,
+                intent_state="terminal",
+                status="no_match",
+                message=(
+                    "Buchungen sind derzeit nicht erreichbar. Das Spiel läuft ohne automatische Zuordnung weiter; "
+                    "eine zwischengespeicherte, Test- oder Leerbuchung kann manuell gewählt werden."
+                ),
+            )
+            return
         if not isinstance(claim.get("booking_snapshot"), dict) and isinstance(retry_snapshot, dict):
             claim = {**claim, "booking_snapshot": retry_snapshot}
         selected = _select_booking_for_start_claim(claim, bookings, reference_time)
@@ -3930,7 +4150,11 @@ def _run_start_booking_assignment(claim_id: str) -> None:
 
             if not current_claim.get("_booking_published_runtime"):
                 try:
-                    selected = publish_booking_selection(selected, expected_run_id=run_id)
+                    selected = publish_booking_selection(
+                        selected,
+                        expected_run_id=run_id,
+                        expected_phase=phase,
+                    )
                 except RuntimeError as exc:
                     try:
                         store._set_start_assignment_locked({
@@ -4149,6 +4373,36 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
 
+
+def _action_guard_error(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return "Die Aktion enthält keinen gültigen Zustandsabgleich. Bitte die Ansicht aktualisieren und erneut versuchen."
+    with store.lock:
+        try:
+            current_phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            current_phase = 0
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        current_run_id = str(run.get("run_id") or run.get("id") or store.game_state.get("run_id") or "").strip()
+    expected_phase = data.get("expected_phase")
+    expected_run_id = data.get("expected_run_id")
+    if type(expected_phase) is not int or not isinstance(expected_run_id, str):
+        return "Die Aktion enthält keinen gültigen Zustandsabgleich. Bitte die Ansicht aktualisieren und erneut versuchen."
+    if expected_phase != current_phase or expected_run_id.strip() != current_run_id:
+        return (
+            "Die Aktion wurde abgelehnt, weil Phase oder Spieldurchlauf nicht mehr zur geöffneten Ansicht passen. "
+            "Bitte die Ansicht aktualisieren und die Aktion erneut prüfen."
+        )
+    return None
+
+
+def _stale_action_response(data: Any) -> Any | None:
+    error = _action_guard_error(data)
+    if error is None:
+        return None
+    return jsonify({"ok": False, "error": error, "stale_action": True}), 409
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
@@ -4252,6 +4506,38 @@ def api_state() -> Any:
     return response
 
 
+@app.post("/api/hint-templates")
+def api_hint_templates() -> Any:
+    data = request.get_json(silent=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    with store.lock:
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+    if phase != 1:
+        return jsonify({
+            "ok": False,
+            "error": "Tippvorlagen können nur in Phase 1 (Wartung) bearbeitet werden.",
+        }), 409
+    try:
+        templates, directory_synced = save_hint_templates(data.get("templates"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        LOG.error("Hint templates could not be persisted", exc_info=True)
+        return jsonify({"ok": False, "error": f"Die Tippvorlagen konnten nicht gespeichert werden: {exc}"}), 503
+    if not directory_synced:
+        store.persistence_degraded = True
+    return jsonify({
+        "ok": True,
+        "hint_templates": templates,
+        "directory_synced": directory_synced,
+    })
+
+
 @app.get("/api/logs")
 def api_logs() -> Any:
     try:
@@ -4305,6 +4591,9 @@ def api_log_level() -> Any:
 @app.post("/api/phase")
 def api_phase() -> Any:
     data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     action = str(data.get("action", "")).strip().lower()
     if action == "start":
         try:
@@ -4363,7 +4652,12 @@ def api_phase() -> Any:
             "start_assignment": current_claim,
         })
     if action in {"standby", "maintenance", "prepare"}:
-        if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_mode", "mode": action}):
+        if not mqtt_publish(TOPIC_GAME_CMD, {
+            "cmd": "set_mode",
+            "mode": action,
+            "expected_phase": data["expected_phase"],
+            "expected_run_id": data["expected_run_id"].strip(),
+        }):
             return jsonify({"ok": False, "error": "Die Phasenaktion konnte nicht an MQTT übergeben werden."}), 503
         store.set_local_phase(action)
         return jsonify({"ok": True, "mqtt_queued": True})
@@ -4374,10 +4668,14 @@ def api_phase() -> Any:
 
 @app.get("/api/bookings")
 def api_bookings() -> Any:
-    bookings = [normalize_booking_selection(TEST_BOOKING_DEFAULT)]
+    reference_time = _rome_datetime_from_timestamp(time.time())
+    bookings = [
+        booking_match_metadata(EMPTY_BOOKING_SELECTION, reference_time),
+        booking_match_metadata(TEST_BOOKING_DEFAULT, reference_time),
+    ]
     try:
         remote_bookings, local_db, fresh = list_bookings_via_ssh_copy(1000)
-        bookings.extend(remote_bookings)
+        bookings.extend(booking_match_metadata(item, reference_time) for item in remote_bookings)
         return jsonify({
             "ok": True,
             "bookings": bookings,
@@ -4391,13 +4689,24 @@ def api_bookings() -> Any:
         local_db = Path(cfg["local_db_path"]).expanduser()
         try:
             if local_db.exists():
-                bookings.extend(list_bookings_from_local_db(local_db, 1000))
+                cache_age_s = max(0.0, time.time() - local_db.stat().st_mtime)
+                cache_max_age_s = booking_cache_max_age_s()
+                bookings.extend(
+                    booking_match_metadata(item, reference_time)
+                    for item in list_bookings_from_local_db(local_db, 1000)
+                )
                 return jsonify({
                     "ok": True,
                     "bookings": bookings,
                     "source": "cached-copy",
                     "copiedDb": str(local_db),
-                    "warning": f"Die Buchungsdaten konnten nicht aktuell kopiert werden; die zwischengespeicherte Datenbank wird verwendet: {exc}",
+                    "cacheAgeSeconds": round(cache_age_s, 1),
+                    "cacheFreshForAutomaticMatch": cache_age_s <= cache_max_age_s,
+                    "warning": (
+                        f"Die Buchungsdaten konnten nicht aktuell kopiert werden; die {int(cache_age_s)} Sekunden alte "
+                        f"Zwischenspeicherung wird nur zur manuellen Auswahl angezeigt. Automatisch wird sie nur bis "
+                        f"{cache_max_age_s} Sekunden Alter verwendet: {exc}"
+                    ),
                 })
         except Exception as cache_exc:
             return jsonify({"ok": True, "bookings": bookings, "source": "test-only", "warning": f"Die Buchungsdaten konnten weder aktuell noch aus dem Zwischenspeicher geladen werden: {exc}; Zwischenspeicher: {cache_exc}"})
@@ -4407,13 +4716,31 @@ def api_bookings() -> Any:
 @app.post("/api/select-booking")
 def api_select_booking() -> Any:
     data = request.get_json(force=True) or {}
-    expected_run_id = str(data.get("expected_run_id") or "").strip()
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    guard_run_id = str(data.get("expected_run_id") or "").strip()
+    with store.lock:
+        try:
+            current_phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            current_phase = 0
+    expected_run_id = guard_run_id if 2 <= current_phase <= 13 else ""
     try:
         if "hint_language" in data:
-            selected = update_hint_language_selection(data.get("hint_language"), expected_run_id=expected_run_id)
+            selected = update_hint_language_selection(
+                data.get("hint_language"),
+                expected_run_id=expected_run_id,
+                expected_phase=data["expected_phase"],
+            )
         else:
             booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
-            selected = publish_booking_selection(booking, expected_run_id=expected_run_id, supersede_automatic=True)
+            selected = publish_booking_selection(
+                booking,
+                expected_run_id=expected_run_id,
+                expected_phase=data["expected_phase"],
+                supersede_automatic=True,
+            )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc), "start_assignment": store.get_start_assignment()}), 409
     except RuntimeError as exc:
@@ -4459,10 +4786,22 @@ def api_send_summary_email() -> Any:
             "leaderboardUrl": os.getenv("ER1_LEADERBOARD_URL", "https://escapeschenna.com/rangliste").strip(),
         }
         mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
-        if mode == "http":
-            result = post_website_json("/api/game-summary/send", payload)
-        else:
-            result = send_summary_email_via_ssh(payload)
+        try:
+            if mode == "http":
+                result = post_website_json("/api/game-summary/send", payload)
+            else:
+                result = send_summary_email_via_ssh(payload)
+        except Exception as exc:
+            LOG.warning("Summary email unavailable; completed game remains stored locally: %s", exc)
+            return jsonify({
+                "ok": False,
+                "retryable": True,
+                "game_saved": True,
+                "error": (
+                    "Die E-Mail-Verbindung ist derzeit nicht verfügbar. Das abgeschlossene Spiel bleibt lokal "
+                    "gespeichert; der Versand kann später erneut versucht werden."
+                ),
+            }), 503
         return jsonify(result)
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
@@ -4471,11 +4810,19 @@ def api_send_summary_email() -> Any:
 @app.post("/api/players-count")
 def api_players_count() -> Any:
     data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     try:
         players_count = parse_players_count_input(data.get("players_count", 0))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_players_count", "players_count": players_count}):
+    if not mqtt_publish(TOPIC_GAME_CMD, {
+        "cmd": "set_players_count",
+        "players_count": players_count,
+        "expected_phase": data["expected_phase"],
+        "expected_run_id": data["expected_run_id"].strip(),
+    }):
         return jsonify({"ok": False, "error": "Die Spielerzahl konnte nicht an MQTT übergeben werden."}), 503
     store.set_local_players_count(players_count)
     return jsonify({"ok": True, "players_count": players_count, "mqtt_queued": True})
@@ -4483,24 +4830,53 @@ def api_players_count() -> Any:
 
 @app.post("/api/solve")
 def api_solve() -> Any:
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     node = str(data.get("node", "")).strip()
     if not node:
         return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
-    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "solve", "node": node, "riddle": node}):
+    if not mqtt_publish(TOPIC_GAME_CMD, {
+        "cmd": "solve",
+        "node": node,
+        "riddle": node,
+        "expected_phase": data["expected_phase"],
+        "expected_run_id": data["expected_run_id"].strip(),
+    }):
         return jsonify({"ok": False, "error": "Der Gelöst-Befehl konnte nicht an MQTT übergeben werden."}), 503
     return jsonify({"ok": True, "node": node, "mqtt_queued": True})
 
 
 @app.post("/api/lock")
 def api_lock() -> Any:
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     lock_id = str(data.get("lock", "")).strip()
     action = str(data.get("action", "")).strip().lower()
     if lock_id not in {item["id"] for item in LOCKS}:
         return jsonify({"ok": False, "error": "Ungültiges Schloss"}), 400
     if action not in {"open", "close"}:
         return jsonify({"ok": False, "error": "Ungültige Aktion"}), 400
+    lock_kind = next(item["kind"] for item in LOCKS if item["id"] == lock_id)
+    with store.lock:
+        lock_state = store.locks.get(lock_id, {}) if isinstance(getattr(store, "locks", {}), dict) else {}
+        blocked = any(
+            value is True or value == 1 or str(value).strip().lower() in {"1", "true", "yes", "on"}
+            for value in (
+                lock_state.get("cooldown"),
+                lock_state.get("bootGuard", lock_state.get("boot_guard")),
+                lock_state.get("pulse", lock_state.get("pulsing")),
+            )
+        )
+    if lock_kind == "pulse" and action == "open" and blocked:
+        return jsonify({
+            "ok": False,
+            "applied": False,
+            "error": "Das Schloss ist durch Impuls, Sperrzeit oder Startschutz vorübergehend blockiert.",
+        }), 409
     result = mqtt_publish_batch([(TOPIC_MAGLOCK_CMD, {"cmd": action, "lock": lock_id})])
     if not result["mqtt_queued"]:
         return jsonify({
@@ -4514,7 +4890,10 @@ def api_lock() -> Any:
 
 @app.post("/api/light")
 def api_light() -> Any:
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     group_id = str(data.get("group", "")).strip()
     action = str(data.get("action", "")).strip().lower()
     pct_raw = data.get("pct")
@@ -4578,21 +4957,79 @@ def api_light() -> Any:
     return jsonify({"ok": True, **result, "applied": False})
 
 
+@app.post("/api/node-reboot")
+def api_node_reboot() -> Any:
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    node = str(data.get("node") or "").strip()
+    with store.lock:
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+    if phase != 0 and node in {"all", "maglock"}:
+        return jsonify({
+            "ok": False,
+            "error": "Alle Steuergeräte und die Schlosssteuerung dürfen nur in Phase 0 neu gestartet werden.",
+        }), 409
+    if node == "all":
+        nodes = sorted(REBOOT_NODE_IDS)
+    elif node in REBOOT_NODE_IDS:
+        nodes = [node]
+    else:
+        return jsonify({"ok": False, "error": "Unbekannter physischer Knoten."}), 400
+
+    result = mqtt_publish_batch([(f"{node_id}/sys/cmd", "REBOOT") for node_id in nodes])
+    if not result["mqtt_queued"]:
+        return jsonify({
+            "ok": False,
+            "node": node,
+            "nodes": nodes,
+            "payload": "REBOOT",
+            **result,
+            "device_confirmed": False,
+            "error": "Die Neustartbefehle konnten nicht vollständig an MQTT übergeben werden.",
+        }), 503
+    return jsonify({
+        "ok": True,
+        "node": node,
+        "nodes": nodes,
+        "topic": f"{nodes[0]}/sys/cmd" if len(nodes) == 1 else None,
+        "payload": "REBOOT",
+        **result,
+        "device_confirmed": False,
+    })
+
+
 @app.post("/api/hints")
 def api_set_hint_count() -> Any:
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     riddle = str(data.get("riddle", "")).strip()
     if not riddle:
         return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
 
     try:
-        if "count" in data:
-            count = publish_hint_count_change(riddle, count=int(data.get("count") or 0))
-        else:
-            delta = int(data.get("delta") or 0)
-            if delta == 0:
-                return jsonify({"ok": False, "error": "Änderung oder Anzahl fehlt"}), 400
-            count = publish_hint_count_change(riddle, delta=delta)
+        if set(data) - {"riddle", "delta", "expected_phase", "expected_run_id"}:
+            raise ValueError("Der Tippzähler akzeptiert nur Rätsel und delta -1/+1.")
+        delta = data.get("delta")
+        if type(delta) is not int or delta not in {-1, 1}:
+            raise ValueError("Der Tippzähler akzeptiert nur delta -1 oder +1.")
+        if data["expected_phase"] < 3:
+            return jsonify({
+                "ok": False,
+                "error": "Tippzähler können erst während oder nach einem gestarteten Spiel geändert werden.",
+            }), 409
+        count = publish_hint_count_change(
+            riddle,
+            delta=delta,
+            expected_phase=data["expected_phase"],
+            expected_run_id=data["expected_run_id"].strip(),
+        )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except RuntimeError as exc:
@@ -4605,19 +5042,35 @@ def api_set_hint_count() -> Any:
 @app.post("/api/riddle-time")
 def api_riddle_time() -> Any:
     data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
     if not riddle:
         return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
     raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
     try:
         seconds = parse_mmss_input(raw_value)
-        seconds = max(0.0, float(seconds or 0.0))
+        seconds = float(seconds) if seconds is not None else 0.0
     except Exception:
         return jsonify({"ok": False, "error": "Die Zeit muss als Sekunden, mm:ss oder hh:mm:ss angegeben werden."}), 400
+    if not math.isfinite(seconds) or seconds < 1:
+        return jsonify({"ok": False, "error": "Die Rätselzeit muss mindestens eine Sekunde betragen."}), 400
+    if data["expected_phase"] < 3:
+        return jsonify({
+            "ok": False,
+            "error": "Rätselzeiten können erst während oder nach einem gestarteten Spiel geändert werden.",
+        }), 409
     current_row = next((row for row in (store.snapshot().get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
     if current_row and str(current_row.get("phase_state") or "pending") == "pending":
         return jsonify({"ok": False, "error": "Die Zeit eines noch nicht erreichten Rätsels kann nicht geändert werden."}), 400
-    if not mqtt_publish(TOPIC_GAME_CMD, {"cmd": "set_riddle_time", "riddle": riddle, "solve_time_s": round(seconds, 3)}):
+    if not mqtt_publish(TOPIC_GAME_CMD, {
+        "cmd": "set_riddle_time",
+        "riddle": riddle,
+        "solve_time_s": round(seconds, 3),
+        "expected_phase": data["expected_phase"],
+        "expected_run_id": data["expected_run_id"].strip(),
+    }):
         return jsonify({"ok": False, "error": "Die Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
     return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "mqtt_queued": True})
 
@@ -4625,12 +5078,20 @@ def api_riddle_time() -> Any:
 @app.post("/api/riddle-outcome")
 def api_riddle_outcome() -> Any:
     data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
     riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
     if not riddle:
         return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
     outcome = str(data.get("outcome") or data.get("status") or "").strip().lower().replace(" ", "_")
     if riddle == "sissi":
         return jsonify({"ok": False, "error": "Sissi darf nur über den normalen Gelöst-Befehl abgeschlossen werden."}), 400
+    if data["expected_phase"] < 3:
+        return jsonify({
+            "ok": False,
+            "error": "Rätselstatus können erst während oder nach einem gestarteten Spiel geändert werden.",
+        }), 409
     command: dict[str, Any]
     response: dict[str, Any]
     if outcome in {"skip", "skipped"}:
@@ -4640,24 +5101,14 @@ def api_riddle_outcome() -> Any:
         else:
             command = {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "skipped", "advance": False}
         response = {"riddle": riddle, "outcome": "skipped", "advance": advance}
-    elif outcome in {"not_solved", "failed", "fail"}:
-        advance = bool(data.get("advance", False))
-        command = {"cmd": "mark_not_solved", "riddle": riddle, "advance": advance}
-        response = {"riddle": riddle, "outcome": "not_solved", "advance": advance}
-    elif outcome in {"reset", "reset_timing"}:
-        if riddle not in {"prison", "wheel", "chains", "tangram", "magnet"}:
-            return jsonify({"ok": False, "error": "Dieses Rätsel kann nicht sicher zurückgesetzt werden."}), 400
-        command = {"cmd": "reset_riddle", "riddle": riddle}
-        response = {"riddle": riddle, "outcome": "reset"}
-    elif outcome in {"clear", "pending", ""}:
-        command = {"cmd": "clear_riddle_outcome", "riddle": riddle}
-        response = {"riddle": riddle, "outcome": "clear"}
     elif outcome == "solved":
         advance = bool(data.get("advance", False))
         command = {"cmd": "set_riddle_outcome", "riddle": riddle, "outcome": "solved", "advance": advance}
         response = {"riddle": riddle, "outcome": "solved", "advance": advance}
     else:
-        return jsonify({"ok": False, "error": "Der Status muss übersprungen, nicht gelöst, gelöst, zurückgesetzt oder geleert sein."}), 400
+        return jsonify({"ok": False, "error": "Der Status muss übersprungen oder gelöst sein."}), 400
+    command["expected_phase"] = data["expected_phase"]
+    command["expected_run_id"] = data["expected_run_id"].strip()
     if not mqtt_publish(TOPIC_GAME_CMD, command):
         return jsonify({"ok": False, "error": "Der Rätselstatus konnte nicht an MQTT übergeben werden."}), 503
     return jsonify({"ok": True, **response, "mqtt_queued": True})
@@ -4732,6 +5183,7 @@ NODE_LABELS = [
     ("candles", "Kerzen"),
     ("star_slider", "Sternenschieber"),
     ("star_sky", "Sternenhimmel"),
+    ("stop_timer", "Stop Timer (optional)"),
 ]
 
 PHASE_LABELS_DE = {
@@ -5185,17 +5637,15 @@ def _snapshot_german(self):
 
     status_labels = {
         "solved": "Gelöst", "active": "Aktiv", "pending": "Ausstehend",
-        "skipped": "Übersprungen", "not_solved": "Nicht gelöst", "reset": "Zurückgesetzt",
+        "skipped": "Übersprungen", "not_solved": "Nicht gelöst",
     }
-    active_riddles = set(PHASE_META.get(phase, {}).get("active", ()))
     for row in data.get("riddles") or []:
         rid = _canonical_riddle_name(row.get("id"))
         row["label"] = RIDDLE_LABELS_V2.get(rid, row.get("label", rid))
         state_name = str(row.get("phase_state") or "pending")
         row["phase_state_label"] = status_labels.get(state_name, state_name)
-        row["resettable"] = rid in {"prison", "wheel", "chains", "tangram", "magnet"}
-        row["solve_advances"] = state_name == "active" or (state_name == "reset" and rid in active_riddles)
-        row["can_solve"] = state_name in {"active", "reset"}
+        row["solve_advances"] = state_name == "active"
+        row["can_solve"] = state_name in {"active", "skipped"}
         row["is_current"] = state_name == "active"
     for node in data.get("nodes") or []:
         status = str(node.get("status") or "")

@@ -9,9 +9,9 @@ Logging format: `YYYY.MM.DD HH:MM:SS.mmm topic payload` with `date +"%Y.%m.%d %H
 
 ## OTA (secured)
 
-- Payload: `UPDATE {"id":"<nonce>","version":"<fw_version>","target":"<node_id>","url":"http://192.168.0.10/firmware/<FirmwareName>","sha256":"<64-hex>","size":<bytes>}`
-- Topic: `<CmdNode>/cmd` (from the OTA map; e.g., images_piano publishes to `images/cmd`)
-- Host is pinned to `192.168.0.10`; paths must stay under `/firmware/`. HTTPS is rejected.
+- Payload: `UPDATE {"version":"<fw_version>","target":"<node_id>","url":"http://192.168.0.10/node_firmware/<FirmwareName>","sha256":"<64-hex>","size":<bytes>}`
+- Topic: `<CmdNode>/sys/cmd` (from the OTA map; e.g., images_piano publishes to `images_piano/sys/cmd`)
+- Host is pinned to `192.168.0.10`; paths must stay under `/node_firmware/`. HTTPS is rejected.
 - `sha256` is the firmware hash; `size` is optional but included by `ota.ps1`. Payloads are JSON; PSK/HMAC has been removed, so keep OTA on the trusted LAN.
 
 ## Lock Control
@@ -21,18 +21,30 @@ Lock IDs: `images`, `r2`, `r3`, `slider`, `knocking`.
 ### Local broker
 
 ```bash
-mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/<id>/cmd' -m "OPEN"
-mosquitto_pub -h 127.0.0.1 -t 'maglock/lock/<id>/cmd' -m "CLOSE"
+mosquitto_pub -h 127.0.0.1 -t 'maglock/cmd' -m '{"cmd":"open","lock":"<id>"}'
+mosquitto_pub -h 127.0.0.1 -t 'maglock/cmd' -m '{"cmd":"close","lock":"<id>"}'
 ```
 
 ### Remote broker
 
 ```bash
-mosquitto_pub -h 100.108.1.80 -t 'maglock/lock/<id>/cmd' -m "OPEN"
-mosquitto_pub -h 100.108.1.80 -t 'maglock/lock/<id>/cmd' -m "CLOSE"
+mosquitto_pub -h 100.108.1.80 -t 'maglock/cmd' -m '{"cmd":"open","lock":"<id>"}'
+mosquitto_pub -h 100.108.1.80 -t 'maglock/cmd' -m '{"cmd":"close","lock":"<id>"}'
 ```
 
 Replace `<id>` with one of the canonical lock IDs.
+
+## Node restart
+
+- Topic: `<node>/sys/cmd`
+- Payload: `REBOOT`
+- The command invokes `ESP.restart()` through the shared firmware core; it does not start OTA.
+- After operator confirmation, the dashboard can restart individual puzzle nodes in active phases. Restarting all nodes or the maglock controller is restricted to phase 0.
+- The Game Master schedules the all-node restart every 14 days at 04:00 Europe/Rome, deferring a due restart until phase 0.
+
+```bash
+mosquitto_pub -h 127.0.0.1 -t 'images_piano/sys/cmd' -m 'REBOOT'
+```
 
 ## Live Logging (LOCAL broker only)
 

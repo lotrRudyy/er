@@ -340,6 +340,29 @@ class DashboardLightSummaryTests(unittest.TestCase):
         self.assertIn("mixed: 'is-mixed'", javascript)
 
 
+class DashboardLockSummaryTests(unittest.TestCase):
+    def test_pulse_protection_state_is_exposed_to_the_ui(self) -> None:
+        summarize, _namespace = extracted_dashboard_method("DashboardStore", "_build_lock_summary")
+        rows = summarize(None, {
+            "images": {"state": "CLOSED", "cooldown": 1, "bootGuard": 0, "pulse": 0},
+            "knocking": {"state": "CLOSED", "cooldown": 0, "bootGuard": 1, "pulse": 0},
+            "slider": {"state": "OPEN", "cooldown": 0, "bootGuard": 0, "pulse": 1},
+        })
+        by_id = {row["id"]: row for row in rows}
+        self.assertTrue(by_id["images"]["cooldown"])
+        self.assertTrue(by_id["images"]["command_blocked"])
+        self.assertTrue(by_id["knocking"]["boot_guard"])
+        self.assertTrue(by_id["knocking"]["command_blocked"])
+        self.assertTrue(by_id["slider"]["pulsing"])
+        self.assertTrue(by_id["slider"]["command_blocked"])
+        self.assertFalse(by_id["r2"]["command_blocked"])
+
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("lock.command_blocked", javascript)
+        self.assertIn("lock.boot_guard", javascript)
+        self.assertIn("lock.cooldown", javascript)
+
+
 class DashboardMqttRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.namespace = extracted_dashboard(
@@ -351,6 +374,8 @@ class DashboardMqttRouteTests(unittest.TestCase):
             "mqtt_is_connected",
             "mqtt_publish",
             "mqtt_publish_batch",
+            "_action_guard_error",
+            "_stale_action_response",
             "api_logs",
             "api_log_level",
             "api_lock",
@@ -363,6 +388,11 @@ class DashboardMqttRouteTests(unittest.TestCase):
                 self.headers: dict[str, str] = {}
 
         self.namespace["jsonify"] = JsonResponse
+        self.namespace["store"] = types.SimpleNamespace(
+            lock=threading.RLock(),
+            game_state={"phase": 3, "run": {"run_id": "run-guard"}},
+            locks={},
+        )
 
     def set_request(self, body: Any) -> None:
         self.namespace["request"] = types.SimpleNamespace(get_json=lambda **_kwargs: body)
@@ -455,7 +485,8 @@ class DashboardMqttRouteTests(unittest.TestCase):
     def test_lock_and_multi_command_light_failures_return_503(self) -> None:
         calls: list[tuple[str, Any]] = []
         self.namespace["mqtt_publish"] = lambda topic, payload: calls.append((topic, payload)) or False
-        self.set_request({"lock": "r2", "action": "open"})
+        guard = {"expected_phase": 3, "expected_run_id": "run-guard"}
+        self.set_request({"lock": "r2", "action": "open", **guard})
         response, status = self.namespace["api_lock"]()
         self.assertEqual(status, 503)
         self.assertFalse(response["ok"])
@@ -465,7 +496,7 @@ class DashboardMqttRouteTests(unittest.TestCase):
         outcomes = iter([True, False])
         calls.clear()
         self.namespace["mqtt_publish"] = lambda topic, payload: calls.append((topic, payload)) or next(outcomes)
-        self.set_request({"group": "r1", "action": "on"})
+        self.set_request({"group": "r1", "action": "on", **guard})
         response, status = self.namespace["api_light"]()
         self.assertEqual(status, 503)
         self.assertEqual(len(calls), 2)
@@ -476,12 +507,27 @@ class DashboardMqttRouteTests(unittest.TestCase):
         outcomes = iter([True, False, True])
         calls.clear()
         self.namespace["mqtt_publish"] = lambda topic, payload: calls.append((topic, payload)) or next(outcomes)
-        self.set_request({"group": "star_sky", "action": "on"})
+        self.set_request({"group": "star_sky", "action": "on", **guard})
         response, status = self.namespace["api_light"]()
         self.assertEqual(status, 503)
         self.assertEqual(len(calls), 3)
         self.assertEqual(calls[1], ("star_sky/sys/cmd", "SOLVE"))
         self.assertTrue(response["partial"])
+
+    def test_protected_pulse_lock_is_rejected_before_mqtt(self) -> None:
+        calls: list[tuple[str, Any]] = []
+        self.namespace["mqtt_publish"] = lambda topic, payload: calls.append((topic, payload)) or True
+        self.namespace["store"].locks = {"images": {"state": "CLOSED", "cooldown": 1}}
+        self.set_request({
+            "lock": "images",
+            "action": "open",
+            "expected_phase": 3,
+            "expected_run_id": "run-guard",
+        })
+        response, status = self.namespace["api_lock"]()
+        self.assertEqual(status, 409)
+        self.assertFalse(response["ok"])
+        self.assertEqual(calls, [])
 
 
 class DashboardLogLevelConcurrencyTests(unittest.TestCase):
@@ -568,6 +614,39 @@ class DashboardLogLevelConcurrencyTests(unittest.TestCase):
 
 
 class DashboardDiagnosticsSourceTests(unittest.TestCase):
+    def test_retained_maglock_snapshot_updates_individual_lock_state(self) -> None:
+        namespace = extracted_dashboard("_handle_mqtt_message")
+        lock_updates: list[tuple[str, dict[str, Any]]] = []
+        node_updates: list[tuple[str, dict[str, Any]]] = []
+        store = types.SimpleNamespace(
+            update_lock_state=lambda lock_id, payload: lock_updates.append((lock_id, dict(payload))),
+            update_node_state=lambda node_id, payload: node_updates.append((node_id, dict(payload))),
+        )
+        namespace.update({
+            "TOPIC_DASHBOARD_STATE": "game/dashboard_state",
+            "TOPIC_GAME_STATE": "game/state",
+            "LIGHT_NAME_BY_ID": {},
+            "store": store,
+            "parse_node_log": lambda _topic, _payload: None,
+            "parse_json_payload": lambda payload: json.loads(payload.decode("utf-8")),
+            "node_log_buffer": types.SimpleNamespace(append=lambda _entry: None),
+            "_maybe_resume_persisted_start_assignment": lambda: None,
+        })
+        payload = {
+            "phase": 0,
+            "locks": [
+                {"id": "images", "state": "CLOSED", "cooldown": 0, "bootGuard": 1},
+                {"id": "r2", "state": "OPEN", "cooldown": 0, "bootGuard": 0},
+            ],
+        }
+        namespace["_handle_mqtt_message"](types.SimpleNamespace(
+            topic="maglock/state",
+            payload=json.dumps(payload).encode("utf-8"),
+        ))
+        self.assertEqual([item[0] for item in lock_updates], ["images", "r2"])
+        self.assertEqual(lock_updates[0][1]["bootGuard"], 1)
+        self.assertEqual(node_updates, [("maglock", payload)])
+
     def test_log_subscription_precedes_generic_flattening_without_dbg_noise(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)

@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "templates": {
+    "images": {
+      "de": [
+        "Fällt euch irgendetwas Ungewöhnliches im Raum auf? Was könnte man damit machen?"
+      ],
+      "en": [
+        "Do you notice anything unusual in the room? What could you do with it?"
+      ],
+      "it": [
+        "Notate qualcosa di insolito nella stanza? Che cosa si potrebbe fare con quell'elemento?"
+      ]
+    },
+    "piano": {
+      "de": [
+        "Ihr sucht keine Zahlenfolge, sondern müsst die Holzscheiben auf eine Zahl einstellen und dann die Melodie entschlüsseln. Diese Zahl habt ihr schon einmal irgendwo gelesen. Danach dürft ihr sie nicht mehr verändern."
+      ],
+      "en": [
+        "You are not looking for a sequence of numbers. Set the wooden discs to a single number and then decode the melody. You have seen that number somewhere before. Once it is set, do not change it again."
+      ],
+      "it": [
+        "Non state cercando una sequenza di numeri: dovete impostare i dischi di legno su un unico numero e poi decifrare la melodia. Quel numero lo avete già letto da qualche parte. Una volta impostato, non dovete più cambiarlo."
+      ]
+    },
+    "prison": {
+      "de": [
+        "Habt ihr die Tische genau durchsucht?"
+      ],
+      "en": [
+        "Have you searched the tables carefully?"
+      ],
+      "it": [
+        "Avete controllato attentamente i tavoli?"
+      ]
+    },
+    "wheel": {
+      "de": [
+        "Was könnte man mit dem Wagenrad tun?"
+      ],
+      "en": [
+        "What could you do with the wagon wheel?"
+      ],
+      "it": [
+        "Che cosa si potrebbe fare con la ruota del carro?"
+      ]
+    },
+    "chains": {
+      "de": [
+        "Als Erstes müsst ihr den Würfel in einen der drei Baumstämme stecken und richtig ausrichten. Bei jedem Baumstamm gibt es drei Hälften eines Symbols; die jeweils andere Hälfte befindet sich auf dem Würfel.",
+        "Sobald ihr ihn ausgerichtet habt, zeigt euch das Seil auf dem Würfel den Pfad, den das andere Seil in Wirklichkeit nehmen muss. Arbeitet dabei konzentriert und achtet auf die drei Ebenen.",
+        "Das Seil ist jetzt richtig eingefädelt. Nun müsst ihr auf dem Würfel den letzten Hinweis finden: Sucht das richtige Auge – hier das Auge mit dem Dreieck. Es zeigt euch, aus welcher Richtung ihr auf das Gerüst schauen müsst.",
+        "Falls ihr etwas nur schwer erkennen könnt, könnt ihr das Seil mit der Tafel nachzeichnen. Achtung: immer nur von der ersten bis zur letzten Holzscheibe."
+      ],
+      "en": [
+        "First, place the cube into one of the three tree trunks and orient it correctly. Each trunk shows three halves of symbols; the matching other halves are on the cube.",
+        "Once the cube is aligned, the rope on it shows the route that the real rope must follow. Work carefully and pay attention to the three levels.",
+        "The rope is now threaded correctly. Find the final clue on the cube: look for the correct eye – here, the eye with the triangle. It tells you from which direction to view the frame.",
+        "If the route is hard to see, use the board to trace the rope. Important: trace only from the first wooden disc to the last."
+      ],
+      "it": [
+        "Per prima cosa dovete inserire il cubo in uno dei tre tronchi e orientarlo correttamente. Su ogni tronco ci sono tre metà di simboli; le rispettive altre metà si trovano sul cubo.",
+        "Quando il cubo è orientato correttamente, la corda sul cubo vi mostra il percorso che deve seguire la corda vera. Procedete con attenzione e distinguete i tre livelli.",
+        "Ora la corda è infilata correttamente. Sul cubo dovete trovare l'ultimo indizio: cercate l'occhio giusto – in questo caso quello con il triangolo. Vi indica da quale direzione dovete guardare la struttura.",
+        "Se fate fatica a distinguere il percorso, potete riprodurre la corda sulla lavagna. Attenzione: sempre e soltanto dal primo disco di legno all'ultimo."
+      ]
+    },
+    "tangram": {
+      "de": [],
+      "en": [],
+      "it": []
+    },
+    "magnet": {
+      "de": [
+        "Habt ihr alle Tische schon durchsucht?"
+      ],
+      "en": [
+        "Have you searched all the tables?"
+      ],
+      "it": [
+        "Avete già controllato tutti i tavoli?"
+      ]
+    },
+    "chess": {
+      "de": [
+        "Achtung: Zeile und Spalte nicht verwechseln. Das Pferd steht in derselben Zeile wie die Dame, und die Dame muss mit drei anderen Figuren in einer Zeile stehen. Wo könnte das sein?",
+        "Das Pferd muss auf einem Randfeld stehen. Der König steht auf einem weißen Feld und ist diagonal mit dem Pferd verbunden. Das heißt …?",
+        "Der König darf nur mit dem schwarzen Pferd diagonal verbunden sein."
+      ],
+      "en": [
+        "Be careful not to mix up rows and columns. The knight is in the same row as the queen, and the queen must be in a row with three other pieces. Where could that be?",
+        "The knight must be on an edge square. The king is on a white square and is diagonally connected to the knight. What does that imply?",
+        "The king may be diagonally connected only to the black knight."
+      ],
+      "it": [
+        "Attenzione a non confondere righe e colonne. Il cavallo si trova nella stessa riga della regina, e la regina deve trovarsi in una riga con altri tre pezzi. Dove potrebbe essere?",
+        "Il cavallo deve trovarsi su una casella del bordo. Il re si trova su una casella bianca ed è collegato diagonalmente al cavallo. Questo significa …?",
+        "Il re può essere collegato diagonalmente soltanto al cavallo nero."
+      ]
+    },
+    "knocking": {
+      "de": [
+        "Ihr müsst die Pfade so legen, dass die 1 zur 1, die 2 zur 2 und die 3 zur 3 führt.",
+        "Dann müsst ihr die Scheiben umdrehen und zählen."
+      ],
+      "en": [
+        "Arrange the paths so that 1 connects to 1, 2 to 2, and 3 to 3.",
+        "Then turn the discs over and count."
+      ],
+      "it": [
+        "Dovete disporre i percorsi in modo che l'1 arrivi all'1, il 2 al 2 e il 3 al 3.",
+        "Poi dovete girare i dischi e contare."
+      ]
+    },
+    "candles": {
+      "de": [
+        "Wie kann man Kerzen löschen?",
+        "Jetzt müsst ihr noch die richtige Reihenfolge herausfinden.",
+        "Für jede Kerze gibt es drei Löcher: ein Loch für die zwei Holzscheiben und zwei Löcher für das kleine Holzfenster mit den Augen. Richtet die Holzscheiben richtig aus und schaut dann durch das Fenster.",
+        "Wenn ihr anschließend die Striche zählt, erhaltet ihr für jede Kerze eine Zahl von 1 bis 4."
+      ],
+      "en": [
+        "How can candles be extinguished?",
+        "Now you still need to determine the correct order.",
+        "Each candle has three holes: one hole for the two wooden discs and two holes for the small wooden window with the eyes. Align the wooden discs correctly, then look through the window.",
+        "Then count the lines. This gives you a number from 1 to 4 for each candle."
+      ],
+      "it": [
+        "Come si possono spegnere le candele?",
+        "Ora dovete ancora trovare l'ordine corretto.",
+        "Per ogni candela ci sono tre fori: un foro per i due dischi di legno e due fori per la piccola finestrella di legno con gli occhi. Allineate correttamente i dischi di legno e poi guardate attraverso la finestrella.",
+        "Contando poi le linee, ottenete per ogni candela un numero da 1 a 4."
+      ]
+    },
+    "stars": {
+      "de": [
+        "Eine gute Strategie ist, zuerst die Sterne zu zählen. Dann müsst ihr die richtige Holzscheibe nicht mehr unter allen sieben, sondern nur noch unter zwei oder drei Holzscheiben suchen."
+      ],
+      "en": [
+        "A good strategy is to count the stars first. Then you only need to find the correct wooden disc among two or three instead of all seven."
+      ],
+      "it": [
+        "Una buona strategia è contare prima le stelle. In questo modo non dovrete più cercare il disco di legno corretto fra tutti e sette, ma soltanto fra due o tre."
+      ]
+    },
+    "sissi": {
+      "de": [],
+      "en": [],
+      "it": []
+    }
+  }
+}
