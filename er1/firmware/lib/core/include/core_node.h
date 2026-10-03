@@ -189,7 +189,7 @@ private:
   // User-provided log filter from cfg.log.filter (if any); composed with minLogRank_.
   LogFilterFn userLogFilter_ = nullptr;
   void* userLogFilterUser_ = nullptr;
-  int minLogRank_ = 0;  // default DBG
+  int minLogRank_ = 2;  // default WRN
   String topicLogLevel_;
   OtaUpdater ota_;
   Preferences prefs_;

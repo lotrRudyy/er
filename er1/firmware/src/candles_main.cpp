@@ -9,8 +9,8 @@
 using namespace Core;
 
 static const char* NODE_ID = "candles";
-static const char* FW_VERSION = "49";
-static const char* FW_DESC = "candles mqtt recovery 15s ethernet 60s esp";
+static const char* FW_VERSION = "50";
+static const char* FW_DESC = "candles dbg metrics default wrn";
 
 static const uint8_t MAC_ADDR[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x58};
 static const IPAddress NET_IP(192, 168, 0, 16);

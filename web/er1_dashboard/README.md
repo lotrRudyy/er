@@ -68,6 +68,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - `ER1_MQTT_HOST` default: `192.168.0.10`
 - `ER1_MQTT_PORT` default: `1883`
 - `ER1_DASHBOARD_PORT` default: `8080`
+- `ER1_DASHBOARD_CLIENT_ID` optional override; otherwise port 8080 uses `er1_dashboard` and previews use `er1_dashboard_<port>`
 - `ER1_WEBSITE_API_BASE` optional website URL used only when `ER1_SUMMARY_EMAIL_MODE=http`
 - `ER1_WEBSITE_API_TOKEN` optional shared token for HTTP summary email mode, matching `GAME_SUMMARY_API_TOKEN` on the website
 
@@ -81,6 +82,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - In maintenance, riddle rows expose only immediate Solve; skip, time, and hint-count mutations require a started or completed run. Hint-template editing remains available in maintenance.
 - Restarting all nodes or the maglock controller is restricted to phase 0. Other individual physical nodes can still be restarted in later phases.
 - Lock, light, and diagnostics commands report local MQTT queue failures and possible partial batches; QoS 0 still provides no physical-device acknowledgment.
+- On its first MQTT connection, the dashboard stores retained `WRN` log-level defaults for all nodes. Manual per-node diagnostic levels remain temporary and non-retained.
 - Automatic booking matching is restricted to an inclusive ±30-minute Europe/Rome window. Cached SSH copies are eligible for automatic matching only while younger than `ER1_BOOKINGS_CACHE_MAX_AGE_S` (default 900 seconds); older copies remain available for warned manual selection.
 - If the website server is unreachable, the locally started game continues without automatic booking assignment. Cached, test, or empty bookings remain available for manual selection. Summary-email failures do not change the completed run and can be retried later.
 - Deferred security boundary: the dashboard control APIs have no application-level authentication and rely on the trusted escape-room LAN/deployment boundary. Adding authentication requires a coordinated deployment/client migration and is intentionally not changed here.

@@ -19,8 +19,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT / "web" / "er1_dashboard" / "app.py"
 JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "app.js"
+CSS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "style.css"
 HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "index.html"
+GAME_VIEWER_JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "game_viewer.js"
+GAME_VIEWER_HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "game_viewer.html"
 DEFAULT_HINTS_PATH = ROOT / "web" / "er1_dashboard" / "hint_templates.defaults.json"
+ENV_EXAMPLE_PATH = ROOT / "web" / "er1_dashboard" / ".env.example"
 
 
 def extracted(*names: str) -> dict[str, Any]:
@@ -239,6 +243,58 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(response["queued_count"], 1)
         self.assertEqual(published[-1], ("lighting/sys/cmd", "REBOOT"))
+
+    def test_service_restart_is_whitelisted_scheduled_and_requires_confirmation(self) -> None:
+        helper = extracted("_schedule_service_restart")
+        calls: list[tuple[list[str], int, str]] = []
+        helper.update({
+            "SERVICE_RESTART_TARGETS": {
+                "game_master": {"label": "Game Master", "unit": "game_master.service"},
+                "dashboard": {"label": "Dashboard", "unit": "er1-web.service"},
+            },
+            "_run_process": lambda command, *, timeout, label: calls.append((command, timeout, label)),
+        })
+        config = helper["_schedule_service_restart"]("dashboard")
+        self.assertEqual(config["unit"], "er1-web.service")
+        self.assertEqual(calls, [([
+            "/usr/bin/sudo", "-n", "/usr/bin/systemd-run", "--quiet", "--collect", "--on-active=1s",
+            "/usr/bin/systemctl", "restart", "er1-web.service",
+        ], 8, "Neustart von Dashboard")])
+        with self.assertRaisesRegex(ValueError, "Unbekannter Systemdienst"):
+            helper["_schedule_service_restart"]("database")
+
+        namespace = extracted("api_service_restart")
+        scheduled: list[str] = []
+        namespace.update({
+            "jsonify": JsonResponse,
+            "_stale_action_response": lambda _data: None,
+            "_schedule_service_restart": lambda target: scheduled.append(target) or {
+                "label": "Game Master",
+                "unit": "game_master.service",
+            },
+            "LOG": types.SimpleNamespace(error=lambda *_args: None),
+        })
+        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {
+            "target": "game_master",
+            "confirmed": False,
+            "expected_phase": 10,
+            "expected_run_id": "run-10",
+        })
+        response, status = namespace["api_service_restart"]()
+        self.assertEqual(status, 400)
+        self.assertFalse(response["ok"])
+        self.assertEqual(scheduled, [])
+
+        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {
+            "target": "game_master",
+            "confirmed": True,
+            "expected_phase": 10,
+            "expected_run_id": "run-10",
+        })
+        response = namespace["api_service_restart"]()
+        self.assertTrue(response["scheduled"])
+        self.assertEqual(response["service"], "game_master.service")
+        self.assertEqual(scheduled, ["game_master"])
 
     def test_summary_email_outage_is_retryable_and_keeps_completed_game(self) -> None:
         namespace = extracted("api_send_summary_email")
@@ -650,14 +706,18 @@ class HintTemplateTests(unittest.TestCase):
 
 
 class DashboardSourceContractTests(unittest.TestCase):
-    def test_native_confirmation_and_action_contracts(self) -> None:
+    def test_custom_confirmation_and_action_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         html = HTML_PATH.read_text(encoding="utf-8")
-        self.assertIn("window.confirm", javascript)
-        self.assertNotIn("confirmDialog", javascript + html)
+        self.assertNotIn("window.confirm", javascript)
+        self.assertIn('id="confirmDialog"', html)
+        self.assertIn("function confirmAction", javascript)
+        self.assertIn("window.setTimeout(() => confirmButton.focus(), 0)", javascript)
+        self.assertIn("event.key === 'Enter'", javascript)
+        self.assertIn("event.key === 'Escape'", javascript)
         self.assertNotIn("bookingConfirmDialog", javascript + html)
-        self.assertIn(">Rätsel gelöst</button>", javascript)
-        self.assertIn(">Übersprungen</button>", javascript)
+        self.assertIn(">Gelöst</button>", javascript)
+        self.assertIn(">Überspringen</button>", javascript)
         self.assertIn("min=\"1\"", javascript)
         self.assertIn(">OK</button>", javascript)
         self.assertNotIn("resetRiddle", javascript)
@@ -669,8 +729,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         start_end = javascript.index("async function handlePhaseAction", start_start)
         time_start = javascript.index("async function saveRiddleTime")
         time_end = javascript.index("async function changeHint", time_start)
-        self.assertNotIn("confirmAction", javascript[solve_start:solve_end])
-        self.assertNotIn("confirmAction", javascript[start_start:start_end])
+        self.assertIn("confirmAction", javascript[solve_start:solve_end])
+        self.assertIn("confirmAction", javascript[start_start:start_end])
         self.assertNotIn("confirmAction", javascript[time_start:time_end])
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
@@ -679,7 +739,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         guarded = {
             "api_phase", "api_select_booking", "api_solve", "api_lock", "api_light",
-            "api_node_reboot", "api_set_hint_count", "api_riddle_time", "api_riddle_outcome",
+            "api_node_reboot", "api_service_restart", "api_set_hint_count", "api_riddle_time", "api_riddle_outcome",
         }
         for name in guarded:
             segment = ast.get_source_segment(source, functions[name]) or ""
@@ -728,8 +788,75 @@ class DashboardSourceContractTests(unittest.TestCase):
         actions_end = javascript.index("async function solveRiddle", actions_start)
         actions_source = javascript[actions_start:actions_end]
         self.assertIn("riddleMutationsAvailable()", actions_source)
-        self.assertIn("Rätsel gelöst", actions_source)
+        self.assertIn(">Gelöst</button>", actions_source)
         self.assertIn("canSkip ?", actions_source)
+
+    def test_control_room_layout_contract_is_present(self) -> None:
+        html = HTML_PATH.read_text(encoding="utf-8")
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        css = CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('class="page dashboard-page dashboard-v5"', html)
+        self.assertLess(html.index('id="nodeStatusBar"'), html.index('class="dashboard-summary-grid"'))
+        self.assertLess(html.index('class="dashboard-summary-grid"'), html.index('id="currentRiddlesPanel"'))
+        for action in ("standby", "maintenance", "prepare"):
+            self.assertIn(f'data-phase-action="{action}"', html)
+        self.assertIn('id="startGameBtn"', html)
+        for panel_id in ("bookingDetails", "allRiddlesPanel", "diagnosticsDetails", "maintenanceHintEditor"):
+            self.assertIn(f'id="{panel_id}"', html)
+
+        self.assertNotIn("emergencyOpen", javascript)
+        self.assertIn("function isGameMode()", javascript)
+        self.assertIn("Number(state.game.phase || 0) >= 2", javascript)
+        self.assertIn("for (const panel of [bookingDetails, allRiddles, diagnosticsDetails, hintEditor])", javascript)
+        self.assertIn("if (panel) panel.open = false", javascript)
+        self.assertNotIn('id="hintTemplateDialog"', html)
+        self.assertNotIn("openHintTemplateDialog", javascript)
+        self.assertIn('data-service-restart="game_master"', html)
+        self.assertIn('data-service-restart="dashboard"', html)
+        self.assertIn('class="database-viewer-button"', html)
+        self.assertIn("href=\"{{ url_for('game_viewer') }}\"", html)
+        restart_start = javascript.index("async function restartSystemService")
+        restart_end = javascript.index("async function", restart_start + 20)
+        self.assertIn("confirmAction", javascript[restart_start:restart_end])
+        self.assertIn("item.id !== 'stop_timer'", javascript)
+
+        self.assertNotIn("/* Fixed operator console:", css)
+        control_room_css = css[css.index("/* Control-room dashboard */"):]
+        self.assertIn("grid-template-columns: repeat(8, minmax(0, 1fr));", control_room_css)
+        self.assertIn(".dashboard-game-mode #bookingDetails:not([open])", control_room_css)
+        self.assertIn("@media (min-width: 1600px) and (max-height: 980px)", control_room_css)
+        self.assertIn("@media (max-width: 760px)", control_room_css)
+
+    def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
+        helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]
+        self.assertEqual(helper(8080), "er1_dashboard")
+        self.assertEqual(helper(8081), "er1_dashboard_8081")
+        self.assertNotEqual(helper(8080), helper(8081))
+        self.assertNotIn("\nER1_DASHBOARD_CLIENT_ID=", ENV_EXAMPLE_PATH.read_text(encoding="utf-8"))
+
+    def test_paramiko_rejects_unknown_website_host_keys(self) -> None:
+        source = APP_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_paramiko_connect"
+        )
+        function_source = ast.get_source_segment(source, function)
+        self.assertIn("client.load_system_host_keys()", function_source)
+        self.assertIn("paramiko.RejectPolicy()", function_source)
+        self.assertNotIn("AutoAddPolicy", function_source)
+
+    def test_game_viewer_places_editable_details_below_selected_record(self) -> None:
+        javascript = GAME_VIEWER_JS_PATH.read_text(encoding="utf-8")
+        html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn("selected-game-row", html)
+        self.assertIn("function placeGameDetailsBelowSelectedRow()", javascript)
+        self.assertIn("selectedRow.insertAdjacentElement('afterend', detailsRow)", javascript)
+        self.assertIn("detailsRow.innerHTML = '<td colspan=\"9\"", javascript)
+        self.assertGreaterEqual(javascript.count("placeGameDetailsBelowSelectedRow();"), 2)
+        for section_id in ("gameSummarySection", "riddlesSection", "rawDbSection"):
+            self.assertIn(section_id, javascript)
 
 
 if __name__ == "__main__":

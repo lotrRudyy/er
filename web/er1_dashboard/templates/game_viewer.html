@@ -7,7 +7,7 @@
 <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ER1 Spielübersicht</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20261003-inline-editor" />
   <style>html, body.game-viewer-body { min-width: 0; width: auto; }</style>
 </head>
 <body class="game-viewer-body" data-game-id="{{ game_id }}">
@@ -188,7 +188,7 @@
   </div>
 
   {% if game %}
-  <script src="{{ url_for('static', filename='game_viewer.js') }}"></script>
+  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261003-inline-editor"></script>
   {% endif %}
 </body>
 </html>

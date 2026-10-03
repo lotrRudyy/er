@@ -1,4 +1,5 @@
 const editorStatus = document.getElementById('editorStatus');
+const detailSectionIds = ['gameSummarySection', 'riddlesSection', 'rawDbSection'];
 
 function showStatus(message, kind = 'info') {
   if (!editorStatus) return;
@@ -108,6 +109,26 @@ function bindViewerEditors(scope = document) {
   });
 }
 
+function placeGameDetailsBelowSelectedRow() {
+  const selectedRow = document.querySelector('#allGamesSection .selected-game-row');
+  if (!selectedRow) return;
+
+  let detailsRow = document.getElementById('selectedGameDetailsRow');
+  if (!detailsRow) {
+    detailsRow = document.createElement('tr');
+    detailsRow.id = 'selectedGameDetailsRow';
+    detailsRow.className = 'selected-game-details-row';
+    detailsRow.innerHTML = '<td colspan="9"><div class="inline-game-details"></div></td>';
+    selectedRow.insertAdjacentElement('afterend', detailsRow);
+  }
+
+  const container = detailsRow.querySelector('.inline-game-details');
+  for (const id of detailSectionIds) {
+    const section = document.getElementById(id);
+    if (section && section.parentElement !== container) container.appendChild(section);
+  }
+}
+
 async function refreshViewerFromServer() {
   const url = new URL(window.location.href);
   url.searchParams.set('_ts', String(Date.now()));
@@ -115,11 +136,15 @@ async function refreshViewerFromServer() {
   if (!res.ok) throw new Error('Aktualisieren der Ansicht fehlgeschlagen');
   const html = await res.text();
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  ['allGamesSection', 'gameSummarySection', 'riddlesSection', 'hintsSection', 'rawDbSection'].forEach((id) => {
+  const nextGames = doc.getElementById('allGamesSection');
+  const currentGames = document.getElementById('allGamesSection');
+  if (currentGames && nextGames) currentGames.replaceWith(nextGames);
+  const page = document.querySelector('.game-viewer-page');
+  for (const id of detailSectionIds) {
     const next = doc.getElementById(id);
-    const current = document.getElementById(id);
-    if (current && next) current.replaceWith(next);
-  });
+    if (next && page) page.appendChild(next);
+  }
+  placeGameDetailsBelowSelectedRow();
   bindViewerEditors(document);
 }
 
@@ -169,4 +194,5 @@ async function saveRow(row) {
   }
 }
 
+placeGameDetailsBelowSelectedRow();
 bindViewerEditors(document);

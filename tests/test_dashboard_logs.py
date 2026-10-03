@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT / "web" / "er1_dashboard" / "app.py"
 JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "app.js"
 HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "index.html"
+CANDLES_RIDDLE_PATH = ROOT / "er1" / "firmware" / "src" / "riddles" / "candles_riddle.cpp"
+CORE_NODE_PATH = ROOT / "er1" / "firmware" / "lib" / "core" / "src" / "core_node.cpp"
 
 PRODUCTION_CONSTANTS = {
     "TOPIC_LIGHTING_CMD",
@@ -657,6 +659,36 @@ class DashboardDiagnosticsSourceTests(unittest.TestCase):
         self.assertNotIn("+/dbg", connect_source)
         self.assertLess(handler_source.index("parse_node_log"), handler_source.index("parse_json_payload"))
 
+    def test_dashboard_and_firmware_default_to_warning_logs(self) -> None:
+        html = HTML_PATH.read_text(encoding="utf-8")
+        core_source = CORE_NODE_PATH.read_text(encoding="utf-8")
+        candles_source = CANDLES_RIDDLE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('value="DBG" /> DBG', html)
+        self.assertIn('value="INF" /> INF', html)
+        self.assertIn('value="WRN" checked', html)
+        self.assertIn('value="ERR" checked', html)
+        self.assertIn('<option selected>WRN</option>', html)
+        self.assertIn('minLogRank_ = 2;', core_source)
+        self.assertIn('log("DBG", "candles_1s", d);', candles_source)
+
+    def test_default_warning_level_is_published_to_every_node(self) -> None:
+        namespace = extracted_dashboard("_publish_default_log_levels")
+        published = []
+        remembered = []
+        namespace["mqtt"] = types.SimpleNamespace(MQTT_ERR_SUCCESS=0)
+        namespace["_remember_requested_log_level"] = lambda node, level: remembered.append((node, level))
+
+        class Client:
+            def publish(self, topic: str, payload: str, **kwargs: Any) -> Any:
+                published.append((topic, payload, kwargs))
+                return types.SimpleNamespace(rc=0)
+
+        self.assertTrue(namespace["_publish_default_log_levels"](Client()))
+        self.assertEqual(len(published), len(namespace["LOG_NODE_IDS"]))
+        self.assertEqual(remembered, [(node, "WRN") for node in namespace["LOG_NODE_IDS"]])
+        self.assertTrue(all(kwargs == {"qos": 0, "retain": True} for _topic, _payload, kwargs in published))
+
     def test_diagnostics_poll_is_incremental_text_only_and_backlog_is_yielding(self) -> None:
         source = JS_PATH.read_text(encoding="utf-8")
 
@@ -780,8 +812,22 @@ function scheduleDiagnosticsPoll() {{}}
         self.assertIn("keine Rücknahme und keine Gerätebestätigung", source)
 
     def test_native_panel_is_closed_by_default_and_html_ids_are_unique(self) -> None:
+        html = HTML_PATH.read_text(encoding="utf-8")
+        node_declaration = html[html.index("{% set diagnostic_nodes"):html.index("] %}")]
+        diagnostic_nodes = re.findall(r"\('([^']+)',\s*'([^']+)'\)", node_declaration)
+        loop_pattern = re.compile(
+            r"{% for node, label in diagnostic_nodes %}(.*?){% endfor %}",
+            re.DOTALL,
+        )
+        rendered = loop_pattern.sub(
+            lambda match: "".join(
+                match.group(1).replace("{{ node }}", node).replace("{{ label }}", label)
+                for node, label in diagnostic_nodes
+            ),
+            html,
+        )
         parser = IdParser()
-        parser.feed(HTML_PATH.read_text(encoding="utf-8"))
+        parser.feed(rendered)
         self.assertIsNotNone(parser.diagnostics_attrs)
         self.assertNotIn("open", parser.diagnostics_attrs)
         self.assertEqual(len(parser.ids), len(set(parser.ids)))

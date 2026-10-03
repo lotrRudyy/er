@@ -506,7 +506,7 @@ void CandlesRiddle::publishMetricsIfDue(uint32_t nowMs) {
          "\"";
   }
   d += "}";
-  log("INF", "candles_1s", d);
+  log("DBG", "candles_1s", d);
 
   for (int i = 0; i < 4; i++) {
     MicMetric& mm = metrics_[i];

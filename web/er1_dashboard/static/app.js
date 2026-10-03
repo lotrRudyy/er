@@ -30,9 +30,8 @@ const state = {
 };
 
 const ui = {
-  allRiddlesOpen: false,
-  emergencyOpen: false,
   lastPhase: null,
+  gameMode: false,
 };
 
 const TEST_BOOKING_ID = '__test__';
@@ -85,6 +84,7 @@ let startInFlight = false;
 let hintEditorDraft = null;
 let hintEditorDirty = false;
 let hintEditorSignature = '';
+let confirmationResolver = null;
 
 let localTimerBaseElapsed = 0;
 let localTimerSyncedAt = 0;
@@ -230,8 +230,12 @@ function isLiveGame() {
   return Boolean(state.game.is_live) || (phase >= 3 && phase <= 13);
 }
 
+function isGameMode() {
+  return Number(state.game.phase || 0) >= 2;
+}
+
 function shouldConfirmPhaseChange() {
-  return isLiveGame();
+  return Number(state.game.phase || 0) >= 2;
 }
 
 function hasFocusedEditor() {
@@ -245,7 +249,7 @@ function hasFocusedEditor() {
 }
 
 function shouldDeferPatch() {
-  return interactionActive || actionDepth > 0 || hasFocusedEditor();
+  return interactionActive || actionDepth > 0 || confirmationResolver !== null || hasFocusedEditor();
 }
 
 function rerenderRiddleViews() {
@@ -368,8 +372,56 @@ function installInteractionGuard() {
   window.addEventListener('focus', flushQueuedSnapshot);
 }
 
-function confirmAction({ title, message }) {
-  return Promise.resolve(window.confirm(`${title}\n\n${message}`));
+function settleConfirmation(confirmed) {
+  const resolver = confirmationResolver;
+  if (!resolver) return;
+  confirmationResolver = null;
+  const dialog = document.getElementById('confirmDialog');
+  if (dialog?.open) dialog.close();
+  resolver(Boolean(confirmed));
+  window.setTimeout(flushQueuedSnapshot, 0);
+}
+
+function confirmAction({ title, message, confirmLabel = 'Bestätigen' }) {
+  if (confirmationResolver !== null) return Promise.resolve(false);
+  const dialog = document.getElementById('confirmDialog');
+  const titleNode = document.getElementById('confirmDialogTitle');
+  const messageNode = document.getElementById('confirmDialogMessage');
+  const confirmButton = document.getElementById('confirmDialogAccept');
+  if (!dialog || !titleNode || !messageNode || !confirmButton) return Promise.resolve(false);
+
+  titleNode.textContent = title;
+  messageNode.textContent = message;
+  confirmButton.textContent = confirmLabel;
+  return new Promise((resolve) => {
+    confirmationResolver = resolve;
+    dialog.showModal();
+    window.setTimeout(() => confirmButton.focus(), 0);
+  });
+}
+
+function wireConfirmationDialog() {
+  const dialog = document.getElementById('confirmDialog');
+  const confirmButton = document.getElementById('confirmDialogAccept');
+  const cancelButton = document.getElementById('confirmDialogCancel');
+  const closeButton = document.getElementById('confirmDialogClose');
+  confirmButton?.addEventListener('click', () => settleConfirmation(true));
+  cancelButton?.addEventListener('click', () => settleConfirmation(false));
+  closeButton?.addEventListener('click', () => settleConfirmation(false));
+  dialog?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    settleConfirmation(false);
+  });
+  dialog?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      settleConfirmation(true);
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      settleConfirmation(false);
+    }
+  });
 }
 
 function syncLocalTimers(game) {
@@ -592,6 +644,8 @@ function renderBookingControls() {
   const refreshButton = document.getElementById('refreshBookingsBtn');
   const applyButton = document.getElementById('applyBookingBtn');
   const compact = document.getElementById('bookingCompactValue');
+  const gameCompact = document.getElementById('gameBookingValue');
+  const gameHintLanguage = document.getElementById('gameHintLanguage');
   if (!select) return;
 
   if (!bookingOptionsLoaded && !bookingOptions.length) {
@@ -653,7 +707,10 @@ function renderBookingControls() {
     }
   }
 
-  if (compact) compact.textContent = bookingCompactLabel(current) || 'Keine Buchung ausgewählt';
+  const compactLabel = bookingCompactLabel(current) || 'Keine Buchung ausgewählt';
+  if (compact) compact.textContent = compactLabel;
+  if (gameCompact) gameCompact.textContent = compactLabel;
+  if (gameHintLanguage) gameHintLanguage.textContent = HINT_LANGUAGE_LABELS[current.language] || 'Deutsch';
 }
 
 function bookingOverrideMessage(booking) {
@@ -716,103 +773,177 @@ function renderTop() {
   const riddleTimerValue = document.getElementById('riddleTimerValue');
   const prepareCounterWrap = document.getElementById('prepareCounterWrap');
   const startButton = document.getElementById('startGameBtn');
-  const bookingDetails = document.getElementById('bookingDetails');
 
-  if (phaseValue) phaseValue.textContent = state.game.phase_display || `${state.game.phase}: ${state.game.phase_name_pretty || state.game.phase_name || ''}`;
+  const phase = Number(state.game.phase || 0);
+  const phaseLabel = String(state.game.phase_name_pretty || state.game.phase_name || '').trim();
+  if (phaseValue) phaseValue.textContent = `Phase ${phase} · ${phaseLabel}`;
   if (lastPhaseValue) {
     lastPhaseValue.textContent = state.game.last_phase == null
       ? '—'
       : `${state.game.last_phase}: ${state.game.last_phase_name_pretty || state.game.last_phase_name || ''}`.trim();
   }
   if (timerValue) timerValue.textContent = fmtGameTime(readLocalTimer());
-  if (riddleTimerValue) riddleTimerValue.textContent = fmtTime(readLocalRiddleTimer());
-
-  const phase = Number(state.game.phase || 0);
-  const preparedRunReady = phase === 2 && Boolean(currentRunId());
-  prepareCounterWrap?.classList.toggle('hidden', phase !== 2);
-  startButton?.classList.toggle('hidden', phase !== 2);
-  if (startButton) startButton.disabled = !preparedRunReady || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
-
-  const live = isLiveGame();
-  if (ui.lastPhase !== phase) {
-    if (bookingDetails) bookingDetails.open = !live;
-    if (live) {
-      ui.allRiddlesOpen = false;
-      ui.emergencyOpen = false;
-    }
-    ui.lastPhase = phase;
+  if (riddleTimerValue) {
+    riddleTimerValue.textContent = phase >= 3 && state.game.current_riddle_name
+      ? fmtTime(readLocalRiddleTimer())
+      : '—';
   }
 
-  document.querySelectorAll('[data-phase-action="start"]').forEach((button) => {
-    button.disabled = !preparedRunReady || startInFlight || Boolean(state.start_assignment?.active);
+  const preparedRunReady = phase === 2 && Boolean(currentRunId());
+  prepareCounterWrap?.classList.toggle('hidden', phase !== 2);
+  if (startButton) {
+    startButton.textContent = phase >= 3 ? 'Spiel läuft' : 'Spiel starten';
+    startButton.disabled = !preparedRunReady || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
+    startButton.classList.toggle('is-current-phase', phase >= 3);
+  }
+
+  const currentAction = phase === 0 ? 'standby' : (phase === 1 ? 'maintenance' : (phase === 2 ? 'prepare' : 'start'));
+  document.querySelectorAll('[data-phase-action]').forEach((button) => {
+    const active = button.dataset.phaseAction === currentAction;
+    button.classList.toggle('is-current-phase', active);
+    button.disabled = active;
   });
 
   renderBookingControls();
   renderSummaryControls();
   renderStartAssignmentStatus();
+  renderRiddleProgress();
   renderPanelVisibility();
 }
 
 function renderPanelVisibility() {
-  const live = isLiveGame();
+  const gameMode = isGameMode();
   const currentPanel = document.getElementById('currentRiddlesPanel');
-  const allPanel = document.getElementById('allRiddlesPanel');
-  const emergencyPanel = document.getElementById('emergencyPanel');
-  const allButton = document.getElementById('toggleAllRiddlesBtn');
-  const emergencyButton = document.getElementById('toggleEmergencyBtn');
+  const drawerStrip = document.getElementById('gameDrawerStrip');
+  const bookingDetails = document.getElementById('bookingDetails');
+  const allRiddles = document.getElementById('allRiddlesPanel');
+  const diagnosticsDetails = document.getElementById('diagnosticsDetails');
+  const hintEditor = document.getElementById('maintenanceHintEditor');
 
-  currentPanel?.classList.toggle('hidden', !live);
-  allPanel?.classList.toggle('hidden', live && !ui.allRiddlesOpen);
-  emergencyPanel?.classList.toggle('hidden', !ui.emergencyOpen);
+  document.body.classList.toggle('dashboard-game-mode', gameMode);
+  document.body.classList.toggle('dashboard-pregame', !gameMode);
+  currentPanel?.classList.toggle('hidden', !gameMode);
+  drawerStrip?.classList.toggle('hidden', !gameMode);
 
-  if (allButton) {
-    allButton.classList.toggle('hidden', !live);
-    allButton.textContent = ui.allRiddlesOpen ? 'Alle Rätsel ausblenden' : 'Alle Rätsel anzeigen';
+  if (ui.gameMode !== gameMode) {
+    if (gameMode) {
+      for (const panel of [bookingDetails, allRiddles, diagnosticsDetails, hintEditor]) {
+        if (panel) panel.open = false;
+      }
+    } else {
+      if (bookingDetails) bookingDetails.open = true;
+      if (allRiddles) allRiddles.open = true;
+      if (diagnosticsDetails) diagnosticsDetails.open = false;
+      if (hintEditor) hintEditor.open = false;
+    }
+    ui.gameMode = gameMode;
   }
-  if (emergencyButton) {
-    emergencyButton.textContent = ui.emergencyOpen ? 'Notfallsteuerung ausblenden' : 'Notfallsteuerung anzeigen';
-  }
+  ui.lastPhase = Number(state.game.phase || 0);
+  updateDrawerButtons();
+}
+
+function renderRiddleProgress() {
+  const riddles = state.riddles || [];
+  const solved = riddles.filter((riddle) => ['solved', 'skipped'].includes(String(riddle.phase_state || ''))).length;
+  const text = `${solved} gelöst / ${riddles.length || 12}`;
+  const summary = document.getElementById('riddleProgressValue');
+  const drawer = document.getElementById('gameRiddleProgress');
+  if (summary) summary.textContent = text;
+  if (drawer) drawer.textContent = text;
+}
+
+function updateDrawerButtons() {
+  document.querySelectorAll('[data-panel-target]').forEach((button) => {
+    const panel = document.getElementById(button.dataset.panelTarget);
+    const expanded = Boolean(panel?.open);
+    button.setAttribute('aria-expanded', String(expanded));
+    button.classList.toggle('is-expanded', expanded);
+  });
 }
 
 function renderNodes() {
-  const wrap = document.getElementById('nodesList');
-  if (!wrap) return;
-  wrap.innerHTML = '';
+  const statusBar = document.getElementById('nodeStatusBar');
+  const tableBody = document.getElementById('nodeDiagnosticsBody');
+  const rebootAll = document.getElementById('rebootAllNodesBtn');
+  if (!statusBar || !tableBody) return;
+  statusBar.innerHTML = '';
+  tableBody.innerHTML = '';
   const phase = Number(state.game.phase || 0);
   const phaseZero = phase === 0;
-  const rebootAll = document.createElement('button');
-  rebootAll.type = 'button';
-  rebootAll.className = 'node-reboot-btn node-reboot-all';
-  rebootAll.textContent = 'Alle Steuergeräte neu starten';
-  rebootAll.disabled = !phaseZero;
-  rebootAll.title = phaseZero
-    ? 'REBOOT an alle physischen Steuergeräte senden'
-    : 'Ein Neustart aller Steuergeräte ist nur in Phase 0 möglich.';
-  rebootAll.addEventListener('click', async () => {
+
+  const rebootNode = async (node, button) => {
     const confirmed = await confirmAction({
-      title: 'Alle Steuergeräte neu starten?',
-      message: 'Die Zeichenfolge REBOOT wird an alle <node>/sys/cmd-Themen gesendet. OTA wird nicht gestartet.',
+      title: node === 'all' ? 'Alle Steuergeräte neu starten?' : `${button.dataset.nodeLabel} neu starten?`,
+      message: node === 'all'
+        ? 'Der Neustart wird an alle physischen Nodes gesendet. OTA wird nicht gestartet.'
+        : `Der Neustart wird an ${button.dataset.nodeLabel} gesendet. Eine Gerätebestätigung ist nicht verfügbar.`,
+      confirmLabel: 'Neu starten',
     });
     if (!confirmed) return;
-    await runAction(rebootAll, async () => {
+    await runAction(button, async () => {
       const result = await api('/api/node-reboot', {
         method: 'POST',
-        body: JSON.stringify({ node: 'all', ...actionGuard() }),
+        body: JSON.stringify({ node, ...actionGuard() }),
       });
-      showFeedback(`${result.queued_count} Neustartbefehle an MQTT übergeben; die Geräteneustarts sind nicht bestätigt.`, 'warn');
+      showFeedback(
+        node === 'all'
+          ? `${result.queued_count} Neustartbefehle an MQTT übergeben; die Geräteneustarts sind nicht bestätigt.`
+          : `${button.dataset.nodeLabel}: Neustartbefehl an MQTT übergeben; der Neustart ist nicht bestätigt.`,
+        'warn',
+      );
       return result;
     });
-  });
-  wrap.appendChild(rebootAll);
-  for (const item of state.nodes || []) {
-    const line = document.createElement('div');
-    line.className = `node-line ${item.online ? 'node-on' : 'node-off'}`;
-    const status = document.createElement('span');
-    status.textContent = `${item.label} (${item.status})`;
+  };
+
+  if (rebootAll) {
+    rebootAll.disabled = !phaseZero;
+    rebootAll.title = phaseZero
+      ? 'REBOOT an alle physischen Steuergeräte senden'
+      : 'Alle Steuergeräte dürfen nur in Phase 0 neu gestartet werden.';
+    rebootAll.onclick = () => rebootNode('all', rebootAll).catch(() => {});
+  }
+
+  const diagnosticNodes = (state.nodes || []).filter((item) => item.id !== 'stop_timer');
+  const statusNodes = diagnosticNodes;
+  const diagnosticOnlineCount = diagnosticNodes.filter((item) => item.online).length;
+  const statusOnlineCount = statusNodes.filter((item) => item.online).length;
+  const diagnosticHealthText = `${diagnosticOnlineCount} online · ${diagnosticNodes.length - diagnosticOnlineCount} offline`;
+  const statusHealthText = `${statusOnlineCount} online · ${statusNodes.length - statusOnlineCount} offline`;
+  const diagnosticsSummary = document.getElementById('nodeDiagnosticsSummary');
+  const gameHealth = document.getElementById('gameNodeHealth');
+  if (diagnosticsSummary) diagnosticsSummary.textContent = diagnosticHealthText;
+  if (gameHealth) gameHealth.textContent = statusHealthText;
+
+  for (const item of diagnosticNodes) {
+    if (item.id !== 'stop_timer') {
+      const card = document.createElement('article');
+      card.className = `node-status-card ${item.online ? 'node-on' : 'node-off'}`;
+      const cardLabel = document.createElement('strong');
+      cardLabel.textContent = item.label;
+      const cardState = document.createElement('span');
+      cardState.className = 'node-status-state';
+      cardState.textContent = item.online ? 'Online' : 'Offline';
+      card.append(cardLabel, cardState);
+      statusBar.appendChild(card);
+    }
+
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = item.label;
+    const statusCell = document.createElement('td');
+    statusCell.innerHTML = `<span class="node-table-status ${item.online ? 'is-online' : 'is-offline'}">${item.online ? 'Online' : 'Offline'}</span>`;
+    const contactCell = document.createElement('td');
+    contactCell.textContent = Number.isFinite(Number(item.last_seen_s)) ? `vor ${Math.max(0, Math.round(Number(item.last_seen_s)))} s` : '—';
+    const firmwareCell = document.createElement('td');
+    firmwareCell.textContent = item.firmware || '—';
+    const errorCell = document.createElement('td');
+    errorCell.textContent = item.error || '—';
+    const actionCell = document.createElement('td');
     const reboot = document.createElement('button');
     reboot.type = 'button';
     reboot.className = 'node-reboot-btn';
-    reboot.textContent = 'Neustart';
+    reboot.textContent = 'Reboot';
+    reboot.dataset.nodeLabel = item.label;
     const phaseRestricted = item.id === 'maglock' && !phaseZero;
     reboot.disabled = !item.online || phaseRestricted;
     reboot.title = phaseRestricted
@@ -820,24 +951,49 @@ function renderNodes() {
       : (item.online
         ? 'REBOOT über MQTT einreihen'
         : 'Knoten ist offline; Neustart ist deaktiviert. Diagnose-Logs bleiben verfügbar.');
-    reboot.addEventListener('click', async () => {
-      const confirmed = await confirmAction({
-        title: `${item.label} neu starten?`,
-        message: `Es wird ausschließlich die Zeichenfolge REBOOT an ${item.id}/sys/cmd gesendet. OTA wird nicht gestartet.`,
-      });
-      if (!confirmed) return;
-      await runAction(reboot, async () => {
-        const result = await api('/api/node-reboot', {
-          method: 'POST',
-          body: JSON.stringify({ node: item.id, ...actionGuard() }),
-        });
-        showFeedback(`${item.label}: MQTT-Befehl eingereiht; der Neustart ist vom Gerät nicht bestätigt.`, 'warn');
-        return result;
-      });
-    });
-    line.append(status, reboot);
-    wrap.appendChild(line);
+    reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
+    actionCell.appendChild(reboot);
+    row.append(labelCell, statusCell, contactCell, firmwareCell, errorCell, actionCell);
+    tableBody.appendChild(row);
   }
+}
+
+async function waitForDashboardRestart() {
+  await delay(1500);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const response = await fetch(`/api/state?restart_check=${Date.now()}`, { cache: 'no-store' });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (_error) {
+      // The short connection failure is expected while systemd restarts Flask.
+    }
+    await delay(500);
+  }
+  showFeedback('Das Dashboard wurde neu gestartet, ist aber noch nicht wieder erreichbar. Bitte die Seite neu laden.', 'warn');
+}
+
+async function restartSystemService(target, button) {
+  const labels = { game_master: 'Game Master', dashboard: 'Dashboard' };
+  const label = labels[target];
+  if (!label) return;
+  const confirmed = await confirmAction({
+    title: `${label} neu starten?`,
+    message: target === 'dashboard'
+      ? 'Die Dashboard-Verbindung wird kurz unterbrochen. Die Seite lädt automatisch neu, sobald der Dienst wieder erreichbar ist.'
+      : 'Der Game Master wird kontrolliert durch systemd neu gestartet. Währenddessen können Spielereignisse kurz verzögert verarbeitet werden.',
+    confirmLabel: 'Dienst neu starten',
+  });
+  if (!confirmed) return;
+
+  const result = await runAction(button, () => api('/api/service-restart', {
+    method: 'POST',
+    body: JSON.stringify({ target, confirmed: true, ...actionGuard() }),
+  }));
+  showFeedback(`${result.label}: Neustart wurde eingeplant.`, 'warn');
+  if (target === 'dashboard') waitForDashboardRestart().catch(() => {});
 }
 
 async function confirmManualControl(title, message) {
@@ -1109,23 +1265,29 @@ function riddleMutationsAvailable() {
   return Number(state.game.phase || 0) >= 3 && Boolean(currentRunId());
 }
 
-function hintPanelHtml(riddle) {
+function hintPanelHtml(riddle, compact = false) {
   const language = normalizeHintLanguage(state.booking?.language);
   const templates = hintTemplatesFor(riddle.id, language);
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
   const canMutate = riddleMutationsAvailable();
+  if (compact) {
+    return `<span class="riddle-hint-summary">${count} / ${templates.length}</span>`;
+  }
   const templateContent = templates.length
-    ? `<ol class="hint-template-list">${templates.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ol>`
+    ? `<ol class="hint-template-list">${templates.map((text, index) => `<li><span>${index + 1}</span><p>${escapeHtml(text)}</p></li>`).join('')}</ol>`
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
   return `
     <section class="hint-panel">
-      <div class="hint-template-heading">Tippvorlagen <span>· ${escapeHtml(HINT_LANGUAGE_LABELS[language])}</span></div>
-      ${templateContent}
+      <div class="hint-template-content">
+        <div class="hint-template-heading">Tipps für ${escapeHtml(riddle.label)} <span>· ${escapeHtml(HINT_LANGUAGE_LABELS[language])}</span></div>
+        ${templateContent}
+      </div>
       <div class="hint-given-block">
-        <div class="hint-given-label">Gegebene Tipps: <strong class="hint-counter-value">${count}</strong></div>
+        <div class="hint-given-label">Aktuelle Tippanzahl</div>
+        <strong class="hint-counter-value">${count}</strong>
         ${canMutate ? `<div class="hint-counter-buttons">
-          <button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippzähler um eins erhöhen">+1</button>
-          <button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippzähler um eins verringern" ${count === 0 ? 'disabled' : ''}>-1</button>
+          <button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippzähler um eins erhöhen">+</button>
+          <button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippzähler um eins verringern" ${count === 0 ? 'disabled' : ''}>−</button>
         </div>` : ''}
       </div>
     </section>
@@ -1142,14 +1304,15 @@ function riddleActionsHtml(riddle, compact = false) {
 
   return `
     <div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
-      <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>Rätsel gelöst</button>
-      ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button">Übersprungen</button>` : ''}
+      <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>Gelöst</button>
+      ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button">Überspringen</button>` : ''}
     </div>
   `;
 }
 
 function riddleTimeEditorHtml(riddle) {
-  const timeEditable = riddleMutationsAvailable() && String(riddle.phase_state || 'pending') !== 'pending';
+  const timeEditable = riddleMutationsAvailable()
+    && ['solved', 'skipped', 'not_solved'].includes(String(riddle.phase_state || 'pending'));
   if (!timeEditable) return '<span class="muted-info">—</span>';
   return `
     <div class="riddle-time-edit">
@@ -1161,6 +1324,15 @@ function riddleTimeEditorHtml(riddle) {
 
 async function solveRiddle(riddle, button) {
   if (!riddle.can_solve) return;
+
+  const confirmed = await confirmAction({
+    title: `${riddle.label} als gelöst markieren?`,
+    message: riddle.solve_advances
+      ? 'Diese Aktion setzt die Rätselzeit fest und wechselt zum nächsten Spielschritt.'
+      : 'Diese Aktion markiert das Rätsel als gelöst.',
+    confirmLabel: 'Als gelöst markieren',
+  });
+  if (!confirmed) return;
 
   await runAction(button, () => {
     if (riddle.solve_advances) {
@@ -1287,7 +1459,7 @@ function buildRiddleRow(riddle) {
     <td>${riddleTimeEditorHtml(riddle)}</td>
     <td>${riddleActionsHtml(riddle)}</td>
     <td><div class="riddle-info-cell">${renderRiddleInfo(riddle)}</div></td>
-    <td>${hintPanelHtml(riddle)}</td>
+    <td>${hintPanelHtml(riddle, true)}</td>
   `;
   bindRiddleActions(row, riddle, { includeTimeEditor: true });
   return row;
@@ -1300,20 +1472,22 @@ function buildCurrentRiddleCard(riddle) {
   card.innerHTML = `
     <div class="current-riddle-card-head">
       <div>
-        <div class="eyebrow">${riddle.manual ? 'Manuelles Rätsel' : 'Elektronisches Rätsel'}</div>
+        <div class="card-heading"><span class="card-icon" aria-hidden="true">&#10021;</span><span>Aktuelles Rätsel</span></div>
         <h2>${escapeHtml(riddle.label)}</h2>
       </div>
       <div class="current-card-status">
         <span class="status-badge ${escapeAttr(riddle.phase_state_class || '')}">${escapeHtml(riddle.phase_state_label || riddle.phase_state)}</span>
-        <span class="current-card-time">${fmtTime(riddle.display_time_s || 0)}</span>
       </div>
     </div>
-    <div class="current-riddle-info">${renderRiddleInfo(riddle)}</div>
-    ${!riddle.manual ? '<div class="electronic-note">Dieses Rätsel schaltet bei korrekter Lösung automatisch weiter.</div>' : ''}
-    <div class="current-riddle-controls">${riddleActionsHtml(riddle, true)}${riddleTimeEditorHtml(riddle)}</div>
+    <div class="current-riddle-facts">
+      <div><span>Rätselzeit</span><strong class="current-card-time">${fmtTime(riddle.display_time_s || 0)}</strong></div>
+      <div><span>Live-Informationen</span><div class="current-fact-content">${renderRiddleInfo(riddle)}</div></div>
+      <div><span>Typ</span><strong>${riddle.manual ? 'Manuelles Rätsel' : 'Elektronisches Rätsel'}</strong></div>
+    </div>
+    <div class="current-riddle-controls">${riddleActionsHtml(riddle, true)}</div>
     ${hintPanelHtml(riddle)}
   `;
-  bindRiddleActions(card, riddle, { includeTimeEditor: true });
+  bindRiddleActions(card, riddle);
   return card;
 }
 
@@ -1328,6 +1502,23 @@ function renderCurrentRiddles() {
   const wrap = document.getElementById('currentRiddlesGrid');
   if (!wrap) return;
   wrap.innerHTML = '';
+  if (Number(state.game.phase || 0) === 2) {
+    const preparation = document.createElement('article');
+    preparation.className = 'current-riddle-card preparation-card';
+    preparation.innerHTML = `
+      <div>
+        <div class="card-heading"><span class="card-icon" aria-hidden="true">&#9654;</span><span>Vorbereitung</span></div>
+        <h2>Bereit zum Spielstart</h2>
+        <p>Prüfe Buchung, Spieleranzahl und Raum. Der Start beginnt den Countdown und kann nicht versehentlich ohne Bestätigung ausgelöst werden.</p>
+      </div>
+      <button class="preparation-start-button" type="button">Spiel wirklich starten</button>
+    `;
+    const button = preparation.querySelector('.preparation-start-button');
+    button.disabled = !currentRunId() || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
+    button.addEventListener('click', () => handleStart(button));
+    wrap.appendChild(preparation);
+    return;
+  }
   const current = (state.riddles || []).filter((riddle) => (
     riddle.phase_state === 'active'
   ));
@@ -1367,6 +1558,7 @@ function renderHintEditor() {
   const addButton = document.getElementById('hintEditorAdd');
   const saveButton = document.getElementById('hintEditorSave');
   const status = document.getElementById('hintEditorStatus');
+  const compactStatus = document.getElementById('hintEditorCompactStatus');
   if (!panel || !languageSelect || !riddleSelect || !list || !addButton || !saveButton || !status) return;
 
   const serverSignature = stableStringify(state.hint_templates || {});
@@ -1386,11 +1578,6 @@ function renderHintEditor() {
   }
 
   const maintenance = Number(state.game.phase || 0) === 1;
-  const phaseKey = String(Number(state.game.phase || 0));
-  if (panel.dataset.phase !== phaseKey) {
-    panel.dataset.phase = phaseKey;
-    panel.open = maintenance;
-  }
   const { language, riddle } = selectedHintEditorValues();
   const tips = hintEditorDraft?.[riddle]?.[language] || [];
   list.innerHTML = tips.length
@@ -1412,6 +1599,7 @@ function renderHintEditor() {
   status.textContent = maintenance
     ? (hintEditorDirty ? 'Ungespeicherte Änderungen.' : 'Bearbeitung ist in Wartung freigeschaltet.')
     : 'Schreibgeschützt. Bearbeitung ist nur in Phase 1 (Wartung) möglich.';
+  if (compactStatus) compactStatus.textContent = maintenance ? 'Bearbeitung freigeschaltet' : 'Außerhalb der Wartung schreibgeschützt';
   panel.classList.toggle('hint-editor-readonly', !maintenance);
 }
 
@@ -1565,6 +1753,13 @@ async function handleStart(button) {
     return;
   }
 
+  const confirmed = await confirmAction({
+    title: 'Spiel wirklich starten?',
+    message: 'Diese Aktion startet den Countdown und die Spielzeit. Prüfe vorher, ob alle Spieler bereit sind.',
+    confirmLabel: 'Spiel starten',
+  });
+  if (!confirmed) return;
+
   startInFlight = true;
   renderTop();
   try {
@@ -1609,6 +1804,7 @@ async function handlePhaseAction(action, button) {
     const confirmed = await confirmAction({
       title: `Phase auf „${label}“ ändern?`,
       message: 'Das Spiel läuft gerade. Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.',
+      confirmLabel: 'Phase ändern',
     });
     if (!confirmed) return;
   }
@@ -1663,16 +1859,24 @@ function wireTopControls() {
   const sendButton = document.getElementById('sendSummaryEmailBtn');
   sendButton?.addEventListener('click', () => sendSummaryEmail(sendButton));
 
-  const allButton = document.getElementById('toggleAllRiddlesBtn');
-  allButton?.addEventListener('click', () => {
-    ui.allRiddlesOpen = !ui.allRiddlesOpen;
-    renderPanelVisibility();
+  document.querySelectorAll('[data-panel-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const panel = document.getElementById(button.dataset.panelTarget);
+      if (!panel) return;
+      panel.open = !panel.open;
+      updateDrawerButtons();
+    });
   });
 
-  const emergencyButton = document.getElementById('toggleEmergencyBtn');
-  emergencyButton?.addEventListener('click', () => {
-    ui.emergencyOpen = !ui.emergencyOpen;
-    renderPanelVisibility();
+  for (const panelId of ['bookingDetails', 'allRiddlesPanel', 'diagnosticsDetails', 'maintenanceHintEditor']) {
+    document.getElementById(panelId)?.addEventListener('toggle', updateDrawerButtons);
+  }
+
+  document.querySelectorAll('.booking-details > summary, .section-summary').forEach((summary) => {
+    summary.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      window.setTimeout(updateDrawerButtons, 0);
+    });
   });
 
   const bookingSelect = document.getElementById('bookingSelect');
@@ -2102,6 +2306,9 @@ function wireDiagnostics() {
     document.querySelectorAll('.diagnostics-node-filter').forEach((input) => { input.checked = false; });
     restartDiagnosticsForFilters();
   });
+  document.querySelectorAll('[data-service-restart]').forEach((button) => {
+    button.addEventListener('click', () => restartSystemService(button.dataset.serviceRestart, button).catch(() => {}));
+  });
   document.querySelectorAll('.diagnostics-level-row').forEach((row) => {
     const node = row.dataset.logLevelNode;
     const select = row.querySelector('.diagnostics-level-select');
@@ -2118,13 +2325,18 @@ function updateFastTimers() {
   const riddleTimerValue = document.getElementById('riddleTimerValue');
   const prepareCounter = document.getElementById('prepareCounterValue');
   if (timerValue) timerValue.textContent = fmtGameTime(readLocalTimer());
-  if (riddleTimerValue) riddleTimerValue.textContent = fmtTime(readLocalRiddleTimer());
+  if (riddleTimerValue) {
+    riddleTimerValue.textContent = Number(state.game.phase || 0) >= 3 && state.game.current_riddle_name
+      ? fmtTime(readLocalRiddleTimer())
+      : '—';
+  }
   if (prepareCounter && Number(state.game.phase || 0) === 2) {
     prepareCounter.textContent = String(Math.floor(Date.now() / 1000) % 11);
   }
 }
 
 installInteractionGuard();
+wireConfirmationDialog();
 wireTopControls();
 wireHintEditor();
 wireDiagnostics();

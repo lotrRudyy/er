@@ -217,8 +217,8 @@ void NodeCore::begin(const NodeCoreConfig& cfg) {
   logger_.begin(&mqtt_.client(), logOpts);
   logger_.setTimestampSource(this);
 
-  // Default runtime level: DBG (most verbose). Can be changed at runtime via <node>/log/level.
-  minLogRank_ = 0;
+  // Keep routine telemetry off the wire unless an operator explicitly enables it.
+  minLogRank_ = 2;
   topicLogLevel_ = topic(cfg_.nodeId, "log/level");
 
   ota_.begin(cfg_.ota, &logger_);

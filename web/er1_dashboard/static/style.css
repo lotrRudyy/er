@@ -681,6 +681,26 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   min-width: 72px;
 }
 
+.selected-game-details-row > td {
+  padding: 0 10px 12px;
+  border-top: 0;
+  background: rgba(197, 139, 42, 0.08);
+}
+
+.inline-game-details {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+
+.inline-game-details > .game-viewer-panel {
+  width: 100%;
+  margin: 0;
+}
+
 
 .riddles-halves {
   display: grid;
@@ -2684,4 +2704,724 @@ button:hover,
   .knocking-group { gap: 3px; padding: 4px; }
   .current-riddle-card .knocking-dot { width: 23px; height: 23px; }
   .current-riddle-controls .riddle-time-edit { flex-basis: 100%; }
+}
+
+/* Control-room dashboard */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+body.dashboard-body {
+  min-width: 0;
+  min-height: 100vh;
+  padding: 8px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 48% -20%, rgba(141, 92, 30, 0.12), transparent 46%),
+    #0a0907;
+}
+
+.dashboard-v5 {
+  width: min(100%, 2560px);
+  min-height: calc(100vh - 16px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.dashboard-v5 .panel {
+  border: 1px solid rgba(219, 169, 91, 0.28);
+  border-radius: 9px;
+  background:
+    linear-gradient(135deg, rgba(255, 242, 217, 0.025), transparent 55%),
+    rgba(22, 18, 14, 0.97);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.dashboard-v5 button,
+.dashboard-v5 .nav-button {
+  min-height: 36px;
+  border-color: rgba(239, 222, 196, 0.28);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(54, 48, 41, 0.96), rgba(29, 25, 22, 0.98));
+  color: var(--text);
+  font-weight: 700;
+}
+
+.dashboard-v5 button:hover:not(:disabled),
+.dashboard-v5 .nav-button:hover {
+  border-color: #e3a83e;
+  box-shadow: 0 0 0 1px rgba(227, 168, 62, 0.28);
+}
+
+.dashboard-v5 button:focus-visible,
+.dashboard-v5 summary:focus-visible,
+.dashboard-v5 input:focus-visible,
+.dashboard-v5 select:focus-visible {
+  outline: 2px solid #f2ae32;
+  outline-offset: 2px;
+}
+
+.dashboard-v5 button:disabled { opacity: 0.42; }
+
+.node-status-panel { padding: 6px; }
+
+.node-status-bar {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.node-status-card {
+  min-width: 0;
+  min-height: 52px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 7px 11px 7px 28px;
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(9, 8, 7, 0.55);
+}
+
+.node-status-card::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--red-line);
+  box-shadow: 0 0 10px rgba(226, 118, 103, 0.58);
+}
+
+.node-status-card.node-on::before {
+  background: #58ed72;
+  box-shadow: 0 0 10px rgba(88, 237, 114, 0.62);
+}
+
+.node-status-card strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-status-state {
+  color: var(--red-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.node-on .node-status-state { color: #70f58a; }
+
+.dashboard-summary-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.9fr) minmax(380px, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.summary-card { min-width: 0; padding: 14px 16px; }
+
+.card-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #f7ede0;
+}
+
+.phase-card-heading { flex-wrap: wrap; }
+
+.database-viewer-button {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid #8a672f;
+  border-radius: 6px;
+  color: #f0cf8d;
+  font: 700 11px/1 Arial, sans-serif;
+  text-decoration: none;
+}
+
+.database-viewer-button:hover {
+  border-color: #dfa336;
+  background: rgba(137, 91, 24, 0.24);
+  color: #fff0ce;
+}
+
+.card-heading h2,
+.details-heading,
+.summary-title {
+  margin: 0;
+  font: 700 20px/1.05 Georgia, 'Times New Roman', serif;
+}
+
+.card-icon { color: #f4eadb; font: 700 20px/1 Arial, sans-serif; }
+
+.phase-display {
+  margin-top: 14px;
+  color: #f8eee1;
+  font: 700 clamp(28px, 2.2vw, 42px)/1.05 Georgia, 'Times New Roman', serif;
+}
+
+.summary-muted {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.phase-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.phase-action-grid button { min-height: 48px; font-size: 13px; }
+
+.phase-action-grid .is-current-phase,
+.phase-action-grid .start-game-button:not(:disabled),
+.phase-action-grid .start-game-button.is-current-phase {
+  border-color: #df9f28;
+  background: linear-gradient(180deg, #efba55, #d99725);
+  color: #1b1206;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  opacity: 1;
+}
+
+.time-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-top: 17px;
+}
+
+.time-summary-grid > div { min-width: 0; padding: 0 18px; }
+.time-summary-grid > div:first-child { padding-left: 0; border-right: 1px solid var(--line); }
+.time-summary-grid > div:last-child { padding-right: 0; }
+.summary-label { color: var(--muted); font-size: 13px; }
+
+.primary-time,
+.secondary-time {
+  margin-top: 5px;
+  color: #fff5e8;
+  font: 700 clamp(38px, 3.5vw, 62px)/1 Georgia, 'Times New Roman', serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.secondary-time { color: #efad37; }
+
+.prepare-countdown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.prepare-countdown strong { color: #efad37; font-size: 28px; }
+
+.booking-details { padding: 0; overflow: hidden; }
+
+.dashboard-v5 .booking-details {
+  position: static;
+  z-index: auto;
+}
+
+.booking-details > summary,
+.section-summary {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.booking-details > summary::-webkit-details-marker,
+.section-summary::-webkit-details-marker { display: none; }
+
+.booking-details > summary .card-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.details-compact-value,
+.summary-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details-chevron,
+.drawer-chevron {
+  color: #f5eadb;
+  font-size: 26px;
+  line-height: 1;
+  transition: transform 0.16s ease;
+}
+
+details[open] > summary .details-chevron { transform: rotate(90deg); }
+
+.booking-details-body {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 10px;
+  padding: 10px 14px 13px;
+  border-top: 1px solid var(--line);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.field-label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.booking-details-body .booking-selected-info,
+.booking-details-body .test-booking-fields,
+.booking-details-body .booking-action-row,
+.booking-details-body .summary-email-feedback { grid-column: 1 / -1; }
+.booking-details-body .booking-select { margin: 0; min-height: 35px; }
+.booking-selected-info { min-height: 17px; margin: 0; }
+.test-booking-fields { margin: 0; }
+
+.booking-action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.booking-action-row button { width: 100%; margin: 0; }
+.booking-apply-btn {
+  border-color: #df9f28 !important;
+  background: linear-gradient(180deg, #efba55, #d99725) !important;
+  color: #1b1206 !important;
+}
+
+.global-feedback,
+.start-assignment-status,
+.header-feedback { margin: 0; }
+
+.global-feedback:not(:empty),
+.start-assignment-status:not(.hidden),
+.header-feedback:not(:empty) {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(22, 18, 14, 0.98);
+}
+
+.game-drawer-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.game-drawer-strip > button {
+  min-width: 0;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  padding: 9px 13px;
+  text-align: left;
+}
+
+.drawer-title { font: 700 17px/1.1 Georgia, 'Times New Roman', serif; }
+.drawer-value { min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-chevron { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.game-drawer-strip > button.is-expanded { border-color: #dfa336; background: rgba(137, 91, 24, 0.24); }
+.game-drawer-strip > button.is-expanded .drawer-chevron { transform: rotate(90deg); }
+
+.dashboard-main-grid {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.current-riddles-panel,
+.main-riddles-panel { min-width: 0; padding: 0; overflow: hidden; }
+
+.current-riddles-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.current-riddles-grid > :only-child { grid-column: 1 / -1; }
+
+.current-riddle-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 18px 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.current-riddle-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.current-riddle-card-head h2 {
+  margin: 8px 0 0;
+  font: 700 clamp(38px, 4vw, 62px)/0.95 Georgia, 'Times New Roman', serif;
+}
+
+.current-card-status .status-badge { padding: 7px 13px; font-size: 13px; }
+
+.current-riddle-facts {
+  display: grid;
+  grid-template-columns: 180px minmax(260px, 1fr) minmax(190px, 0.7fr);
+  gap: 8px;
+}
+
+.current-riddle-facts > div {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-height: 64px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.current-riddle-facts span { color: var(--muted); font-size: 11px; }
+.current-riddle-facts strong,
+.current-fact-content { min-width: 0; color: var(--text); font-size: 14px; font-weight: 700; }
+.current-card-time { color: #efad37 !important; font: 700 24px/1 Georgia, serif !important; }
+
+.current-riddle-controls { display: flex; gap: 9px; }
+.current-riddle-controls .riddle-actions { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 9px; width: min(100%, 760px); }
+.current-riddle-controls .riddle-actions button { min-height: 54px; font: 700 18px/1 Georgia, serif; }
+.current-riddle-controls .solve-btn.active { border-color: #4bd76a; background: linear-gradient(180deg, #248b3a, #126225); color: white; }
+.current-riddle-controls .skip-btn { border-color: #dc9c28; background: linear-gradient(180deg, #efb64b, #ca8619); color: #1b1206; }
+.current-riddle-card > .hint-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.hint-template-content { min-width: 0; }
+.current-riddle-card .hint-template-heading { margin-bottom: 8px; color: #f7ede0; font: 700 17px/1.1 Georgia, serif; }
+.current-riddle-card .hint-template-heading span { color: var(--muted); font: 600 11px/1 Arial, sans-serif; }
+
+.current-riddle-card .hint-template-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.current-riddle-card .hint-template-list li {
+  min-width: 0;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.current-riddle-card .hint-template-list li > span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #d99b29;
+  border-radius: 50%;
+  color: #f4d18b;
+  font: 700 15px/1 Georgia, serif;
+}
+
+.current-riddle-card .hint-template-list p { margin: 0; font-size: 12px; line-height: 1.3; }
+
+.current-riddle-card .hint-given-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.current-riddle-card .hint-given-label { grid-column: 1 / -1; font: 700 16px/1.1 Georgia, serif; white-space: normal; }
+.current-riddle-card .hint-counter-value { align-self: center; color: #fff7e9; font: 700 64px/1 Georgia, serif; text-align: center; }
+.current-riddle-card .hint-counter-buttons { display: grid; grid-template-rows: 1fr 1fr; gap: 7px; }
+.current-riddle-card .hint-counter-btn { width: 100%; min-height: 54px; padding: 0; font-size: 35px; line-height: 1; }
+.current-riddle-card .hint-counter-btn:first-child { border-color: #dfa336; background: #e4a438; color: #1b1206; }
+
+.preparation-card {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.36fr);
+  align-items: center;
+  min-height: 210px;
+}
+
+.preparation-card h2 { margin: 10px 0 8px; font: 700 38px/1 Georgia, serif; }
+.preparation-card p { max-width: 850px; color: var(--muted); line-height: 1.45; }
+.preparation-start-button { min-height: 72px !important; border-color: #dfa336 !important; background: linear-gradient(180deg, #efba55, #d99725) !important; color: #1b1206 !important; font: 700 20px/1 Georgia, serif; }
+
+.main-riddles-panel > .table-scroll-wrap { border-top: 1px solid var(--line); }
+.dashboard-v5 .full-riddles-table { width: 100%; min-width: 1180px; table-layout: fixed; }
+.dashboard-v5 .full-riddles-table th,
+.dashboard-v5 .full-riddles-table td { height: 29px; max-height: none; padding: 4px 8px; font-size: 11px; vertical-align: middle; overflow: hidden; }
+.dashboard-v5 .full-riddles-table th { color: #f3e9dc; background: rgba(255, 255, 255, 0.055); }
+.dashboard-v5 .full-riddles-table th:nth-child(1) { width: 13%; }
+.dashboard-v5 .full-riddles-table th:nth-child(2) { width: 9%; }
+.dashboard-v5 .full-riddles-table th:nth-child(3) { width: 10%; }
+.dashboard-v5 .full-riddles-table th:nth-child(4) { width: 16%; }
+.dashboard-v5 .full-riddles-table th:nth-child(5) { width: 42%; }
+.dashboard-v5 .full-riddles-table th:nth-child(6) { width: 10%; }
+.dashboard-v5 .full-riddles-table .riddle-info-cell { max-height: 25px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dashboard-v5 .full-riddles-table .riddle-actions { display: flex; flex-wrap: nowrap; gap: 4px; }
+.dashboard-v5 .full-riddles-table .riddle-actions button,
+.dashboard-v5 .full-riddles-table .riddle-time-save { min-height: 23px; padding: 2px 6px; font-size: 9px; white-space: nowrap; }
+.dashboard-v5 .full-riddles-table .riddle-time-input { width: 72px; min-height: 23px; padding: 2px 5px; font-size: 10px; }
+.riddle-hint-summary { font-weight: 700; font-variant-numeric: tabular-nums; }
+.dashboard-v5 .current-riddle-row td { background: rgba(150, 102, 25, 0.30); }
+
+.utility-panels-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 8px; }
+
+.dashboard-v5 #diagnosticsDetails,
+.dashboard-v5 #maintenanceHintEditor {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  width: auto;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.dashboard-v5 #diagnosticsDetails .diagnostics-body,
+.dashboard-v5 #maintenanceHintEditor .hint-editor-body { max-height: none; overflow: visible; }
+.dashboard-v5 .diagnostics-body { padding: 11px; }
+
+.node-table-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.node-table-heading h2 { margin: 0; font: 700 18px/1.1 Georgia, serif; }
+.node-table-heading p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.node-table-wrap { overflow-x: auto; }
+.node-diagnostics-table { min-width: 760px; }
+.node-diagnostics-table th,
+.node-diagnostics-table td { padding: 6px 8px; font-size: 11px; }
+.node-diagnostics-table th { color: var(--muted); background: rgba(255, 255, 255, 0.04); }
+.node-table-status { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.node-table-status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--red-line); }
+.node-table-status.is-online { color: #70f58a; }
+.node-table-status.is-online::before { background: #58ed72; }
+.node-table-status.is-offline { color: var(--red-text); }
+.node-diagnostics-table .node-reboot-btn { min-height: 27px; padding: 3px 8px; font-size: 10px; }
+.node-reboot-all { width: auto; min-height: 36px; margin: 0; border-color: #dfa336 !important; background: #d79625 !important; color: #1b1206 !important; }
+
+.service-restart-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.service-restart-section h2 { margin: 0; font: 700 16px/1.1 Georgia, serif; }
+.service-restart-section p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.service-restart-actions { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px; }
+.service-restart-actions button { min-height: 36px; border-color: #b97031; color: #ffd9b5; }
+
+.manual-controls-details { border: 1px solid var(--line); border-radius: 7px; }
+.manual-controls-details > summary { padding: 9px 11px; cursor: pointer; font-weight: 700; }
+.manual-controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 10px; border-top: 1px solid var(--line); }
+.manual-controls-grid h3 { margin: 0 0 8px; }
+.manual-controls-grid .emergency-controls-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.manual-controls-grid #locksGrid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+.confirm-dialog {
+  width: min(480px, calc(100vw - 30px));
+  padding: 22px;
+  overflow: visible;
+  border: 1px solid rgba(226, 170, 76, 0.45);
+  border-radius: 13px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(212, 148, 44, 0.10), transparent 55%),
+    #1b1713;
+  color: var(--text);
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  text-align: center;
+}
+
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.76); backdrop-filter: blur(2px); }
+.dialog-close { position: absolute; top: 8px; right: 8px; min-width: 32px; min-height: 32px !important; padding: 0; border: 0; background: transparent !important; color: var(--muted); font-size: 22px; }
+.confirm-symbol { width: 48px; height: 48px; display: grid; place-items: center; margin: 0 auto 14px; border: 3px solid #e5a438; border-radius: 50%; color: #efb24a; font: 700 27px/1 Georgia, serif; }
+.confirm-dialog h2 { margin: 0; font: 700 24px/1.15 Georgia, 'Times New Roman', serif; }
+.confirm-dialog p { margin: 13px auto 20px; color: var(--muted); line-height: 1.45; white-space: pre-line; }
+.confirm-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.confirm-dialog-actions button { min-height: 48px; }
+.confirm-primary { border-color: #f0ad32 !important; background: linear-gradient(180deg, #f0bc5a, #d99725) !important; color: #1b1206 !important; box-shadow: 0 0 0 2px rgba(240, 173, 50, 0.24); }
+.confirm-shortcuts { margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+
+.dashboard-game-mode .dashboard-summary-grid { grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.55fr); }
+.dashboard-game-mode .summary-card { padding: 10px 14px; }
+.dashboard-game-mode .phase-display { margin-top: 7px; font-size: clamp(27px, 2.3vw, 40px); }
+.dashboard-game-mode .summary-muted { margin-top: 4px; }
+.dashboard-game-mode .phase-action-grid { margin-top: 9px; }
+.dashboard-game-mode .phase-action-grid button { min-height: 40px; }
+.dashboard-game-mode .time-summary-card { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 24px; align-items: center; }
+.dashboard-game-mode .time-summary-card > .card-heading { align-self: start; }
+.dashboard-game-mode .time-summary-grid { margin: 0; }
+.dashboard-game-mode .primary-time,
+.dashboard-game-mode .secondary-time { font-size: clamp(34px, 3vw, 52px); }
+.dashboard-game-mode #bookingDetails:not([open]),
+.dashboard-game-mode #allRiddlesPanel:not([open]),
+.dashboard-game-mode #diagnosticsDetails:not([open]),
+.dashboard-game-mode #maintenanceHintEditor:not([open]) { display: none; }
+.dashboard-game-mode #bookingDetails[open] { grid-column: 1 / -1; }
+.dashboard-game-mode #allRiddlesPanel > summary,
+.dashboard-game-mode #diagnosticsDetails > summary,
+.dashboard-game-mode #maintenanceHintEditor > summary { display: none; }
+.dashboard-game-mode .utility-panels-grid { display: contents; }
+
+@media (min-width: 1600px) and (max-height: 980px) {
+  .dashboard-v5 { gap: 6px; }
+  .node-status-card { min-height: 43px; padding-top: 5px; padding-bottom: 5px; }
+  .summary-card { padding: 10px 13px; }
+  .phase-display { margin-top: 8px; font-size: 29px; }
+  .summary-muted { margin-top: 4px; }
+  .phase-action-grid { margin-top: 10px; gap: 6px; }
+  .phase-action-grid button { min-height: 40px; }
+  .time-summary-grid { margin-top: 10px; }
+  .primary-time,
+  .secondary-time { font-size: 43px; }
+  .booking-details > summary,
+  .section-summary { min-height: 46px; padding: 8px 12px; }
+  .booking-details-body { padding: 7px 12px 9px; gap: 5px 8px; }
+  .dashboard-v5 .full-riddles-table th,
+  .dashboard-v5 .full-riddles-table td { height: 25px; padding-top: 2px; padding-bottom: 2px; }
+  .game-drawer-strip > button { min-height: 52px; padding-top: 7px; padding-bottom: 7px; }
+  .current-riddle-card { padding: 13px 16px; gap: 7px; }
+  .current-riddle-card-head h2 { font-size: 40px; }
+  .current-riddle-facts > div { min-height: 52px; padding: 6px 9px; }
+  .current-riddle-controls .riddle-actions button { min-height: 46px; }
+  .current-riddle-card .hint-template-list li { min-height: 52px; padding: 6px 8px; }
+  .current-riddle-card .hint-counter-btn { min-height: 46px; }
+}
+
+@media (max-width: 1599px) {
+  .node-status-bar { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .dashboard-summary-grid { grid-template-columns: 1.15fr 0.85fr 1fr; }
+  .phase-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .current-riddle-card .hint-template-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-v5 .full-riddles-table { min-width: 1080px; }
+}
+
+@media (max-width: 1100px) {
+  .dashboard-summary-grid { grid-template-columns: 1fr 1fr; }
+  .booking-details { grid-column: 1 / -1; }
+  .game-drawer-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .current-riddle-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .current-riddle-facts > :last-child { grid-column: 1 / -1; }
+  .current-riddle-card > .hint-panel { grid-template-columns: minmax(0, 1fr) 210px; }
+  .utility-panels-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  body.dashboard-body { padding: 6px; }
+  .dashboard-v5 { width: 100%; min-height: calc(100vh - 12px); gap: 7px; }
+  .node-status-panel { padding: 5px; }
+  .node-status-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+  .node-status-card { min-height: 39px; padding: 4px 5px 4px 19px; }
+  .node-status-card::before { left: 7px; width: 7px; height: 7px; }
+  .node-status-card strong { font-size: 9px; }
+  .node-status-state { font-size: 9px; }
+  .dashboard-summary-grid,
+  .dashboard-game-mode .dashboard-summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-game-mode .time-summary-card { display: block; }
+  .summary-card { padding: 12px; }
+  .phase-display { font-size: 31px; }
+  .phase-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .phase-action-grid button { min-height: 52px; font-size: 14px; }
+  .phase-action-grid .start-game-button { min-height: 62px; font-size: 17px; }
+  .time-summary-grid { margin-top: 12px; }
+  .time-summary-grid > div { padding: 0 10px; }
+  .primary-time,
+  .secondary-time { font-size: 32px; }
+  .booking-details { grid-column: auto; }
+  .booking-details-body { grid-template-columns: minmax(0, 1fr); }
+  .booking-details-body > * { grid-column: auto !important; }
+  .booking-action-row { grid-template-columns: 1fr; }
+  .game-drawer-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .game-drawer-strip > button { min-height: 58px; padding: 8px 10px; }
+  .drawer-title { font-size: 14px; }
+  .current-riddles-grid { grid-template-columns: minmax(0, 1fr); }
+  .current-riddles-grid > :only-child { grid-column: auto; }
+  .current-riddle-card { padding: 13px; }
+  .current-riddle-card-head { align-items: flex-start; flex-direction: column; gap: 9px; }
+  .current-riddle-card-head h2 { font-size: 38px; }
+  .current-riddle-facts { grid-template-columns: minmax(0, 1fr); }
+  .current-riddle-facts > :last-child { grid-column: auto; }
+  .current-riddle-controls .riddle-actions { grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .current-riddle-controls .riddle-actions button { min-height: 54px; }
+  .current-riddle-card > .hint-panel { grid-template-columns: minmax(0, 1fr); }
+  .current-riddle-card .hint-template-list { grid-template-columns: minmax(0, 1fr); }
+  .current-riddle-card .hint-given-block { grid-template-columns: minmax(0, 1fr) 82px; }
+  .preparation-card { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .preparation-card h2 { font-size: 31px; }
+  .preparation-start-button { min-height: 68px !important; }
+  .table-scroll-wrap { overflow-x: auto; }
+  .utility-panels-grid { grid-template-columns: minmax(0, 1fr); }
+  .manual-controls-grid { grid-template-columns: minmax(0, 1fr); }
+  .service-restart-section { align-items: stretch; flex-direction: column; }
+  .service-restart-actions { grid-template-columns: minmax(0, 1fr); }
+  .confirm-dialog { padding: 20px 15px 16px; }
+  .confirm-dialog-actions { grid-template-columns: minmax(0, 1fr); }
+  .confirm-dialog-actions button { min-height: 54px; }
+  .confirm-primary { grid-row: 1; }
+  .confirm-shortcuts { display: none; }
 }

@@ -209,7 +209,8 @@ def _import_paramiko():
 def _paramiko_connect(cfg: dict[str, Any], *, timeout: int | None = None):
     paramiko = _import_paramiko()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     use_password = bool(str(cfg.get("password") or ""))
     try:
         client.connect(
@@ -318,9 +319,18 @@ def _run_process(cmd: list[str], *, timeout: int, label: str) -> subprocess.Comp
 
 _load_env_files()
 
+
+def _default_dashboard_mqtt_client_id(port: int) -> str:
+    return "er1_dashboard" if port == 8080 else f"er1_dashboard_{port}"
+
+
 BROKER_HOST = os.getenv("ER1_MQTT_HOST", "192.168.0.10")
 BROKER_PORT = int(os.getenv("ER1_MQTT_PORT", "1883"))
-MQTT_CLIENT_ID = os.getenv("ER1_DASHBOARD_CLIENT_ID", "er1_dashboard")
+DASHBOARD_PORT = int(os.getenv("ER1_DASHBOARD_PORT", "8080"))
+MQTT_CLIENT_ID = os.getenv(
+    "ER1_DASHBOARD_CLIENT_ID",
+    _default_dashboard_mqtt_client_id(DASHBOARD_PORT),
+)
 HINTS_PATH = BASE_DIR / "data" / "dashboard_hint_counts.json"
 HINT_TEMPLATE_DEFAULTS_PATH = BASE_DIR / "hint_templates.defaults.json"
 HINT_TEMPLATE_RUNTIME_PATH = BASE_DIR / "data" / "hint_templates.json"
@@ -822,6 +832,10 @@ TOPIC_GAME_CMD = "game/cmd"
 TOPIC_LIGHTING_CMD = "lighting/cmd"
 TOPIC_MAGLOCK_CMD = "maglock/cmd"
 TOPIC_STAR_SKY_CMD = "star_sky/cmd"
+SERVICE_RESTART_TARGETS = {
+    "game_master": {"label": "Game Master", "unit": "game_master.service"},
+    "dashboard": {"label": "Dashboard", "unit": "er1-web.service"},
+}
 
 PHASE_META: dict[int, dict[str, Any]] = {
     0: {"name": "standby", "active": (), "solved": ()},
@@ -1848,13 +1862,36 @@ class DashboardStore:
         out = []
         for node_id, label in NODE_LABELS:
             last = node_last_hb.get(node_id)
-            online = (last is not None) and (now_mono - last <= 15.0)
+            last_seen_s = max(0.0, now_mono - last) if last is not None else None
+            online = last_seen_s is not None and last_seen_s <= 15.0
             hb = node_states.get(node_id, {}).get("hb", {})
             uptime = hb.get("up") if isinstance(hb, dict) else None
+            firmware = str(hb.get("fw") or "").strip() if isinstance(hb, dict) else ""
+            error_count = hb.get("err_cnt") if isinstance(hb, dict) else None
+            error_code = str(hb.get("err_code") or "").strip() if isinstance(hb, dict) else ""
+            has_error = bool(error_code and error_code not in {"0", "none", "NONE"})
+            try:
+                has_error = has_error or int(error_count or 0) > 0
+            except (TypeError, ValueError):
+                has_error = has_error or bool(error_count)
+            error = ""
+            if has_error:
+                error = error_code or "Fehler"
+                if error_count not in {None, "", 0, "0"}:
+                    error = f"{error} ({error_count})"
             status = "online" if online else "offline"
             if online and isinstance(uptime, (int, float)):
                 status = f"online ({int(uptime)}s)"
-            out.append({"id": node_id, "label": label, "online": online, "status": status})
+            out.append({
+                "id": node_id,
+                "label": label,
+                "online": online,
+                "status": status,
+                "last_seen_s": round(last_seen_s, 1) if last_seen_s is not None else None,
+                "firmware": firmware,
+                "error": error,
+                "uptime_s": int(uptime) if isinstance(uptime, (int, float)) else None,
+            })
         return out
 
     def _build_lock_summary(self, locks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2303,6 +2340,7 @@ node_log_buffer = NodeLogBuffer()
 _last_requested_log_levels: dict[str, dict[str, str]] = {}
 _last_requested_log_levels_lock = threading.RLock()
 _log_level_publish_locks = {node: threading.Lock() for node in LOG_NODE_IDS}
+_default_log_levels_published = False
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"), static_folder=str(BASE_DIR / "static"))
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
 if hasattr(mqtt_client, "suppress_exceptions"):
@@ -2332,6 +2370,17 @@ def _publish_requested_log_level(node: str, level: str) -> dict[str, str] | None
         if not mqtt_publish(f"{node}/log/level", level):
             return None
         return _remember_requested_log_level(node, level)
+
+
+def _publish_default_log_levels(client: mqtt.Client) -> bool:
+    queued = []
+    for node in LOG_NODE_IDS:
+        info = client.publish(f"{node}/log/level", "WRN", qos=0, retain=True)
+        success = int(getattr(info, "rc", -1)) == int(getattr(mqtt, "MQTT_ERR_SUCCESS", 0))
+        queued.append(success)
+        if success:
+            _remember_requested_log_level(node, "WRN")
+    return all(queued)
 
 
 
@@ -3234,6 +3283,7 @@ def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
 
 
 def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+    global _default_log_levels_published
     for topic, qos in [
         (TOPIC_DASHBOARD_STATE, 0),
         (TOPIC_GAME_STATE, 0),
@@ -3244,6 +3294,10 @@ def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any,
         ("lighting/mosfet/+/state", 0),
     ]:
         client.subscribe(topic, qos=qos)
+    if not _default_log_levels_published:
+        _default_log_levels_published = _publish_default_log_levels(client)
+        if not _default_log_levels_published:
+            LOG.warning("Default WRN log level could not be queued for every node")
 
 
 def _handle_mqtt_message(msg: mqtt.MQTTMessage) -> None:
@@ -5003,6 +5057,57 @@ def api_node_reboot() -> Any:
     })
 
 
+def _schedule_service_restart(target: str) -> dict[str, str]:
+    config = SERVICE_RESTART_TARGETS.get(target)
+    if config is None:
+        raise ValueError("Unbekannter Systemdienst.")
+    _run_process(
+        [
+            "/usr/bin/sudo",
+            "-n",
+            "/usr/bin/systemd-run",
+            "--quiet",
+            "--collect",
+            "--on-active=1s",
+            "/usr/bin/systemctl",
+            "restart",
+            config["unit"],
+        ],
+        timeout=8,
+        label=f"Neustart von {config['label']}",
+    )
+    return config
+
+
+@app.post("/api/service-restart")
+def api_service_restart() -> Any:
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    allowed_keys = {"target", "confirmed", "expected_phase", "expected_run_id"}
+    if set(data) - allowed_keys:
+        return jsonify({"ok": False, "error": "Der Dienstneustart enthält unbekannte Felder."}), 400
+    if data.get("confirmed") is not True:
+        return jsonify({"ok": False, "error": "Der Dienstneustart muss ausdrücklich bestätigt werden."}), 400
+
+    target = str(data.get("target") or "").strip()
+    try:
+        config = _schedule_service_restart(target)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        LOG.error("Could not schedule service restart target=%s: %s", target, exc)
+        return jsonify({"ok": False, "error": f"Der Neustart konnte nicht eingeplant werden: {exc}"}), 503
+    return jsonify({
+        "ok": True,
+        "target": target,
+        "service": config["unit"],
+        "label": config["label"],
+        "scheduled": True,
+    })
+
+
 @app.post("/api/hints")
 def api_set_hint_count() -> Any:
     data = request.get_json(force=True) or {}
@@ -5669,4 +5774,4 @@ mqtt_client.loop_start()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("ER1_DASHBOARD_PORT", "8080")), debug=False)
+    app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
