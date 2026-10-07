@@ -54,6 +54,10 @@ const DIAGNOSTICS_BACKLOG_PAGE_BUDGET = 4;
 const DIAGNOSTICS_BACKLOG_BUDGET_PAUSE_MS = 400;
 const STATE_FETCH_TIMEOUT_MS = 1000;
 const STATE_RETRY_DELAY_MS = 100;
+const MUTATION_ATTEMPT_TIMEOUT_MS = 1500;
+const MUTATION_RESOLUTION_TIMEOUT_MS = 10000;
+const OPERATION_STATUS_TIMEOUT_MS = 1000;
+const PENDING_OPERATIONS_KEY = 'er1-dashboard-pending-operations-v1';
 const diagnostics = {
   after: 0,
   newestSeq: 0,
@@ -89,6 +93,7 @@ let hintEditorDraft = null;
 let hintEditorDirty = false;
 let hintEditorSignature = '';
 let confirmationResolver = null;
+let mutationQueue = Promise.resolve();
 
 let localTimerBaseElapsed = 0;
 let localTimerSyncedAt = 0;
@@ -106,13 +111,7 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    cache: 'no-store',
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-
+async function readApiResponse(response) {
   const text = await response.text();
   let data = {};
   try {
@@ -120,21 +119,357 @@ async function api(path, options = {}) {
   } catch (_error) {
     data = {};
   }
+  return { response, text, data };
+}
 
-  if (!response.ok || data.ok === false) {
-    let message = data.error || text || `HTTP ${response.status}`;
-    if (response.status === 409 && !/aktualisieren/i.test(message)) {
+function apiResult({ response, text, data }) {
+  const status = Number(response?.status || 0);
+  const ok = Boolean(response?.ok);
+  if (!ok || data.ok === false) {
+    let message = data.error || text || `HTTP ${status}`;
+    if (status === 409 && !/aktualisieren/i.test(message) && data.operation_status !== 'uncertain') {
       message += ' Bitte die Ansicht aktualisieren und die Aktion erneut prüfen.';
     }
     if (Number.isInteger(data.command_count) && Number.isInteger(data.queued_count)) {
       message += ` MQTT-Teilbefehle: ${data.queued_count}/${data.command_count} eingereiht; keine Rücknahme und keine Gerätebestätigung.`;
     }
     const error = new Error(message);
-    error.status = response.status;
+    error.status = status;
     error.data = data;
     throw error;
   }
   return data;
+}
+
+function storedPendingOperations() {
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(PENDING_OPERATIONS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.path) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function writePendingOperations(items) {
+  try {
+    if (items.length) window.sessionStorage.setItem(PENDING_OPERATIONS_KEY, JSON.stringify(items));
+    else window.sessionStorage.removeItem(PENDING_OPERATIONS_KEY);
+  } catch (_error) {
+    // The durable server ledger still protects the current request when storage is unavailable.
+  }
+}
+
+function rememberPendingOperation(operation) {
+  const remaining = storedPendingOperations().filter((item) => item.id !== operation.id);
+  writePendingOperations([...remaining, operation]);
+}
+
+function forgetPendingOperation(operationId) {
+  writePendingOperations(storedPendingOperations().filter((item) => item.id !== operationId));
+}
+
+async function fetchWithDeadline(path, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(path, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function operationStatus(operationId) {
+  const response = await fetchWithDeadline(`/api/operations/${encodeURIComponent(operationId)}`, {
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  }, OPERATION_STATUS_TIMEOUT_MS);
+  return readApiResponse(response);
+}
+
+function createOperationId() {
+  if (typeof window.crypto?.randomUUID === 'function') return window.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof window.crypto?.getRandomValues === 'function') {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function completedOperationResult(statusData) {
+  const status = Number(statusData.http_status || 500);
+  const data = statusData.result && typeof statusData.result === 'object' ? statusData.result : {};
+  return apiResult({
+    response: { status, ok: status >= 200 && status < 300 },
+    text: JSON.stringify(data),
+    data,
+  });
+}
+
+function unknownOperationError(operationId, message) {
+  const error = new Error(message || 'Der Ausgang der Aktion ist noch nicht eindeutig. Sie wird nicht automatisch wiederholt.');
+  error.data = { operation_id: operationId, operation_status: 'uncertain' };
+  return error;
+}
+
+function operationRequestOptions(operation) {
+  return {
+    cache: 'no-store',
+    method: operation.method,
+    body: operation.body || undefined,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(operation.headers || {}),
+      'Idempotency-Key': operation.id,
+    },
+  };
+}
+
+function canonicalOperationPath(path) {
+  const proxyPrefix = '/admin/game-master/proxy';
+  const value = String(path || '');
+  return value.startsWith(`${proxyPrefix}/api/`) ? value.slice(proxyPrefix.length) : value;
+}
+
+async function prepareOperation(operation) {
+  const path = `/api/operations/${encodeURIComponent(operation.id)}`;
+  const body = JSON.stringify({
+    method: operation.method,
+    path: operation.path,
+    body: operation.body,
+  });
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetchWithDeadline(path, {
+        cache: 'no-store',
+        method: 'PUT',
+        body,
+        headers: { 'Content-Type': 'application/json' },
+      }, MUTATION_ATTEMPT_TIMEOUT_MS);
+      const result = await readApiResponse(response);
+      if (response.ok && ['prepared', 'in_progress', 'completed'].includes(result.data.operation_status)) {
+        return result.data.operation_status;
+      }
+      return apiResult(result);
+    } catch (error) {
+      lastError = error;
+      if (error?.status && error.status < 500) {
+        forgetPendingOperation(operation.id);
+        throw error;
+      }
+      try {
+        const statusResult = await operationStatus(operation.id);
+        if (statusResult.data.operation_status !== 'not_found') {
+          return apiResult(statusResult);
+        }
+      } catch (statusError) {
+        if (statusError?.status && statusError.status < 500 && statusError.status !== 404) throw statusError;
+        // Reserving an operation has no side effect and is safe to retry with the same ID.
+      }
+    }
+  }
+  forgetPendingOperation(operation.id);
+  const error = new Error('Die Aktion wurde nicht ausgeführt, weil ihre Befehls-ID nicht dauerhaft vorbereitet werden konnte.');
+  error.cause = lastError;
+  error.data = { operation_id: operation.id, operation_status: 'not_prepared' };
+  throw error;
+}
+
+async function sendOperation(operation) {
+  const response = await fetchWithDeadline(
+    operation.requestPath || operation.path,
+    operationRequestOptions(operation),
+    MUTATION_ATTEMPT_TIMEOUT_MS,
+  );
+  return readApiResponse(response);
+}
+
+async function resolveOperation(operation, { allowResend = true } = {}) {
+  const deadlineAt = Date.now() + MUTATION_RESOLUTION_TIMEOUT_MS;
+  let resendAvailable = allowResend;
+  while (Date.now() < deadlineAt) {
+    await delay(100);
+    let statusResult;
+    try {
+      statusResult = await operationStatus(operation.id);
+    } catch (_error) {
+      continue;
+    }
+    const operationState = statusResult.data.operation_status;
+    if (operationState === 'completed') {
+      forgetPendingOperation(operation.id);
+      return completedOperationResult(statusResult.data);
+    }
+    if (operationState === 'uncertain') {
+      throw unknownOperationError(operation.id, statusResult.data.error);
+    }
+    if (operationState === 'acknowledged') {
+      forgetPendingOperation(operation.id);
+      throw unknownOperationError(operation.id, 'Diese frühere Aktion wurde bereits manuell quittiert.');
+    }
+    if (operationState === 'not_found') {
+      throw unknownOperationError(operation.id, 'Das dauerhaft vorbereitete Befehlsjournal ist nicht mehr auffindbar. Die Aktion wird nicht erneut ausgeführt.');
+    }
+    if (operationState === 'prepared' && resendAvailable) {
+      resendAvailable = false;
+      try {
+        const result = await sendOperation(operation);
+        if (result.response.status === 202 && result.data.operation_status === 'in_progress') continue;
+        if (result.data.operation_status === 'uncertain') {
+          throw unknownOperationError(operation.id, result.data.error);
+        }
+        if (result.response.status < 500) {
+          forgetPendingOperation(operation.id);
+          return apiResult(result);
+        }
+      } catch (error) {
+        if (error?.data?.operation_status === 'uncertain') throw error;
+      }
+    }
+  }
+  throw unknownOperationError(operation.id, 'Die Aktion ist registriert, aber ihr Ergebnis ist noch nicht verfügbar. Weitere Befehle bleiben bis zur Klärung gesperrt.');
+}
+
+async function executeIdempotentMutation(path, options) {
+  const operationId = createOperationId();
+  const pending = {
+    id: operationId,
+    path: canonicalOperationPath(path),
+    requestPath: path,
+    method: String(options.method || 'POST').toUpperCase(),
+    body: typeof options.body === 'string' ? options.body : '',
+    headers: { ...(options.headers || {}) },
+    createdAt: Date.now(),
+  };
+  rememberPendingOperation(pending);
+  await prepareOperation(pending);
+  try {
+    const result = await sendOperation(pending);
+    if (result.response.status === 202 && result.data.operation_status === 'in_progress') {
+      return resolveOperation(pending);
+    }
+    if (result.data.operation_status === 'uncertain') {
+      throw unknownOperationError(operationId, result.data.error);
+    }
+    if (result.response.status < 500) {
+      forgetPendingOperation(operationId);
+      return apiResult(result);
+    }
+  } catch (error) {
+    if (error?.data?.operation_status === 'uncertain') throw error;
+    // The prepared operation may be retried with the same ID without duplicating its effect.
+  }
+  return resolveOperation(pending);
+}
+
+function recoveredOperationError(operation, message) {
+  const error = new Error(`${message} Der aktuelle Klick wurde nicht gesendet. Bitte den Zustand prüfen und bei Bedarf erneut klicken.`);
+  error.data = { operation_id: operation.id, operation_status: 'recovered' };
+  return error;
+}
+
+async function acknowledgeUncertainOperation(operation) {
+  const response = await fetchWithDeadline(`/api/operations/${encodeURIComponent(operation.id)}/acknowledge`, {
+    cache: 'no-store',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  }, MUTATION_ATTEMPT_TIMEOUT_MS);
+  return apiResult(await readApiResponse(response));
+}
+
+async function reconcileStoredOperations(interactive = false) {
+  const pending = storedPendingOperations();
+  for (const operation of pending) {
+    let statusResult;
+    try {
+      statusResult = await operationStatus(operation.id);
+    } catch (_error) {
+      throw unknownOperationError(operation.id, 'Der Status einer früheren Aktion kann derzeit nicht bestätigt werden. Weitere Aktionen bleiben bis zur Klärung gesperrt.');
+    }
+    const operationState = statusResult.data.operation_status;
+    if (operationState === 'completed') {
+      forgetPendingOperation(operation.id);
+      try {
+        completedOperationResult(statusResult.data);
+        throw recoveredOperationError(operation, `Die frühere Aktion ${operation.path} wurde erfolgreich abgeschlossen.`);
+      } catch (error) {
+        if (error?.data?.operation_status === 'recovered') throw error;
+        throw recoveredOperationError(operation, `Die frühere Aktion ${operation.path} ist mit einem Fehler beendet worden: ${error.message}`);
+      }
+    }
+    if (operationState === 'prepared' || operationState === 'in_progress') {
+      if (!interactive) {
+        throw unknownOperationError(
+          operation.id,
+          operationState === 'prepared'
+            ? 'Eine frühere Aktion ist dauerhaft vorbereitet, wurde aber noch nicht bestätigt ausgeführt. Beim nächsten Steuerbefehl wird zuerst genau diese Aktion sicher geklärt.'
+            : 'Eine frühere Aktion wird noch serverseitig verarbeitet. Weitere Aktionen bleiben bis zur Klärung gesperrt.',
+        );
+      }
+      try {
+        await resolveOperation(operation, { allowResend: operationState === 'prepared' });
+        throw recoveredOperationError(operation, `Die frühere Aktion ${operation.path} wurde abgeschlossen.`);
+      } catch (error) {
+        if (error?.data?.operation_status === 'recovered' || error?.data?.operation_status === 'uncertain') throw error;
+        throw recoveredOperationError(operation, `Die frühere Aktion ${operation.path} ist mit einem Fehler beendet worden: ${error.message}`);
+      }
+    }
+    if (operationState === 'uncertain') {
+      const confirmed = interactive && await confirmAction({
+        title: 'Unklare frühere Aktion quittieren?',
+        message: `Der Ausgang der früheren Aktion ${operation.path} ist unklar. Prüfe zuerst den Raumzustand. Erst danach darf diese Warnung quittiert werden.`,
+        confirmLabel: 'Nach Prüfung quittieren',
+      });
+      if (!confirmed) {
+        throw unknownOperationError(operation.id, statusResult.data.error);
+      }
+      await acknowledgeUncertainOperation(operation);
+      forgetPendingOperation(operation.id);
+      throw recoveredOperationError(operation, `Die unklare frühere Aktion ${operation.path} wurde manuell quittiert.`);
+    }
+    if (operationState === 'acknowledged') {
+      forgetPendingOperation(operation.id);
+      throw recoveredOperationError(operation, `Die frühere Aktion ${operation.path} war bereits manuell quittiert.`);
+    }
+    if (operationState === 'not_found') {
+      const confirmed = interactive && await confirmAction({
+        title: 'Fehlenden Befehlsbeleg quittieren?',
+        message: `Der Beleg der früheren Aktion ${operation.path} ist nicht mehr vorhanden. Prüfe zuerst den Raumzustand. Die Aktion wird nicht automatisch wiederholt.`,
+        confirmLabel: 'Nach Prüfung freigeben',
+      });
+      if (confirmed) {
+        forgetPendingOperation(operation.id);
+        throw recoveredOperationError(operation, `Der fehlende Beleg der früheren Aktion ${operation.path} wurde nach manueller Prüfung freigegeben.`);
+      }
+    }
+    throw unknownOperationError(operation.id, 'Das Befehlsjournal einer früheren Aktion ist nicht mehr auffindbar. Weitere Aktionen bleiben bis zur Klärung gesperrt.');
+  }
+}
+
+async function api(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD'].includes(method)) {
+    const queued = mutationQueue.then(async () => {
+      await reconcileStoredOperations(true);
+      return executeIdempotentMutation(path, { ...options, method });
+    });
+    mutationQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  const response = await fetch(path, {
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  return apiResult(await readApiResponse(response));
 }
 
 function escapeHtml(value) {
@@ -189,6 +524,9 @@ function actionGuardForSnapshot(data) {
 
 async function refreshPhaseActionView() {
   const previousGuard = actionGuard();
+  const generation = snapshotGeneration + 1;
+  snapshotGeneration = generation;
+  queuedSnapshot = null;
   let data;
   try {
     data = await requestState();
@@ -196,11 +534,11 @@ async function refreshPhaseActionView() {
     showRecoverableStateFeedback(`Aktion nicht ausgeführt: Der aktuelle Spielstand konnte nicht bestätigt werden. ${error.message || error}`);
     return false;
   }
+  if (generation !== snapshotGeneration) return false;
 
   const currentGuard = actionGuardForSnapshot(data);
   clearRecoverableStateFeedback();
   if (stableStringify(previousGuard) !== stableStringify(currentGuard)) {
-    snapshotGeneration += 1;
     queuedSnapshot = null;
     patchState(data);
     showRecoverableStateFeedback('Die Ansicht war nicht aktuell und wurde neu geladen. Bitte die Phasenaktion erneut prüfen.', 'warn');
@@ -1837,7 +2175,6 @@ function currentRunId() {
 }
 
 async function handleStart(button) {
-  const startClickedAtMs = Date.now();
   if (startInFlight) return;
   if (!await refreshPhaseActionView()) return;
   if (Number(state.game.phase || 0) !== 2) {
@@ -1855,6 +2192,8 @@ async function handleStart(button) {
     confirmLabel: 'Spiel starten',
   });
   if (!confirmed) return;
+  if (!await refreshPhaseActionView()) return;
+  const startClickedAtMs = Date.now();
 
   startInFlight = true;
   renderTop();
@@ -1905,6 +2244,7 @@ async function handlePhaseAction(action, button) {
       confirmLabel: 'Phase ändern',
     });
     if (!confirmed) return;
+    if (!await refreshPhaseActionView()) return;
   }
 
   startInFlight = false;
@@ -2440,4 +2780,7 @@ wireHintEditor();
 wireDiagnostics();
 window.setInterval(updateFastTimers, 200);
 loadBookings().catch(() => {});
+reconcileStoredOperations().catch((error) => {
+  showRecoverableStateFeedback(error.message || String(error), 'warn');
+});
 pollLoop();

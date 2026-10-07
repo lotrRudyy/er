@@ -69,6 +69,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - `ER1_MQTT_PORT` default: `1883`
 - `ER1_DASHBOARD_PORT` default: `8080`
 - `ER1_DASHBOARD_CLIENT_ID` optional override; otherwise port 8080 uses `er1_dashboard` and previews use `er1_dashboard_<port>`
+- `ER1_OPERATION_LEDGER_PATH` optional command-receipt database path; defaults to `data/dashboard_operations.sqlite3`
 - `ER1_WEBSITE_API_BASE` optional website URL used only when `ER1_SUMMARY_EMAIL_MODE=http`
 - `ER1_WEBSITE_API_TOKEN` optional shared token for HTTP summary email mode, matching `GAME_SUMMARY_API_TOKEN` on the website
 
@@ -82,6 +83,11 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - In maintenance, riddle rows expose only immediate Solve; skip, time, and hint-count mutations require a started or completed run. Hint-template editing remains available in maintenance.
 - Restarting all nodes or the maglock controller is restricted to phase 0. Other individual physical nodes can still be restarted in later phases.
 - Lock, light, and diagnostics commands report local MQTT queue failures and possible partial batches; QoS 0 still provides no physical-device acknowledgment.
+- Live control POSTs require an `Idempotency-Key`. The browser first durably reserves that ID with the exact request fingerprint, and only then sends the command. A delayed original and every retry atomically claim the same reservation, so only one request can execute. The dashboard replays the recorded result after a lost HTTP response instead of executing the same click twice.
+- Pending IDs remain in the tab until their result is surfaced. A missing receipt is never treated as proof that a delayed command cannot arrive. A dashboard restart during a side effect marks the result uncertain and requires explicit operator inspection and acknowledgement before that tab sends another command.
+- The deployed Flask service must remain a single serving process. The operation owner identifies process restarts; a multi-worker deployment would require shared worker leases instead.
+- Completed and acknowledged receipts are retained for seven days, abandoned preparations for one day, and unresolved uncertain receipts for 30 days. The ledger is capped at 10,000 records so malformed LAN traffic cannot grow it without bound.
+- A stored command receipt confirms dashboard processing and the response fields describe MQTT queueing. Physical application remains unconfirmed unless the target controller reports matching telemetry; mechanical effects without sensors cannot be proven by software.
 - On its first MQTT connection, the dashboard stores retained `WRN` log-level defaults for all nodes. Manual per-node diagnostic levels remain temporary and non-retained.
 - Automatic booking matching is restricted to an inclusive ±30-minute Europe/Rome window. Cached SSH copies are eligible for automatic matching only while younger than `ER1_BOOKINGS_CACHE_MAX_AGE_S` (default 900 seconds); older copies remain available for warned manual selection.
 - If the website server is unreachable, the locally started game continues without automatic booking assignment. Cached, test, or empty bookings remain available for manual selection. Summary-email failures do not change the completed run and can be retried later.

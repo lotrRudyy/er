@@ -40,6 +40,7 @@ er1/logs/**
 er1/data/*.log
 er1/data/*.log.*
 er1/data/**/*.log
+web/er1_dashboard/data/dashboard_operations.sqlite3*
 er1/data/**/*.log.*
 
 # ---- Local helper scripts not tracked in repo ----

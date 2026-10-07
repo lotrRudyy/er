@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -19,13 +20,14 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, g, jsonify, make_response, redirect, render_template, request, send_from_directory, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -347,6 +349,9 @@ SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
 START_ASSIGNMENT_PATH = Path(
     os.getenv("ER1_START_ASSIGNMENT_PATH", str(BASE_DIR / "data" / "start_assignment.json"))
 ).expanduser()
+OPERATION_LEDGER_PATH = Path(
+    os.getenv("ER1_OPERATION_LEDGER_PATH", str(BASE_DIR / "data" / "dashboard_operations.sqlite3"))
+).expanduser()
 START_ASSIGNMENT_SCHEMA = "er1.dashboard.start_assignment"
 START_ASSIGNMENT_VERSION = 2
 # Persisted transitions: intent none -> authorized -> published -> terminal;
@@ -447,6 +452,229 @@ def _atomic_write_dashboard_json(path: Path, payload: dict[str, Any]) -> bool:
             temp_path.unlink()
         except OSError:
             pass
+
+
+class OperationLedger:
+    TERMINAL_RETENTION_S = 7 * 24 * 60 * 60
+    PREPARED_RETENTION_S = 24 * 60 * 60
+    UNCERTAIN_RETENTION_S = 30 * 24 * 60 * 60
+    IN_PROGRESS_STALE_S = 60 * 60
+    MAX_RECORDS = 10000
+
+    def __init__(self, path: Path, *, owner_id: str | None = None) -> None:
+        self.path = Path(path)
+        self.owner_id = owner_id or str(uuid.uuid4())
+        _ensure_dashboard_directory_durable(self.path.parent)
+        with closing(self._connect()) as connection, connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS dashboard_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    request_hash TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    http_status INTEGER,
+                    response_body BLOB,
+                    response_content_type TEXT,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_dashboard_operations_cleanup
+                ON dashboard_operations (state, updated_at)
+            """)
+            self._cleanup(connection, time.time())
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA synchronous=FULL")
+        return connection
+
+    @staticmethod
+    def _record(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row is not None else None
+
+    def _cleanup(self, connection: sqlite3.Connection, now: float) -> None:
+        connection.execute(
+            """
+            UPDATE dashboard_operations
+            SET state = 'uncertain', error = ?, updated_at = ?
+            WHERE state = 'in_progress' AND (owner_id != ? OR updated_at < ?)
+            """,
+            ("Dashboard restarted or the operation exceeded its processing lease", now, self.owner_id, now - self.IN_PROGRESS_STALE_S),
+        )
+        connection.execute(
+            """
+            DELETE FROM dashboard_operations
+            WHERE (state IN ('completed', 'acknowledged') AND updated_at < ?)
+               OR (state = 'prepared' AND updated_at < ?)
+               OR (state = 'uncertain' AND updated_at < ?)
+            """,
+            (
+                now - self.TERMINAL_RETENTION_S,
+                now - self.PREPARED_RETENTION_S,
+                now - self.UNCERTAIN_RETENTION_S,
+            ),
+        )
+
+    def prepare(self, operation_id: str, method: str, path: str, request_hash: str) -> tuple[str, dict[str, Any]]:
+        now = time.time()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._cleanup(connection, now)
+            row = connection.execute(
+                "SELECT * FROM dashboard_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                record_count = int(connection.execute(
+                    "SELECT COUNT(*) FROM dashboard_operations",
+                ).fetchone()[0])
+                if record_count >= self.MAX_RECORDS:
+                    raise RuntimeError("Dashboard operation ledger capacity reached")
+                connection.execute("""
+                    INSERT INTO dashboard_operations (
+                        operation_id, method, path, request_hash, state, owner_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'prepared', '', ?, ?)
+                """, (operation_id, method, path, request_hash, now, now))
+                row = connection.execute(
+                    "SELECT * FROM dashboard_operations WHERE operation_id = ?",
+                    (operation_id,),
+                ).fetchone()
+                return "prepared", self._record(row) or {}
+
+            record = self._record(row) or {}
+            if (
+                record.get("method") != method
+                or record.get("path") != path
+                or record.get("request_hash") != request_hash
+            ):
+                return "conflict", record
+            return str(record.get("state") or "uncertain"), record
+
+    def claim(self, operation_id: str, method: str, path: str, request_hash: str) -> tuple[str, dict[str, Any]]:
+        now = time.time()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM dashboard_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                return "not_prepared", {}
+
+            record = self._record(row) or {}
+            if (
+                record.get("method") != method
+                or record.get("path") != path
+                or record.get("request_hash") != request_hash
+            ):
+                return "conflict", record
+            if record.get("state") == "completed":
+                return "completed", record
+            if record.get("state") == "prepared":
+                connection.execute("""
+                    UPDATE dashboard_operations
+                    SET state = 'in_progress', owner_id = ?, updated_at = ?
+                    WHERE operation_id = ? AND state = 'prepared'
+                """, (self.owner_id, now, operation_id))
+                record["state"] = "in_progress"
+                record["owner_id"] = self.owner_id
+                record["updated_at"] = now
+                return "claimed", record
+            if record.get("state") == "uncertain":
+                return "uncertain", record
+            if record.get("state") == "acknowledged":
+                return "acknowledged", record
+            if record.get("owner_id") != self.owner_id:
+                connection.execute(
+                    "UPDATE dashboard_operations SET state = 'uncertain', error = ?, updated_at = ? WHERE operation_id = ?",
+                    ("Dashboard restarted before the operation result was stored", now, operation_id),
+                )
+                record["state"] = "uncertain"
+                record["error"] = "Dashboard restarted before the operation result was stored"
+                record["updated_at"] = now
+                return "uncertain", record
+            return "in_progress", record
+
+    def complete(self, operation_id: str, status: int, body: bytes, content_type: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute("""
+                UPDATE dashboard_operations
+                SET state = 'completed', http_status = ?, response_body = ?, response_content_type = ?,
+                    error = '', updated_at = ?
+                WHERE operation_id = ? AND owner_id = ? AND state = 'in_progress'
+            """, (
+                int(status),
+                sqlite3.Binary(body),
+                str(content_type or "application/json"),
+                time.time(),
+                operation_id,
+                self.owner_id,
+            ))
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"Operation {operation_id} is no longer owned by this dashboard process")
+
+    def mark_uncertain(self, operation_id: str, error: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("""
+                UPDATE dashboard_operations
+                SET state = 'uncertain', error = ?, updated_at = ?
+                WHERE operation_id = ? AND state = 'in_progress'
+            """, (str(error or "Unknown operation result")[:1000], time.time(), operation_id))
+
+    def get(self, operation_id: str) -> dict[str, Any] | None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM dashboard_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            record = self._record(row)
+            if record and record.get("state") == "in_progress" and record.get("owner_id") != self.owner_id:
+                now = time.time()
+                error = "Dashboard restarted before the operation result was stored"
+                connection.execute(
+                    "UPDATE dashboard_operations SET state = 'uncertain', error = ?, updated_at = ? WHERE operation_id = ?",
+                    (error, now, operation_id),
+                )
+                record["state"] = "uncertain"
+                record["error"] = error
+                record["updated_at"] = now
+            return record
+
+    def acknowledge(self, operation_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM dashboard_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            record = self._record(row)
+            if record and record.get("state") == "uncertain":
+                connection.execute(
+                    """
+                    UPDATE dashboard_operations
+                    SET state = 'acknowledged', updated_at = ?
+                    WHERE operation_id = ? AND state = 'uncertain'
+                    """,
+                    (now, operation_id),
+                )
+                record["state"] = "acknowledged"
+                record["updated_at"] = now
+            return record
 
 
 def _minimal_start_assignment(value: Any) -> dict[str, Any]:
@@ -2336,6 +2564,7 @@ class DashboardStore:
 
 
 store = DashboardStore()
+operation_ledger = OperationLedger(OPERATION_LEDGER_PATH)
 node_log_buffer = NodeLogBuffer()
 _last_requested_log_levels: dict[str, dict[str, str]] = {}
 _last_requested_log_levels_lock = threading.RLock()
@@ -4455,6 +4684,327 @@ def _stale_action_response(data: Any) -> Any | None:
     if error is None:
         return None
     return jsonify({"ok": False, "error": error, "stale_action": True}), 409
+
+
+IDEMPOTENT_API_PATHS = frozenset({
+    "/api/hint-templates",
+    "/api/log-level",
+    "/api/phase",
+    "/api/select-booking",
+    "/api/send-summary-email",
+    "/api/players-count",
+    "/api/solve",
+    "/api/lock",
+    "/api/light",
+    "/api/node-reboot",
+    "/api/service-restart",
+    "/api/hints",
+    "/api/riddle-time",
+    "/api/riddle-outcome",
+})
+
+
+def _normalize_operation_id(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    try:
+        parsed = uuid.UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("Die Befehls-ID ist ungültig.") from exc
+    normalized = str(parsed)
+    if raw != normalized:
+        raise ValueError("Die Befehls-ID ist ungültig.")
+    return normalized
+
+
+def _operation_payload_hash(method: str, path: str, query_string: bytes, body: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(method.upper().encode("ascii"))
+    digest.update(b"\0")
+    digest.update(path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(query_string)
+    digest.update(b"\0")
+    digest.update(body)
+    return digest.hexdigest()
+
+
+def _operation_request_hash() -> str:
+    return _operation_payload_hash(
+        request.method.upper(),
+        request.path,
+        request.query_string,
+        request.get_data(cache=True),
+    )
+
+
+def _replay_operation_response(record: dict[str, Any]) -> Any:
+    body = record.get("response_body") or b""
+    if isinstance(body, memoryview):
+        body = body.tobytes()
+    response = make_response(bytes(body), int(record.get("http_status") or 500))
+    response.headers["Content-Type"] = str(record.get("response_content_type") or "application/json")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Operation-Id"] = str(record.get("operation_id") or "")
+    response.headers["X-Idempotency-Replayed"] = "true"
+    return response
+
+
+@app.before_request
+def _claim_idempotent_dashboard_operation() -> Any | None:
+    if request.method.upper() != "POST" or request.path not in IDEMPOTENT_API_PATHS:
+        return None
+    raw_operation_id = request.headers.get("Idempotency-Key", "").strip()
+    if not raw_operation_id:
+        return jsonify({
+            "ok": False,
+            "operation_status": "missing_idempotency_key",
+            "error": "Diese Dashboard-Version ist veraltet. Bitte die Spielleitungsseite neu laden und die Aktion erneut prüfen.",
+        }), 428
+    try:
+        operation_id = _normalize_operation_id(raw_operation_id)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    request_hash = _operation_request_hash()
+    try:
+        outcome, record = operation_ledger.claim(
+            operation_id,
+            request.method.upper(),
+            request.path,
+            request_hash,
+        )
+    except Exception:
+        LOG.error("Operation ledger claim failed operation_id=%s", operation_id, exc_info=True)
+        return jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "not_accepted",
+            "error": "Die Aktion wurde nicht ausgeführt, weil das Befehlsjournal nicht verfügbar ist.",
+        }), 503
+
+    if outcome == "completed":
+        return _replay_operation_response(record)
+    if outcome == "conflict":
+        return jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "conflict",
+            "error": "Diese Befehls-ID wurde bereits für eine andere Aktion verwendet.",
+        }), 409
+    if outcome == "uncertain":
+        return jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "uncertain",
+            "error": "Der frühere Ausgang dieser Aktion ist nach einem Dashboard-Neustart nicht eindeutig. Die Aktion wird nicht erneut ausgeführt.",
+        }), 409
+    if outcome == "acknowledged":
+        return jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "acknowledged",
+            "error": "Diese unklare Aktion wurde bereits manuell quittiert und wird nicht erneut ausgeführt.",
+        }), 409
+    if outcome == "not_prepared":
+        return jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "not_prepared",
+            "error": "Die Befehls-ID wurde nicht dauerhaft vorbereitet. Die Aktion wurde nicht ausgeführt.",
+        }), 409
+    if outcome == "in_progress":
+        return jsonify({
+            "ok": True,
+            "operation_id": operation_id,
+            "operation_status": "in_progress",
+        }), 202
+
+    g.dashboard_operation_id = operation_id
+    return None
+
+
+@app.after_request
+def _complete_idempotent_dashboard_operation(response: Any) -> Any:
+    operation_id = getattr(g, "dashboard_operation_id", "")
+    if not operation_id:
+        return response
+    try:
+        operation_ledger.complete(
+            operation_id,
+            response.status_code,
+            response.get_data(),
+            response.content_type or "application/json",
+        )
+    except Exception as exc:
+        LOG.critical("Operation result could not be stored operation_id=%s", operation_id, exc_info=True)
+        try:
+            operation_ledger.mark_uncertain(operation_id, str(exc))
+        except Exception:
+            LOG.critical("Operation could not be marked uncertain operation_id=%s", operation_id, exc_info=True)
+        failure = jsonify({
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "uncertain",
+            "error": "Die Aktion wurde verarbeitet, aber ihr Ergebnis konnte nicht sicher gespeichert werden. Sie wird nicht automatisch wiederholt.",
+        })
+        failure.status_code = 503
+        failure.headers["X-Operation-Id"] = operation_id
+        return failure
+    response.headers["X-Operation-Id"] = operation_id
+    return response
+
+
+@app.put("/api/operations/<operation_id>")
+def api_prepare_operation(operation_id: str) -> Any:
+    try:
+        normalized = _normalize_operation_id(operation_id)
+    except ValueError as exc:
+        return jsonify({"ok": False, "operation_status": "invalid", "error": str(exc)}), 400
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON-Objekt erforderlich."}), 400
+    method = str(data.get("method") or "").upper()
+    path = str(data.get("path") or "")
+    body = data.get("body")
+    if method != "POST" or path not in IDEMPOTENT_API_PATHS or not isinstance(body, str):
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "invalid",
+            "error": "Die vorbereitete Dashboard-Aktion ist ungültig.",
+        }), 400
+    body_bytes = body.encode("utf-8")
+    if len(body_bytes) > 1024 * 1024:
+        return jsonify({"ok": False, "error": "Der vorbereitete Anfrageinhalt ist zu groß."}), 413
+
+    request_hash = _operation_payload_hash(method, path, b"", body_bytes)
+    try:
+        outcome, _record = operation_ledger.prepare(normalized, method, path, request_hash)
+    except Exception:
+        LOG.error("Operation preparation failed operation_id=%s", normalized, exc_info=True)
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "unavailable",
+            "error": "Die Aktion konnte nicht dauerhaft vorbereitet werden und wurde nicht ausgeführt.",
+        }), 503
+    if outcome == "conflict":
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "conflict",
+            "error": "Diese Befehls-ID wurde bereits für eine andere Aktion verwendet.",
+        }), 409
+    if outcome == "uncertain":
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "uncertain",
+            "error": "Der Ausgang dieser Aktion ist unklar. Sie wird nicht erneut vorbereitet.",
+        }), 409
+    if outcome == "acknowledged":
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "acknowledged",
+            "error": "Diese Aktion wurde bereits manuell quittiert.",
+        }), 409
+    return jsonify({
+        "ok": True,
+        "operation_id": normalized,
+        "operation_status": outcome,
+    }), 201 if outcome == "prepared" else (202 if outcome == "in_progress" else 200)
+
+
+@app.post("/api/operations/<operation_id>/acknowledge")
+def api_acknowledge_operation(operation_id: str) -> Any:
+    try:
+        normalized = _normalize_operation_id(operation_id)
+    except ValueError as exc:
+        return jsonify({"ok": False, "operation_status": "invalid", "error": str(exc)}), 400
+    try:
+        record = operation_ledger.acknowledge(normalized)
+    except Exception:
+        LOG.error("Operation acknowledgement failed operation_id=%s", normalized, exc_info=True)
+        return jsonify({"ok": False, "operation_status": "unavailable", "error": "Die Quittierung ist fehlgeschlagen."}), 503
+    if record is None:
+        return jsonify({"ok": False, "operation_status": "not_found", "error": "Die Aktion wurde nicht gefunden."}), 404
+    if record.get("state") != "acknowledged":
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": str(record.get("state") or "unknown"),
+            "error": "Nur eine Aktion mit unklarem Ausgang kann quittiert werden.",
+        }), 409
+    return jsonify({"ok": True, "operation_id": normalized, "operation_status": "acknowledged"})
+
+
+@app.get("/api/operations/<operation_id>")
+def api_operation_status(operation_id: str) -> Any:
+    try:
+        normalized = _normalize_operation_id(operation_id)
+    except ValueError as exc:
+        return jsonify({"ok": False, "operation_status": "invalid", "error": str(exc)}), 400
+    try:
+        record = operation_ledger.get(normalized)
+    except Exception:
+        LOG.error("Operation ledger lookup failed operation_id=%s", normalized, exc_info=True)
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "unavailable",
+            "error": "Der Befehlsstatus ist derzeit nicht verfügbar.",
+        }), 503
+    if record is None:
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "not_found",
+            "error": "Die Aktion wurde vom Dashboard nicht angenommen.",
+        }), 404
+    if record.get("state") == "prepared":
+        return jsonify({
+            "ok": True,
+            "operation_id": normalized,
+            "operation_status": "prepared",
+        }), 202
+    if record.get("state") == "in_progress":
+        return jsonify({
+            "ok": True,
+            "operation_id": normalized,
+            "operation_status": "in_progress",
+        }), 202
+    if record.get("state") == "uncertain":
+        return jsonify({
+            "ok": False,
+            "operation_id": normalized,
+            "operation_status": "uncertain",
+            "error": "Der Ausgang dieser Aktion ist nach einem Dashboard-Neustart nicht eindeutig. Sie wird nicht erneut ausgeführt.",
+        }), 409
+    if record.get("state") == "acknowledged":
+        return jsonify({
+            "ok": True,
+            "operation_id": normalized,
+            "operation_status": "acknowledged",
+        })
+
+    body = record.get("response_body") or b""
+    if isinstance(body, memoryview):
+        body = body.tobytes()
+    try:
+        result = json.loads(bytes(body).decode("utf-8"))
+    except Exception:
+        result = {"raw": bytes(body).decode("utf-8", errors="replace")[:2000]}
+    response = jsonify({
+        "ok": True,
+        "operation_id": normalized,
+        "operation_status": "completed",
+        "http_status": int(record.get("http_status") or 500),
+        "result": result,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/")

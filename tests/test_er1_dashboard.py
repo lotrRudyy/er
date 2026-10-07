@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import ast
 import copy
+import contextlib
 import json
 import math
 import os
 import re
+import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
 import types
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -78,6 +82,30 @@ def extracted_method(class_name: str, method_name: str) -> tuple[Any, dict[str, 
         namespace,
     )
     return namespace[method_name], namespace
+
+
+def extracted_class(class_name: str) -> Any:
+    source = APP_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(APP_PATH))
+    class_node = copy.deepcopy(next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    ))
+    namespace: dict[str, Any] = {
+        "Any": Any,
+        "Path": Path,
+        "closing": contextlib.closing,
+        "os": os,
+        "sqlite3": sqlite3,
+        "time": time,
+        "uuid": uuid,
+        "_ensure_dashboard_directory_durable": lambda path: Path(path).mkdir(parents=True, exist_ok=True),
+    }
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body=[class_node], type_ignores=[])), str(APP_PATH), "exec"),
+        namespace,
+    )
+    return namespace[class_name]
 
 
 class JsonResponse(dict):
@@ -171,6 +199,74 @@ class DashboardMutationTests(unittest.TestCase):
         namespace["save_hint_store"]({"images": 2, "piano": -1})
 
         self.assertEqual(writes, [(path, {"images": 2, "piano": 0})])
+
+    def test_operation_ledger_replays_results_and_never_reclaims_uncertain_work(self) -> None:
+        ledger_type = extracted_class("OperationLedger")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "operations.sqlite3"
+            first = ledger_type(path, owner_id="process-a")
+            operation_id = str(uuid.uuid4())
+
+            self.assertEqual(first.claim(operation_id, "POST", "/api/hints", "hash-a")[0], "not_prepared")
+            self.assertEqual(first.prepare(operation_id, "POST", "/api/hints", "hash-a")[0], "prepared")
+            self.assertEqual(first.prepare(operation_id, "POST", "/api/hints", "hash-a")[0], "prepared")
+            outcome, _record = first.claim(operation_id, "POST", "/api/hints", "hash-a")
+            self.assertEqual(outcome, "claimed")
+            self.assertEqual(first.claim(operation_id, "POST", "/api/hints", "hash-a")[0], "in_progress")
+            first.complete(operation_id, 200, b'{"ok":true,"hint_count":1}', "application/json")
+
+            restarted = ledger_type(path, owner_id="process-b")
+            outcome, record = restarted.claim(operation_id, "POST", "/api/hints", "hash-a")
+            self.assertEqual(outcome, "completed")
+            self.assertEqual(record["http_status"], 200)
+            self.assertEqual(bytes(record["response_body"]), b'{"ok":true,"hint_count":1}')
+            self.assertEqual(restarted.claim(operation_id, "POST", "/api/hints", "different")[0], "conflict")
+
+            interrupted_id = str(uuid.uuid4())
+            first.prepare(interrupted_id, "POST", "/api/lock", "hash-b")
+            self.assertEqual(first.claim(interrupted_id, "POST", "/api/lock", "hash-b")[0], "claimed")
+            interrupted = restarted.get(interrupted_id)
+            self.assertEqual(interrupted["state"], "uncertain")
+            self.assertEqual(restarted.claim(interrupted_id, "POST", "/api/lock", "hash-b")[0], "uncertain")
+            self.assertEqual(restarted.acknowledge(interrupted_id)["state"], "acknowledged")
+            self.assertEqual(restarted.claim(interrupted_id, "POST", "/api/lock", "hash-b")[0], "acknowledged")
+
+    def test_prepared_operation_survives_restart_and_only_one_concurrent_claim_wins(self) -> None:
+        ledger_type = extracted_class("OperationLedger")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "operations.sqlite3"
+            first = ledger_type(path, owner_id="process-a")
+            operation_id = str(uuid.uuid4())
+            first.prepare(operation_id, "POST", "/api/light", "hash-a")
+
+            restarted = ledger_type(path, owner_id="process-b")
+            barrier = threading.Barrier(3)
+            outcomes: list[str] = []
+
+            def claim() -> None:
+                barrier.wait()
+                outcomes.append(restarted.claim(operation_id, "POST", "/api/light", "hash-a")[0])
+
+            threads = [threading.Thread(target=claim) for _index in range(2)]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join()
+
+            self.assertCountEqual(outcomes, ["claimed", "in_progress"])
+            restarted.complete(operation_id, 200, b'{"ok":true}', "application/json")
+            self.assertEqual(restarted.claim(operation_id, "POST", "/api/light", "hash-a")[0], "completed")
+
+            stale_id = str(uuid.uuid4())
+            restarted.prepare(stale_id, "POST", "/api/light", "hash-stale")
+            with contextlib.closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute(
+                    "UPDATE dashboard_operations SET updated_at = ? WHERE operation_id = ?",
+                    (time.time() - restarted.PREPARED_RETENTION_S - 1, stale_id),
+                )
+            restarted.prepare(str(uuid.uuid4()), "POST", "/api/light", "hash-new")
+            self.assertIsNone(restarted.get(stale_id))
 
     def test_stale_action_guard_requires_phase_and_run_identity(self) -> None:
         namespace = extracted("_action_guard_error")
@@ -797,7 +893,32 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261007-live-reconnect", html)
+        self.assertIn("app.js') }}?v=20261007-command-receipts", html)
+
+    def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
+        source = APP_PATH.read_text(encoding="utf-8")
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("class OperationLedger:", source)
+        self.assertIn("@app.before_request", source)
+        self.assertIn("@app.after_request", source)
+        self.assertIn('@app.get("/api/operations/<operation_id>")', source)
+        self.assertIn('"operation_status": "missing_idempotency_key"', source)
+        self.assertIn("'Idempotency-Key': operation.id", javascript)
+        self.assertIn("await prepareOperation(pending)", javascript)
+        self.assertIn("operationState === 'prepared'", javascript)
+        self.assertIn("async function executeIdempotentMutation", javascript)
+        self.assertIn("async function reconcileStoredOperations", javascript)
+        self.assertIn("mutationQueue", javascript)
+
+    def test_dashboard_operation_client_runtime(self) -> None:
+        result = subprocess.run(
+            ["node", "--test", str(ROOT / "tests" / "test_dashboard_operation_client.mjs")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_maintenance_exposes_solve_but_not_run_mutations(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
