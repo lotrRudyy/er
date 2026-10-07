@@ -52,6 +52,8 @@ const DIAGNOSTICS_POLL_INTERVAL_MS = 1000;
 const DIAGNOSTICS_BACKLOG_DELAY_MS = 75;
 const DIAGNOSTICS_BACKLOG_PAGE_BUDGET = 4;
 const DIAGNOSTICS_BACKLOG_BUDGET_PAUSE_MS = 400;
+const STATE_FETCH_TIMEOUT_MS = 1000;
+const STATE_RETRY_DELAY_MS = 100;
 const diagnostics = {
   after: 0,
   newestSeq: 0,
@@ -70,7 +72,9 @@ const diagnostics = {
 
 let lastSnapshot = null;
 let queuedSnapshot = null;
-let pollInFlight = false;
+let stateRefreshPromise = null;
+let stateRefreshGeneration = -1;
+let recoverableStateFeedback = '';
 let snapshotGeneration = 0;
 let actionDepth = 0;
 let interactionActive = false;
@@ -176,6 +180,36 @@ function actionGuard() {
   };
 }
 
+function actionGuardForSnapshot(data) {
+  return {
+    expected_phase: Number(data?.game?.phase || 0),
+    expected_run_id: String(data?.game?.run_id || '').trim(),
+  };
+}
+
+async function refreshPhaseActionView() {
+  const previousGuard = actionGuard();
+  let data;
+  try {
+    data = await requestState();
+  } catch (error) {
+    showRecoverableStateFeedback(`Aktion nicht ausgeführt: Der aktuelle Spielstand konnte nicht bestätigt werden. ${error.message || error}`);
+    return false;
+  }
+
+  const currentGuard = actionGuardForSnapshot(data);
+  clearRecoverableStateFeedback();
+  if (stableStringify(previousGuard) !== stableStringify(currentGuard)) {
+    snapshotGeneration += 1;
+    queuedSnapshot = null;
+    patchState(data);
+    showRecoverableStateFeedback('Die Ansicht war nicht aktuell und wurde neu geladen. Bitte die Phasenaktion erneut prüfen.', 'warn');
+    return false;
+  }
+  queueOrPatch(data);
+  return true;
+}
+
 function stableStringify(value) {
   return JSON.stringify(value);
 }
@@ -209,6 +243,18 @@ function showFeedback(message, kind = '') {
   if (!box) return;
   box.textContent = message || '';
   box.className = `global-feedback ${kind ? `global-feedback--${kind}` : ''}`;
+}
+
+function showRecoverableStateFeedback(message, kind = 'error') {
+  recoverableStateFeedback = String(message || '');
+  showFeedback(recoverableStateFeedback, kind);
+}
+
+function clearRecoverableStateFeedback() {
+  if (!recoverableStateFeedback) return;
+  const box = document.getElementById('globalFeedback');
+  if (box?.textContent === recoverableStateFeedback) showFeedback('');
+  recoverableStateFeedback = '';
 }
 
 function setBookingFeedback(message, kind = '') {
@@ -281,28 +327,54 @@ function queueOrPatch(data) {
   patchState(data);
 }
 
-async function fetchAndPatch() {
-  if (pollInFlight) return;
-  const generation = snapshotGeneration;
-  pollInFlight = true;
+async function requestState() {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), STATE_FETCH_TIMEOUT_MS);
   try {
-    const data = await api('/api/state');
-    if (generation !== snapshotGeneration) return;
-    queueOrPatch(data);
+    return await api('/api/state', { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Zeitüberschreitung nach ${Math.round(STATE_FETCH_TIMEOUT_MS / 1000)} Sekunden`);
+    }
+    throw error;
   } finally {
-    pollInFlight = false;
+    window.clearTimeout(timeout);
   }
 }
 
+function fetchAndPatch() {
+  const generation = snapshotGeneration;
+  if (stateRefreshPromise && stateRefreshGeneration === generation) return stateRefreshPromise;
+  const request = (async () => {
+    const data = await requestState();
+    if (generation !== snapshotGeneration) return;
+    queueOrPatch(data);
+    clearRecoverableStateFeedback();
+    return data;
+  })();
+  stateRefreshPromise = request;
+  stateRefreshGeneration = generation;
+  const clearRequest = () => {
+    if (stateRefreshPromise === request) {
+      stateRefreshPromise = null;
+      stateRefreshGeneration = -1;
+    }
+  };
+  request.then(clearRequest, clearRequest);
+  return request;
+}
+
 async function pollLoop() {
+  let failed = false;
   try {
     await fetchAndPatch();
   } catch (error) {
-    showFeedback(`Live-Aktualisierung fehlgeschlagen: ${error.message || error}`, 'error');
+    failed = true;
+    showRecoverableStateFeedback(`Live-Aktualisierung unterbrochen; neuer Versuch läuft: ${error.message || error}`);
   } finally {
     const knockingIsCurrent = Number(state.game.phase || 0) === 10
       || String(state.game.current_riddle_name || '') === 'knocking';
-    window.setTimeout(pollLoop, knockingIsCurrent ? 250 : 1000);
+    window.setTimeout(pollLoop, failed ? STATE_RETRY_DELAY_MS : (knockingIsCurrent ? 250 : 1000));
   }
 }
 
@@ -316,15 +388,25 @@ async function runAction(button, task, { silent = false } = {}) {
     button.classList.add('is-busy');
   }
   try {
-    const result = await task();
+    let result;
+    try {
+      result = await task();
+    } catch (error) {
+      if (!silent) {
+        if (error?.data?.stale_action) showRecoverableStateFeedback(error.message || String(error));
+        else showFeedback(error.message || String(error), 'error');
+      }
+      throw error;
+    }
     snapshotGeneration += 1;
     queuedSnapshot = null;
     await delay(90);
-    await fetchAndPatch();
+    try {
+      await fetchAndPatch();
+    } catch (error) {
+      showRecoverableStateFeedback(`Aktion wurde angenommen; Live-Ansicht wird erneut verbunden: ${error.message || error}`, 'warn');
+    }
     return result;
-  } catch (error) {
-    if (!silent) showFeedback(error.message || String(error), 'error');
-    throw error;
   } finally {
     actionDepth = Math.max(0, actionDepth - 1);
     if (button?.isConnected) {
@@ -369,8 +451,21 @@ function installInteractionGuard() {
   document.addEventListener('click', release, true);
   document.addEventListener('focusout', () => window.setTimeout(flushQueuedSnapshot, 0), true);
   window.addEventListener('blur', release);
-  window.addEventListener('focus', flushQueuedSnapshot);
+  window.addEventListener('focus', () => {
+    flushQueuedSnapshot();
+    refreshStateAfterResume();
+  });
 }
+
+function refreshStateAfterResume() {
+  if (document.visibilityState === 'hidden') return;
+  fetchAndPatch().catch((error) => {
+    showRecoverableStateFeedback(`Live-Aktualisierung unterbrochen; neuer Versuch läuft: ${error.message || error}`);
+  });
+}
+
+document.addEventListener('visibilitychange', refreshStateAfterResume);
+window.addEventListener('online', refreshStateAfterResume);
 
 function settleConfirmation(confirmed) {
   const resolver = confirmationResolver;
@@ -1744,6 +1839,7 @@ function currentRunId() {
 async function handleStart(button) {
   const startClickedAtMs = Date.now();
   if (startInFlight) return;
+  if (!await refreshPhaseActionView()) return;
   if (Number(state.game.phase || 0) !== 2) {
     showFeedback('Das Spiel kann nur aus der Phase „Vorbereitung“ gestartet werden.', 'warn');
     return;
@@ -1794,6 +1890,8 @@ async function handlePhaseAction(action, button) {
     await handleStart(button);
     return;
   }
+
+  if (!await refreshPhaseActionView()) return;
 
   if (shouldConfirmPhaseChange()) {
     const label = {

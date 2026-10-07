@@ -780,6 +780,25 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertEqual(summary["elapsed_s"], -5)
         self.assertEqual(summary["current_riddle_elapsed_s"], -5)
 
+    def test_state_polling_recovers_quickly_and_phase_actions_require_fresh_state(self) -> None:
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        html = HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn("const STATE_FETCH_TIMEOUT_MS = 1000;", javascript)
+        self.assertIn("const STATE_RETRY_DELAY_MS = 100;", javascript)
+        self.assertIn("controller.abort()", javascript)
+        self.assertIn("window.addEventListener('online', refreshStateAfterResume)", javascript)
+        self.assertIn("document.addEventListener('visibilitychange', refreshStateAfterResume)", javascript)
+        self.assertIn("async function refreshPhaseActionView()", javascript)
+
+        start_begin = javascript.index("async function handleStart")
+        start_end = javascript.index("async function handlePhaseAction", start_begin)
+        phase_begin = start_end
+        phase_end = javascript.index("async function sendSummaryEmail", phase_begin)
+        self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
+        self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
+        self.assertIn("clearRecoverableStateFeedback();", javascript)
+        self.assertIn("app.js') }}?v=20261007-live-reconnect", html)
+
     def test_maintenance_exposes_solve_but_not_run_mutations(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         self.assertIn("function riddleMutationsAvailable()", javascript)
