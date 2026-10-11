@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20261011-dashboard-v6" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v7" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
@@ -58,7 +58,7 @@
                 <button data-phase-action="standby" type="button">Aus</button>
                 <button data-phase-action="maintenance" type="button">Wartung</button>
                 <button data-phase-action="prepare" type="button">Vorbereitung</button>
-                <button id="runningPhaseIndicator" type="button" disabled>Spiel läuft</button>
+                <button id="startGameBtn" class="start-game-button" type="button" disabled>Spiel starten</button>
               </div>
               <div class="previous-phase">Vorherige Phase: <span id="lastPhaseValue">--</span></div>
               <div id="prepareCounterWrap" class="prepare-countdown hidden"><span>Start in</span><strong id="prepareCounterValue">--</strong></div>
@@ -84,7 +84,6 @@
                   <button id="refreshBookingsBtn" class="secondary-button" type="button">Aktualisieren</button>
                   <button id="applyBookingBtn" class="secondary-button" type="button">Buchung bestätigen</button>
                 </div>
-                <button id="startGameBtn" class="start-game-button" type="button">Spiel starten</button>
                 <div id="bookingFeedback" class="summary-email-feedback"></div>
                 <div id="postGameActions" class="post-game-actions hidden"><button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button></div>
               </div>

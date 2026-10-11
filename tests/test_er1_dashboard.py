@@ -30,6 +30,7 @@ from riddle_time_correction import plan_riddle_time_change
 APP_PATH = ROOT / "web" / "er1_dashboard" / "app.py"
 JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "app.js"
 CSS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "style.css"
+DASHBOARD_CSS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "dashboard.css"
 HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "index.html"
 GAME_VIEWER_JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "game_viewer.js"
 GAME_VIEWER_HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "game_viewer.html"
@@ -1299,9 +1300,11 @@ class DashboardSourceContractTests(unittest.TestCase):
     def test_control_room_layout_contract_is_present(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
         javascript = JS_PATH.read_text(encoding="utf-8")
-        css = CSS_PATH.read_text(encoding="utf-8")
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
+        self.assertIn("filename='dashboard.css'", html)
+        self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
             self.assertIn(f">{label}</a>", html)
@@ -1310,6 +1313,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         for action in ("standby", "maintenance", "prepare"):
             self.assertIn(f'data-phase-action="{action}"', html)
         self.assertIn('id="startGameBtn"', html)
+        phase_actions = html[html.index('class="phase-action-grid-v6"'):html.index('class="previous-phase"')]
+        self.assertIn('id="startGameBtn"', phase_actions)
         for panel_id in ("bookingDetails", "allRiddlesPanel", "diagnosticsDetails", "maintenanceHintEditor"):
             self.assertIn(f'id="{panel_id}"', html)
 
@@ -1317,6 +1322,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("function isGameMode()", javascript)
         self.assertIn("Number(state.game.phase || 0) >= 2", javascript)
         self.assertIn("dashboard-preparation-mode", javascript)
+        self.assertIn("function buildMaintenanceRiddleCard", javascript)
+        self.assertIn("is-maintenance", javascript)
         self.assertNotIn("gameDrawerStrip", html)
         self.assertNotIn('id="hintTemplateDialog"', html)
         self.assertNotIn("openHintTemplateDialog", javascript)
@@ -1328,12 +1335,18 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
         self.assertNotIn("('stop_timer', 'Stop Timer')", html)
 
-        self.assertNotIn("/* Fixed operator console:", css)
-        control_room_css = css[css.index("/* Dashboard v6:"):]
-        self.assertIn("grid-template-columns: minmax(0, 1.58fr) minmax(410px, 0.72fr);", control_room_css)
-        self.assertIn("body.dashboard-v6[data-initial-view=\"control\"] { overflow: hidden; }", control_room_css)
-        self.assertIn("@media (max-width: 900px)", control_room_css)
-        self.assertIn(".mission-grid, .mission-rail { display: contents; }", control_room_css)
+        self.assertIn("grid-template-columns: minmax(520px, 38%) minmax(0, 1fr);", css)
+        self.assertIn('body.dashboard-v6[data-initial-view="control"]', css)
+        self.assertIn("@media (max-width: 900px)", css)
+        self.assertIn(".mission-grid,", css)
+        self.assertIn(".mission-rail {", css)
+        self.assertIn(".hidden,", css)
+        self.assertIn("[hidden]", css)
+        self.assertIn(".dashboard-preparation-mode .booking-card", css)
+        self.assertIn(".dashboard-preparation-mode .mission-metrics", css)
+        self.assertIn("body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .field-label", css)
+        self.assertNotIn(".dashboard-preparation-mode .control-workspace", css)
+        self.assertIn("grid-template-columns: minmax(45px, 1fr) 72px;", css)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]

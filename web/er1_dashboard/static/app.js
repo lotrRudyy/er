@@ -1367,10 +1367,11 @@ function renderTop() {
   const preparedRunReady = phase === 2 && Boolean(currentRunId());
   prepareCounterWrap?.classList.toggle('hidden', phase !== 2);
   if (startButton) {
-    startButton.textContent = phase >= 3 ? 'Spiel läuft' : 'Spiel starten';
+    startButton.textContent = phase >= 14 || state.game.ended_at
+      ? 'Spiel beendet'
+      : (phase >= 3 ? 'Spiel läuft' : 'Spiel starten');
     startButton.disabled = !preparedRunReady || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
-    startButton.classList.toggle('is-current-phase', phase >= 3);
-    startButton.classList.toggle('hidden', phase !== 2);
+    startButton.classList.toggle('is-current-phase', phase >= 2);
   }
 
   const currentAction = phase === 0 ? 'standby' : (phase === 1 ? 'maintenance' : (phase === 2 ? 'prepare' : 'start'));
@@ -1379,9 +1380,6 @@ function renderTop() {
     button.classList.toggle('is-current-phase', active);
     button.disabled = active;
   });
-  const runningIndicator = document.getElementById('runningPhaseIndicator');
-  if (runningIndicator) runningIndicator.classList.toggle('is-current-phase', phase >= 3 && phase <= 13);
-
   renderBookingControls();
   renderSummaryControls();
   renderStartAssignmentStatus();
@@ -1401,6 +1399,7 @@ function renderPanelVisibility() {
   document.body.classList.toggle('dashboard-pregame', controlViewActive && !gameMode);
   document.body.classList.toggle('dashboard-preparation-mode', controlViewActive && phase === 2);
   currentPanel?.classList.toggle('is-idle', phase < 2);
+  currentPanel?.classList.toggle('is-maintenance', phase === 1);
   ui.gameMode = gameMode;
   ui.lastPhase = phase;
 }
@@ -2133,6 +2132,19 @@ function buildCurrentRiddleCard(riddle) {
   return card;
 }
 
+function buildMaintenanceRiddleCard(riddle) {
+  const card = document.createElement('article');
+  card.className = 'maintenance-riddle-card';
+  card.dataset.riddleId = riddle.id;
+  card.innerHTML = `
+    <div class="maintenance-riddle-head"><span class="eyebrow">Wartungsprüfung</span><h2>${escapeHtml(riddle.label)}</h2></div>
+    <div class="maintenance-riddle-info">${renderRiddleInfo(riddle)}</div>
+    <button class="solve-btn ${riddle.can_solve ? 'active' : 'inactive'}" type="button" ${riddle.can_solve ? '' : 'disabled'}>Gelöst-Signal testen</button>
+  `;
+  bindRiddleActions(card, riddle);
+  return card;
+}
+
 function renderRiddles() {
   const body = document.getElementById('riddlesBody');
   if (!body) return;
@@ -2144,7 +2156,12 @@ function renderCurrentRiddles() {
   const wrap = document.getElementById('currentRiddlesGrid');
   if (!wrap) return;
   wrap.innerHTML = '';
-  if (Number(state.game.phase || 0) === 2) {
+  const phase = Number(state.game.phase || 0);
+  if (phase === 1) {
+    for (const riddle of state.riddles || []) wrap.appendChild(buildMaintenanceRiddleCard(riddle));
+    return;
+  }
+  if (phase === 2) {
     const preparation = document.createElement('article');
     preparation.className = 'current-riddle-card preparation-card';
     preparation.innerHTML = `
@@ -2157,9 +2174,9 @@ function renderCurrentRiddles() {
     wrap.appendChild(preparation);
     return;
   }
-  const current = (state.riddles || []).filter((riddle) => (
+  const current = phase >= 3 ? (state.riddles || []).filter((riddle) => (
     riddle.phase_state === 'active'
-  ));
+  )) : [];
   if (!current.length) {
     wrap.innerHTML = '<div class="current-riddle-empty"><span class="eyebrow">Aktuelles Rätsel</span><h2>Noch kein Rätsel aktiv</h2><p>Wechsle in die Vorbereitung, ordne die Buchung zu und starte anschließend das Spiel.</p></div>';
     return;
