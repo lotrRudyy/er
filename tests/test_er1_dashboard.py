@@ -1177,7 +1177,9 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("card.querySelector('.light-bulb-button')", javascript)
         self.assertIn("fmtEditableTime(seconds)", javascript)
         self.assertIn("controlViewActive && gameMode", javascript)
-        self.assertIn("_installed_game_master_support_dir", APP_PATH.read_text(encoding="utf-8"))
+        source = APP_PATH.read_text(encoding="utf-8")
+        self.assertIn("_installed_game_master_support_dir", source)
+        self.assertIn('"User-Agent": "ER1-Dashboard/1.0"', source)
         self.assertNotIn("resetRiddle", javascript)
         self.assertNotIn("outcome: 'reset'", javascript)
 

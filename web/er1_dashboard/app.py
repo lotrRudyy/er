@@ -3699,7 +3699,10 @@ def website_json(path: str, payload: dict[str, Any] | None = None, method: str |
         checked = ", ".join(str(path) for path in _candidate_env_paths())
         raise RuntimeError(f"ER1_WEBSITE_API_BASE ist im Dashboard nicht konfiguriert. Geprüft: {checked}")
     url = f"{website_api_base}{path if path.startswith('/') else '/' + path}"
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "ER1-Dashboard/1.0",
+    }
     body = None
     request_method = method or ("POST" if payload is not None else "GET")
     if payload is not None:
