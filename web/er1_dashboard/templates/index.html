@@ -7,277 +7,217 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20261003-control-room" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20261011-dashboard-v6" />
 </head>
-<body class="dashboard-body dashboard-pregame">
+<body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
     ('lighting', 'Lichtsteuerung'),
     ('maglock', 'Schlosssteuerung'),
     ('images_piano', 'Bilder / Piano'),
-    ('chess', 'Pferd'),
+    ('chess', 'Schach'),
     ('knocking', 'Klopfen'),
     ('candles', 'Kerzen'),
     ('star_slider', 'Sternenschieber'),
-    ('star_sky', 'Sternenhimmel'),
-    ('stop_timer', 'Stop Timer')
+    ('star_sky', 'Sternenhimmel')
   ] %}
 
-  <div class="page dashboard-page dashboard-v5">
-    <section class="panel node-status-panel" aria-labelledby="nodeStatusHeading">
-      <h1 id="nodeStatusHeading" class="sr-only">Status der Steuergeräte</h1>
-      <div id="nodeStatusBar" class="node-status-bar"></div>
-    </section>
-
-    <div id="globalFeedback" class="global-feedback" aria-live="polite"></div>
-
-    <header class="dashboard-summary-grid">
-      <section class="panel summary-card phase-summary-card">
-        <div class="card-heading phase-card-heading">
-          <span class="card-icon" aria-hidden="true">&#9881;</span><h2>Phase</h2>
-          <a class="database-viewer-button" href="{{ url_for('game_viewer') }}">Spieldatenbank</a>
-        </div>
-        <div id="phaseValue" class="phase-display">Phase 0 · Bereitschaft</div>
-        <div class="summary-muted">Vorherige Phase: <span id="lastPhaseValue">—</span></div>
-        <div class="phase-action-grid">
-          <button data-phase-action="standby" type="button">Bereitschaft</button>
-          <button data-phase-action="maintenance" type="button">Wartung</button>
-          <button data-phase-action="prepare" type="button">Vorbereitung</button>
-          <button id="startGameBtn" class="start-game-button" type="button">Spiel starten</button>
-        </div>
-        <div id="postGameActions" class="post-game-actions hidden">
-          <button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button>
-        </div>
-      </section>
-
-      <section class="panel summary-card time-summary-card">
-        <div class="card-heading"><span class="card-icon" aria-hidden="true">&#9716;</span><h2>Zeit</h2></div>
-        <div class="time-summary-grid">
-          <div>
-            <div class="summary-label">Gesamtspielzeit</div>
-            <div id="timerValue" class="primary-time">00:00</div>
-          </div>
-          <div>
-            <div class="summary-label">Aktuelles Rätsel</div>
-            <div id="riddleTimerValue" class="secondary-time">—</div>
-          </div>
-        </div>
-        <div id="prepareCounterWrap" class="prepare-countdown hidden">
-          <span>Vorbereitung</span>
-          <strong id="prepareCounterValue">0</strong>
-        </div>
-      </section>
-
-      <details id="bookingDetails" class="panel summary-card booking-details" open>
-        <summary>
-          <span class="card-heading"><span class="card-icon" aria-hidden="true">&#9638;</span><span class="details-heading">Buchung</span></span>
-          <span id="bookingCompactValue" class="details-compact-value">Keine Buchung ausgewählt</span>
-          <span class="details-chevron" aria-hidden="true">&#8250;</span>
-        </summary>
-        <div class="booking-details-body">
-          <label class="field-label" for="bookingSelect">Buchung auswählen</label>
-          <select id="bookingSelect" class="booking-select" aria-label="Buchung"></select>
-          <div id="bookingSelectedInfo" class="booking-selected-info"></div>
-          <label class="field-label" for="hintLanguageSelect">Tipp-Sprache</label>
-          <select id="hintLanguageSelect" class="booking-select">
-            <option value="de">Deutsch</option>
-            <option value="en">English</option>
-            <option value="it">Italiano</option>
-          </select>
-          <div id="testBookingFields" class="test-booking-fields hidden">
-            <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="E-Mail-Adresse" />
-            <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" />
-          </div>
-          <div class="booking-action-row">
-            <button id="refreshBookingsBtn" class="booking-refresh-btn" type="button">Buchungen aktualisieren</button>
-            <button id="applyBookingBtn" class="booking-apply-btn" type="button">Anwenden</button>
-          </div>
-          <div id="bookingFeedback" class="summary-email-feedback"></div>
-        </div>
-      </details>
+  <div class="dashboard-page-v6">
+    <header class="operator-header">
+      <div class="operator-leading">
+        <button class="operator-menu" type="button" aria-label="Menü"><span aria-hidden="true">&#9776;</span> Menü</button>
+        <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung"><span class="operator-brand-mark" aria-hidden="true">&#128273;</span><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
+        <div class="operator-connection" aria-live="polite"><span class="connection-dot"></span><span id="connectionLabel">Verbinde...</span></div>
+      </div>
+      <nav class="operator-tabs" aria-label="Dashboard-Bereiche">
+        <a class="operator-tab{% if initial_view|default('control') == 'control' %} is-active{% endif %}" href="{{ url_for('index') }}"{% if initial_view|default('control') == 'control' %} aria-current="page"{% endif %}>Spielkontrolle</a>
+        <a class="operator-tab" href="{{ url_for('game_viewer') }}">Alle Spiele</a>
+        <a class="operator-tab{% if initial_view|default('control') == 'admin' %} is-active{% endif %}" href="{{ url_for('admin_dashboard') }}"{% if initial_view|default('control') == 'admin' %} aria-current="page"{% endif %}>Admin</a>
+      </nav>
+      <div class="operator-clock"><span id="operatorDate"></span><strong id="operatorTime"></strong></div>
     </header>
 
+    <div id="globalFeedback" class="global-feedback global-feedback-v6" aria-live="polite"></div>
     <div id="startAssignmentStatus" class="start-assignment-status hidden" aria-live="polite"></div>
     <div id="summaryEmailFeedback" class="summary-email-feedback header-feedback"></div>
 
-    <nav id="gameDrawerStrip" class="game-drawer-strip hidden" aria-label="Zusätzliche Spielbereiche">
-      <button type="button" data-panel-target="bookingDetails">
-        <span class="drawer-title">Buchung</span>
-        <span id="gameBookingValue" class="drawer-value">Keine Buchung</span>
-        <span class="drawer-chevron" aria-hidden="true">&#8250;</span>
-      </button>
-      <button id="toggleAllRiddlesBtn" type="button" data-panel-target="allRiddlesPanel">
-        <span class="drawer-title">Alle Rätsel</span>
-        <span id="gameRiddleProgress" class="drawer-value">0 gelöst / 12</span>
-        <span class="drawer-chevron" aria-hidden="true">&#8250;</span>
-      </button>
-      <button type="button" data-panel-target="diagnosticsDetails">
-        <span class="drawer-title">Node-Diagnose</span>
-        <span id="gameNodeHealth" class="drawer-value">Status wird geladen</span>
-        <span class="drawer-chevron" aria-hidden="true">&#8250;</span>
-      </button>
-      <button type="button" data-panel-target="maintenanceHintEditor">
-        <span class="drawer-title">Tipp-Editor</span>
-        <span id="gameHintLanguage" class="drawer-value">Deutsch</span>
-        <span class="drawer-chevron" aria-hidden="true">&#8250;</span>
-      </button>
-    </nav>
+    {% if initial_view|default('control') == 'control' %}
+    <main id="controlView" class="control-workspace">
+      <div class="control-primary">
+        <div class="mission-grid">
+          <div class="mission-rail">
+            <section class="panel-v6 phase-overview" aria-labelledby="phaseHeading">
+              <div class="panel-heading-v6"><div><span class="eyebrow">Spielstatus</span><h1 id="phaseHeading">Phase, Zeit und Buchung</h1></div></div>
+              <div id="phaseValue" class="phase-current">Phase 0 · Aus</div>
+              <div class="mission-metrics">
+                <div><span>Gesamtspielzeit</span><strong id="timerValue">00:00</strong></div>
+                <div><span>Aktuelles Rätsel</span><strong id="riddleTimerValue">--:--</strong></div>
+                <div class="rank-metric"><span>Aktueller Rang</span><strong id="overallRankValue">--</strong><small id="overallRankHints">0 Tipps</small></div>
+              </div>
+              <div id="rankingStatus" class="ranking-status" aria-live="polite"></div>
+              <div class="phase-action-grid-v6">
+                <button data-phase-action="standby" type="button">Aus</button>
+                <button data-phase-action="maintenance" type="button">Wartung</button>
+                <button data-phase-action="prepare" type="button">Vorbereitung</button>
+                <button id="runningPhaseIndicator" type="button" disabled>Spiel läuft</button>
+              </div>
+              <div class="previous-phase">Vorherige Phase: <span id="lastPhaseValue">--</span></div>
+              <div id="prepareCounterWrap" class="prepare-countdown hidden"><span>Start in</span><strong id="prepareCounterValue">--</strong></div>
+            </section>
 
-    <main class="dashboard-main-grid">
-      <section id="currentRiddlesPanel" class="panel current-riddles-panel hidden">
-        <div id="currentRiddlesGrid" class="current-riddles-grid"></div>
-      </section>
+            <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
+              <div class="panel-heading-v6">
+                <div><span class="eyebrow">Zuordnung</span><h2 id="bookingHeading">Buchung</h2></div>
+                <span id="bookingCompactValue" class="booking-state">Keine Buchung</span>
+              </div>
+              <div class="booking-details-body">
+                <label class="field-label" for="bookingSelect">Buchung auswählen</label>
+                <select id="bookingSelect" class="booking-select" aria-label="Buchung"></select>
+                <div id="bookingSelectedInfo" class="booking-selected-info"></div>
+                <div class="booking-inline-fields">
+                  <label><span>Tipp-Sprache</span><select id="hintLanguageSelect" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
+                </div>
+                <div id="testBookingFields" class="test-booking-fields hidden">
+                  <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="E-Mail-Adresse" />
+                  <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" />
+                </div>
+                <div class="booking-action-row">
+                  <button id="refreshBookingsBtn" class="secondary-button" type="button">Aktualisieren</button>
+                  <button id="applyBookingBtn" class="secondary-button" type="button">Buchung bestätigen</button>
+                </div>
+                <button id="startGameBtn" class="start-game-button" type="button">Spiel starten</button>
+                <div id="bookingFeedback" class="summary-email-feedback"></div>
+                <div id="postGameActions" class="post-game-actions hidden"><button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button></div>
+              </div>
+            </section>
+          </div>
 
-      <details id="allRiddlesPanel" class="panel riddles-panel main-riddles-panel" open>
-        <summary class="section-summary">
-          <span class="summary-title">Alle Rätsel</span>
-          <span id="riddleProgressValue" class="summary-status">0 gelöst / 12</span>
-          <span class="details-chevron" aria-hidden="true">&#8250;</span>
-        </summary>
-        <div class="table-scroll-wrap">
-          <table class="simple-table riddles-table compact-riddles-table full-riddles-table">
-            <thead>
-              <tr>
-                <th>Rätsel</th>
-                <th>Status</th>
-                <th>Zeit</th>
-                <th>Aktionen</th>
-                <th>Live-Informationen</th>
-                <th>Tipps</th>
-              </tr>
-            </thead>
-            <tbody id="riddlesBody"></tbody>
+          <section id="currentRiddlesPanel" class="panel-v6 current-riddles-panel" aria-label="Aktuelles Rätsel">
+            <div id="currentRiddlesGrid" class="current-riddles-grid"></div>
+          </section>
+        </div>
+
+        <section id="allRiddlesPanel" class="panel-v6 all-riddles-panel" aria-labelledby="allRiddlesHeading">
+          <div class="panel-heading-v6 table-heading-v6">
+            <div><span class="eyebrow">Spielverlauf</span><h2 id="allRiddlesHeading">Alle Rätsel</h2></div>
+            <span id="riddleProgressValue" class="table-progress">0 abgeschlossen / 12</span>
+          </div>
+          <div class="table-scroll-wrap">
+            <table class="riddles-table-v6">
+              <thead><tr><th>#</th><th>Rätsel</th><th>Status</th><th>Zeit</th><th>Tipps</th><th>Rang</th></tr></thead>
+              <tbody id="riddlesBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <aside class="control-technical" aria-label="Raumsteuerung">
+        <section class="panel-v6 technical-panel lights-panel-v6">
+          <div class="technical-heading"><span aria-hidden="true">&#9728;</span><h2>Lichtsteuerung</h2></div>
+          <div id="lightsGrid" class="lights-grid-v6"></div>
+        </section>
+
+        <section class="panel-v6 technical-panel locks-panel-v6">
+          <div class="technical-heading"><span aria-hidden="true">&#128274;</span><h2>Schlosssteuerung</h2></div>
+          <div id="locksGrid" class="locks-grid-v6"></div>
+        </section>
+
+        <section class="panel-v6 technical-panel nodes-panel-v6">
+          <div class="technical-heading"><span aria-hidden="true">&#9673;</span><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
+          <div id="nodeStatusBar" class="node-list-v6"></div>
+        </section>
+
+        <section class="panel-v6 technical-panel operator-log-panel">
+          <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2><span id="diagnosticsCount" class="technical-summary">0 Einträge</span></div>
+          <div class="operator-log-filters" role="group" aria-label="Log filtern">
+            <button type="button" class="is-active" data-log-view="all">Alle</button>
+            <button type="button" data-log-view="commands">Befehle</button>
+            <button type="button" data-log-view="system">System</button>
+            <button type="button" data-log-view="errors">Fehler</button>
+          </div>
+          <div id="diagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
+          <div id="diagnosticsLogList" class="diagnostics-log-list operator-log-list" role="log" aria-label="Dashboard-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
+        </section>
+      </aside>
+    </main>
+    {% else %}
+    <main id="adminView" class="admin-workspace">
+      <section id="diagnosticsDetails" class="panel-v6 admin-panel" aria-labelledby="nodeAdminHeading">
+        <div class="panel-heading-v6">
+          <div><span class="eyebrow">Administration</span><h1 id="nodeAdminHeading">Node-Diagnose</h1></div>
+          <button id="rebootAllNodesBtn" class="secondary-button" type="button">Alle Nodes neu starten</button>
+        </div>
+        <div class="node-table-wrap">
+          <table class="simple-table node-diagnostics-table">
+            <thead><tr><th>Node</th><th>Status</th><th>Letzter Kontakt</th><th>Firmware</th><th>Fehler</th><th>Reboot</th></tr></thead>
+            <tbody id="nodeDiagnosticsBody"></tbody>
           </table>
         </div>
-      </details>
-
-      <div class="utility-panels-grid">
-        <details id="diagnosticsDetails" class="panel diagnostics-panel">
-          <summary class="section-summary">
-            <span class="summary-title">Node-Diagnose</span>
-            <span id="nodeDiagnosticsSummary" class="summary-status">Status wird geladen</span>
-            <span class="details-chevron" aria-hidden="true">&#8250;</span>
-          </summary>
-          <div class="diagnostics-body">
-            <section class="node-table-section">
-              <div class="node-table-heading">
-                <div>
-                  <h2>Steuergeräte</h2>
-                  <p>Status, letzter Kontakt, Firmware und Neustart</p>
-                </div>
-                <button id="rebootAllNodesBtn" class="node-reboot-all" type="button">Alle Nodes neu starten</button>
-              </div>
-              <div class="node-table-wrap">
-                <table class="simple-table node-diagnostics-table">
-                  <thead><tr><th>Node</th><th>Status</th><th>Letzter Kontakt</th><th>Firmware</th><th>Fehler</th><th>Reboot</th></tr></thead>
-                  <tbody id="nodeDiagnosticsBody"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="service-restart-section" aria-labelledby="serviceRestartHeading">
-              <div>
-                <h2 id="serviceRestartHeading">Systemdienste</h2>
-                <p>Jeder Neustart muss ausdrücklich bestätigt werden.</p>
-              </div>
-              <div class="service-restart-actions">
-                <button type="button" data-service-restart="game_master">Game Master neu starten</button>
-                <button type="button" data-service-restart="dashboard">Dashboard neu starten</button>
-              </div>
-            </section>
-
-            <details class="manual-controls-details">
-              <summary>Manuelle Licht- und Schlosssteuerung</summary>
-              <div class="manual-controls-grid">
-                <section><h3>Lichter</h3><div id="lightsGrid" class="controls-grid emergency-controls-grid"></div></section>
-                <section><h3>Schlösser</h3><div id="locksGrid" class="controls-grid emergency-controls-grid"></div></section>
-              </div>
-            </details>
-
-            <p class="diagnostics-contract-note">Logs und angeforderte Stufen liegen nur im Arbeitsspeicher des Dashboards. MQTT QoS 0 liefert keine Gerätebestätigung.</p>
-
-            <div class="diagnostics-toolbar">
-              <fieldset class="diagnostics-fieldset diagnostics-node-filters">
-                <legend>Knotenfilter</legend>
-                <div class="diagnostics-quick-actions">
-                  <button id="diagnosticsAllNodesBtn" type="button">Alle</button>
-                  <button id="diagnosticsNoNodesBtn" type="button">Keine</button>
-                </div>
-                <div class="diagnostics-check-grid">
-                  {% for node, label in diagnostic_nodes %}
-                  <label><input class="diagnostics-node-filter" type="checkbox" value="{{ node }}" checked /> {{ label }}</label>
-                  {% endfor %}
-                </div>
-              </fieldset>
-
-              <fieldset class="diagnostics-fieldset diagnostics-level-filters">
-                <legend>Log-Stufen</legend>
-                <div class="diagnostics-check-grid diagnostics-check-grid-levels">
-                  <label><input class="diagnostics-level-filter" type="checkbox" value="DBG" /> DBG</label>
-                  <label><input class="diagnostics-level-filter" type="checkbox" value="INF" /> INF</label>
-                  <label><input class="diagnostics-level-filter" type="checkbox" value="WRN" checked /> WRN</label>
-                  <label><input class="diagnostics-level-filter" type="checkbox" value="ERR" checked /> ERR</label>
-                </div>
-              </fieldset>
-              <div class="diagnostics-display-actions"><span id="diagnosticsCount" class="diagnostics-count">0 Einträge</span></div>
+        <section class="service-restart-section" aria-labelledby="serviceRestartHeading">
+          <div><h2 id="serviceRestartHeading">Systemdienste</h2><p>Jeder Neustart muss ausdrücklich bestätigt werden.</p></div>
+          <div class="service-restart-actions"><button type="button" data-service-restart="game_master">Game Master neu starten</button><button type="button" data-service-restart="dashboard">Dashboard neu starten</button></div>
+        </section>
+        <div class="diagnostics-toolbar">
+          <fieldset class="diagnostics-fieldset diagnostics-node-filters">
+            <legend>Knotenfilter</legend>
+            <div class="diagnostics-quick-actions"><button id="diagnosticsAllNodesBtn" type="button">Alle</button><button id="diagnosticsNoNodesBtn" type="button">Keine</button></div>
+            <div class="diagnostics-check-grid">
+              {% for node, label in diagnostic_nodes %}<label><input class="diagnostics-node-filter" type="checkbox" value="{{ node }}" checked /> {{ label }}</label>{% endfor %}
             </div>
-
-            <section class="diagnostics-level-section" aria-labelledby="diagnosticsLevelHeading">
-              <div class="diagnostics-section-heading">
-                <h2 id="diagnosticsLevelHeading">Log-Stufe je Node</h2>
-                <span>Nur angefordert, nicht bestätigt</span>
-              </div>
-              <div class="diagnostics-level-grid">
-                {% for node, label in diagnostic_nodes %}
-                <div class="diagnostics-level-row" data-log-level-node="{{ node }}">
-                  <strong>{{ label }}</strong>
-                  <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für {{ label }} auswählen"><option>DBG</option><option>INF</option><option selected>WRN</option><option>ERR</option></select></label>
-                  <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für {{ label }} anfordern">Anfordern</button>
-                  <span class="diagnostics-level-status">Noch nichts angefordert</span>
-                </div>
-                {% endfor %}
-              </div>
-            </section>
-
-            <div id="diagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
-            <div id="diagnosticsLogList" class="diagnostics-log-list" role="log" aria-label="Node-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
-          </div>
-        </details>
-
-        <details id="maintenanceHintEditor" class="panel hint-editor-panel">
-          <summary class="section-summary">
-            <span class="summary-title">Tipp-Editor</span>
-            <span id="hintEditorCompactStatus" class="summary-status">Außerhalb der Wartung schreibgeschützt</span>
-            <span class="details-chevron" aria-hidden="true">&#8250;</span>
-          </summary>
-          <div class="hint-editor-body">
-            <div class="hint-editor-toolbar">
-              <label>Sprache
-                <select id="hintEditorLanguage" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select>
-              </label>
-              <label>Rätsel<select id="hintEditorRiddle" class="booking-select"></select></label>
-              <button id="hintEditorAdd" type="button">Tipp hinzufügen</button>
-              <button id="hintEditorSave" type="button" class="summary-email-btn">Speichern</button>
+          </fieldset>
+          <fieldset class="diagnostics-fieldset diagnostics-level-filters">
+            <legend>Log-Stufen</legend>
+            <div class="diagnostics-check-grid diagnostics-check-grid-levels">
+              <label><input class="diagnostics-level-filter" type="checkbox" value="DBG" /> DBG</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="INF" /> INF</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="WRN" checked /> WRN</label>
+              <label><input class="diagnostics-level-filter" type="checkbox" value="ERR" checked /> ERR</label>
             </div>
-            <div id="hintEditorStatus" class="hint-editor-status" aria-live="polite"></div>
-            <div id="hintEditorList" class="hint-editor-list"></div>
+          </fieldset>
+        </div>
+        <section class="admin-diagnostics-log operator-log-panel" aria-labelledby="adminLogHeading">
+          <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2 id="adminLogHeading">Diagnose-Log</h2><span id="adminDiagnosticsCount" class="technical-summary">0 Einträge</span></div>
+          <div id="adminDiagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
+          <div id="adminDiagnosticsLogList" class="diagnostics-log-list operator-log-list" role="log" aria-label="Dashboard-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
+        </section>
+        <section class="diagnostics-level-section" aria-labelledby="diagnosticsLevelHeading">
+          <div class="diagnostics-section-heading"><h2 id="diagnosticsLevelHeading">Log-Stufe je Node</h2><span>Nur angefordert, nicht bestätigt</span></div>
+          <div class="diagnostics-level-grid">
+            {% for node, label in diagnostic_nodes %}
+            <div class="diagnostics-level-row" data-log-level-node="{{ node }}">
+              <strong>{{ label }}</strong>
+              <label><span>Stufe</span><select class="diagnostics-level-select" aria-label="Log-Stufe für {{ label }} auswählen"><option>DBG</option><option>INF</option><option selected>WRN</option><option>ERR</option></select></label>
+              <button class="diagnostics-level-button" type="button" aria-label="Log-Stufe für {{ label }} anfordern">Anfordern</button><span class="diagnostics-level-status">Noch nichts angefordert</span>
+            </div>
+            {% endfor %}
           </div>
-        </details>
-      </div>
+        </section>
+      </section>
+
+      <section id="maintenanceHintEditor" class="panel-v6 admin-panel hint-editor-panel" aria-labelledby="hintEditorHeading">
+        <div class="panel-heading-v6"><div><span class="eyebrow">Administration</span><h2 id="hintEditorHeading">Tipp-Editor</h2></div><span id="hintEditorCompactStatus" class="technical-summary">Außerhalb der Wartung schreibgeschützt</span></div>
+        <div class="hint-editor-body">
+          <div class="hint-editor-toolbar">
+            <label>Sprache<select id="hintEditorLanguage" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
+            <label>Rätsel<select id="hintEditorRiddle" class="booking-select"></select></label>
+            <button id="hintEditorAdd" type="button">Tipp hinzufügen</button>
+            <button id="hintEditorSave" type="button" class="summary-email-btn">Speichern</button>
+          </div>
+          <div id="hintEditorStatus" class="hint-editor-status" aria-live="polite"></div>
+          <div id="hintEditorList" class="hint-editor-list"></div>
+        </div>
+      </section>
     </main>
+    {% endif %}
 
     <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogMessage">
       <button id="confirmDialogClose" class="dialog-close" type="button" aria-label="Dialog schließen">&#215;</button>
       <div class="confirm-symbol" aria-hidden="true">?</div>
       <h2 id="confirmDialogTitle">Aktion bestätigen?</h2>
       <p id="confirmDialogMessage"></p>
-      <div class="confirm-dialog-actions">
-        <button id="confirmDialogCancel" type="button">Abbrechen</button>
-        <button id="confirmDialogAccept" class="confirm-primary" type="button">Bestätigen</button>
-      </div>
+      <div class="confirm-dialog-actions"><button id="confirmDialogCancel" type="button">Abbrechen</button><button id="confirmDialogAccept" class="confirm-primary" type="button">Bestätigen</button></div>
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261007-command-receipts"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v6"></script>
 </body>
 </html>

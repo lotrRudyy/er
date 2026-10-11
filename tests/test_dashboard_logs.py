@@ -33,6 +33,8 @@ PRODUCTION_CONSTANTS = {
     "LOG_NODE_LABELS",
     "LOG_NODE_IDS",
     "LOG_NODE_ID_SET",
+    "LEGACY_LOG_NODE_ID_SET",
+    "PARSED_LOG_NODE_ID_SET",
     "LOG_LEVELS",
     "LOG_LEVEL_SET",
     "LOG_STREAM_ID",
@@ -128,7 +130,7 @@ class IdParser(HTMLParser):
         values = dict(attrs)
         if values.get("id"):
             self.ids.append(str(values["id"]))
-        if tag == "details" and values.get("id") == "diagnosticsDetails":
+        if values.get("id") == "diagnosticsDetails":
             self.diagnostics_attrs = values
         if tag == "div" and "diagnostics-level-row" in str(values.get("class") or "").split():
             self.current_log_node = str(values.get("data-log-level-node") or "")
@@ -194,6 +196,7 @@ class DashboardLogTests(unittest.TestCase):
                 "d": {"pin": 4},
             },
         )
+        self.assertEqual(parse_log("stop_timer/log", self.payload())["node"], "stop_timer")
 
         warning = parse_log(
             "lighting/log",
@@ -284,12 +287,12 @@ class DashboardLogTests(unittest.TestCase):
         parsed = parse_query(QueryArgs(
             after="12",
             limit="25",
-            nodes=["lighting,chess", "stop_timer"],
+            nodes=["lighting,chess"],
             levels=["ERR", "WRN,INF"],
         ))
         self.assertEqual(parsed["after"], 12)
         self.assertEqual(parsed["limit"], 25)
-        self.assertEqual(parsed["nodes"], {"lighting", "chess", "stop_timer"})
+        self.assertEqual(parsed["nodes"], {"lighting", "chess"})
         self.assertEqual(parsed["levels"], {"ERR", "WRN", "INF"})
 
         for args in (
@@ -297,6 +300,7 @@ class DashboardLogTests(unittest.TestCase):
             QueryArgs(after="01"),
             QueryArgs(limit="0"),
             QueryArgs(limit="501"),
+            QueryArgs(nodes="stop_timer"),
             QueryArgs(nodes="lighting,unknown"),
             QueryArgs(levels="INFO"),
             QueryArgs(extra="1"),
@@ -325,7 +329,8 @@ class DashboardLightSummaryTests(unittest.TestCase):
         }, {})
         r1 = next(row for row in mixed if row["id"] == "r1")
         self.assertEqual(r1["state"], "mixed")
-        self.assertEqual(r1["state_label"], "gemischt")
+        self.assertEqual(r1["state_label"], "gemischt (0-100%)")
+        self.assertTrue(r1["dimmable"])
         self.assertTrue(r1["mixed"])
         self.assertFalse(r1["on"])
         self.assertTrue(r1["any_on"])
@@ -703,14 +708,12 @@ class DashboardDiagnosticsSourceTests(unittest.TestCase):
         append = function_source("appendDiagnosticsLogs")
         replace = function_source("replaceDiagnosticsLogs")
         delay = function_source("diagnosticsPollDelay")
-        self.assertIn("details?.open", can_poll)
+        self.assertIn("list.offsetParent !== null", can_poll)
         self.assertIn("document.visibilityState === 'visible'", can_poll)
         self.assertLess(poll.index("diagnosticsCanPoll()"), poll.index("api(`/api/logs?"))
         self.assertNotIn("innerHTML", create + append + replace)
         self.assertIn("textContent", create)
-        self.assertIn("appendChild", append)
-        self.assertIn("firstElementChild?.remove()", append)
-        self.assertNotIn("replaceChildren", append)
+        self.assertIn("replaceDiagnosticsLogs()", append)
         self.assertIn("replaceChildren", replace)
         self.assertIn("else appendDiagnosticsLogs(incoming)", poll)
         self.assertIn("DIAGNOSTICS_MAX_ENTRIES = 500", source)
@@ -834,7 +837,7 @@ function scheduleDiagnosticsPoll() {{}}
         self.assertEqual(parser.log_attrs.get("aria-relevant"), "additions")
         self.assertEqual(set(parser.log_controls), {
             "lighting", "maglock", "images_piano", "chess", "knocking",
-            "candles", "star_slider", "star_sky", "stop_timer",
+            "candles", "star_slider", "star_sky",
         })
         for node, controls in parser.log_controls.items():
             self.assertEqual([tag for tag, _attrs in controls], ["select", "button"], node)

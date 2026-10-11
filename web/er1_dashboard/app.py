@@ -11,6 +11,7 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -32,6 +33,11 @@ import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG = logging.getLogger("er1_dashboard")
+GAME_MASTER_SUPPORT_DIR = BASE_DIR.parents[1] / "scripts" / "game_master"
+if str(GAME_MASTER_SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(GAME_MASTER_SUPPORT_DIR))
+
+from riddle_time_correction import plan_riddle_time_change
 
 
 def _candidate_env_paths() -> list[Path]:
@@ -336,7 +342,7 @@ MQTT_CLIENT_ID = os.getenv(
 HINTS_PATH = BASE_DIR / "data" / "dashboard_hint_counts.json"
 HINT_TEMPLATE_DEFAULTS_PATH = BASE_DIR / "hint_templates.defaults.json"
 HINT_TEMPLATE_RUNTIME_PATH = BASE_DIR / "data" / "hint_templates.json"
-HINT_TEMPLATE_VERSION = 1
+HINT_TEMPLATE_VERSION = 2
 HINT_TEMPLATE_LANGUAGES = ("de", "en", "it")
 HINT_TEMPLATE_RIDDLES = (
     "images", "piano", "prison", "wheel", "chains", "tangram",
@@ -345,6 +351,8 @@ HINT_TEMPLATE_RIDDLES = (
 MAX_HINT_TEMPLATE_BYTES = 96 * 1024
 MAX_HINT_TIPS_PER_LANGUAGE = 20
 MAX_HINT_TIP_CHARS = 2000
+MAX_HINT_OFFER_AFTER_S = 86400
+MAX_RIDDLE_TIME_PREVIEW_S = 7 * 24 * 60 * 60
 SELECTED_BOOKING_PATH = BASE_DIR / "dashboard_selected_booking.json"
 START_ASSIGNMENT_PATH = Path(
     os.getenv("ER1_START_ASSIGNMENT_PATH", str(BASE_DIR / "data" / "start_assignment.json"))
@@ -1091,7 +1099,7 @@ RIDDLES = [
     {"id": "rope_paths", "label": "Rope", "node_id": None, "manual": True},
     {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
     {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
-    {"id": "chess", "label": "Chess", "node_id": "chess", "manual": False},
+    {"id": "chess", "label": "Schach", "node_id": "chess", "manual": False},
     {"id": "knocking", "label": "Knocking", "node_id": "knocking", "manual": False},
     {"id": "candles", "label": "Candles", "node_id": "candles", "manual": False},
     {"id": "star_slider", "label": "Stars", "node_id": "star_slider", "manual": False},
@@ -1102,7 +1110,7 @@ NODE_LABELS = [
     ("lighting", "Lighting Controller"),
     ("maglock", "Maglock Controller"),
     ("images_piano", "Images / Piano"),
-    ("chess", "Chess"),
+    ("chess", "Schach"),
     ("knocking", "Knocking"),
     ("candles", "Candles"),
     ("star_slider", "Star Slider"),
@@ -1119,8 +1127,8 @@ LOCKS = [
 
 LIGHT_GROUPS = {
     "entrance": {"label": "entrance", "lights": ["torch_stiege"], "dimmable": False},
-    "r1": {"label": "r1", "lights": ["r1_stuen", "r1_bild"], "dimmable": False},
-    "r2_main": {"label": "r2 chess + kostn", "lights": ["r2_chess", "r2_schronk"], "dimmable": False},
+    "r1": {"label": "r1", "lights": ["r1_stuen", "r1_bild"], "dimmable": True},
+    "r2_main": {"label": "r2 chess + kostn", "lights": ["r2_chess", "r2_schronk"], "dimmable": True},
     "r2_torch": {"label": "r2 torch", "lights": ["torch_r2"], "dimmable": False},
     "r3_main": {"label": "r3 slider + cage", "lights": ["r3_slider", "r3_cage"], "dimmable": True},
     "r3_torch": {"label": "r2r3 torch", "lights": ["torch_r2r3"], "dimmable": False},
@@ -1144,18 +1152,19 @@ LOG_NODE_LABELS = {
     "lighting": "Lighting Controller",
     "maglock": "Maglock Controller",
     "images_piano": "Images / Piano",
-    "chess": "Chess",
+    "chess": "Schach",
     "knocking": "Knocking",
     "candles": "Candles",
     "star_slider": "Star Slider",
     "star_sky": "Star Sky",
-    "stop_timer": "Stop Timer (optional / possibly offline)",
 }
 LOG_NODE_IDS = tuple(LOG_NODE_LABELS)
 LOG_NODE_ID_SET = frozenset(LOG_NODE_IDS)
+LEGACY_LOG_NODE_ID_SET = frozenset({"stop_timer"})
+PARSED_LOG_NODE_ID_SET = LOG_NODE_ID_SET | LEGACY_LOG_NODE_ID_SET
 REBOOT_NODE_IDS = frozenset({
     "lighting", "maglock", "images_piano", "chess", "knocking",
-    "candles", "star_slider", "star_sky", "stop_timer",
+    "candles", "star_slider", "star_sky",
 })
 LOG_LEVELS = ("DBG", "INF", "WRN", "ERR")
 LOG_LEVEL_SET = frozenset(LOG_LEVELS)
@@ -1231,7 +1240,7 @@ def _reject_log_json_constant(value: str) -> Any:
 
 def parse_node_log(topic: Any, payload: Any) -> dict[str, Any] | None:
     parts = str(topic or "").split("/")
-    if len(parts) != 2 or parts[1] != "log" or parts[0] not in LOG_NODE_ID_SET:
+    if len(parts) != 2 or parts[1] != "log" or parts[0] not in PARSED_LOG_NODE_ID_SET:
         return None
     if not isinstance(payload, (bytes, bytearray)) or not payload or len(payload) > MAX_LOG_PAYLOAD_BYTES:
         return None
@@ -1419,9 +1428,11 @@ def validate_log_level_request(data: Any) -> tuple[str, str]:
     return node, level
 
 
-def _validate_hint_templates(payload: Any) -> dict[str, Any]:
+def _validate_hint_templates(payload: Any, *, enforce_encoded_size: bool = True) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Die Tippvorlagen müssen als Objekt übergeben werden.")
+    if "version" in payload and payload.get("version") != HINT_TEMPLATE_VERSION:
+        raise ValueError("Es können nur Tippvorlagen der Version 2 gespeichert werden.")
     raw_templates = payload.get("templates") if "templates" in payload else payload
     if not isinstance(raw_templates, dict):
         raise ValueError("Die Tippvorlagen fehlen.")
@@ -1429,7 +1440,7 @@ def _validate_hint_templates(payload: Any) -> dict[str, Any]:
     if unknown_riddles:
         raise ValueError(f"Unbekannte Rätsel in den Tippvorlagen: {', '.join(unknown_riddles)}")
 
-    templates: dict[str, dict[str, list[str]]] = {}
+    templates: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for riddle in HINT_TEMPLATE_RIDDLES:
         raw_languages = raw_templates.get(riddle, {})
         if not isinstance(raw_languages, dict):
@@ -1444,22 +1455,37 @@ def _validate_hint_templates(payload: Any) -> dict[str, Any]:
                 raise ValueError(
                     f"{riddle}/{language} darf höchstens {MAX_HINT_TIPS_PER_LANGUAGE} Tipptexte enthalten."
                 )
-            cleaned: list[str] = []
+            cleaned: list[dict[str, Any]] = []
             for tip in tips:
-                if not isinstance(tip, str):
+                if not isinstance(tip, dict) or set(tip) != {
+                    "text", "offer_after_total_s", "offer_after_riddle_s",
+                }:
+                    raise ValueError(
+                        f"Jeder Tipp für {riddle}/{language} muss genau Text und beide Zeitangaben enthalten."
+                    )
+                text = tip.get("text")
+                if not isinstance(text, str):
                     raise ValueError(f"Jeder Tipptext für {riddle}/{language} muss Text sein.")
-                text = tip.strip()
-                if not text:
+                if not text.strip():
                     raise ValueError(f"Leere Tipptexte sind für {riddle}/{language} nicht erlaubt.")
                 if len(text) > MAX_HINT_TIP_CHARS:
                     raise ValueError(
                         f"Ein Tipptext für {riddle}/{language} ist länger als {MAX_HINT_TIP_CHARS} Zeichen."
                     )
-                cleaned.append(text)
+                cleaned_tip = {"text": text}
+                for field in ("offer_after_total_s", "offer_after_riddle_s"):
+                    value = tip.get(field)
+                    if value is not None and (type(value) is not int or not 0 <= value <= MAX_HINT_OFFER_AFTER_S):
+                        raise ValueError(
+                            f"{field} für {riddle}/{language} muss null oder eine ganze Zahl zwischen 0 und "
+                            f"{MAX_HINT_OFFER_AFTER_S} sein."
+                        )
+                    cleaned_tip[field] = value
+                cleaned.append(cleaned_tip)
             templates[riddle][language] = cleaned
     result = {"version": HINT_TEMPLATE_VERSION, "templates": templates}
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if len(encoded) > MAX_HINT_TEMPLATE_BYTES:
+    if enforce_encoded_size and len(encoded) > MAX_HINT_TEMPLATE_BYTES:
         raise ValueError("Die Tippvorlagen überschreiten die zulässige Gesamtgröße.")
     return result
 
@@ -1470,9 +1496,34 @@ def _read_hint_templates(path: Path) -> dict[str, Any]:
     if path.stat().st_size > MAX_HINT_TEMPLATE_BYTES:
         raise ValueError(f"Die Tippvorlagendatei ist zu groß: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("version") != HINT_TEMPLATE_VERSION:
+    version = payload.get("version") if isinstance(payload, dict) else None
+    if type(version) is not int or version not in {1, HINT_TEMPLATE_VERSION}:
         raise ValueError(f"Nicht unterstützte Tippvorlagen-Version in {path}")
-    return _validate_hint_templates(payload)
+    legacy_v1 = version == 1
+    if legacy_v1:
+        raw_templates = payload.get("templates")
+        if not isinstance(raw_templates, dict):
+            raise ValueError(f"Die Tippvorlagen fehlen in {path}")
+        migrated: dict[str, Any] = {}
+        for riddle, languages in raw_templates.items():
+            if not isinstance(languages, dict):
+                raise ValueError(f"Die Tippvorlagen für {riddle} müssen ein Objekt sein.")
+            migrated[riddle] = {}
+            for language, tips in languages.items():
+                if not isinstance(tips, list) or any(not isinstance(tip, str) for tip in tips):
+                    raise ValueError(f"Jeder Tipptext für {riddle}/{language} muss Text sein.")
+                migrated[riddle][language] = [
+                    {
+                        "text": tip,
+                        "offer_after_total_s": None,
+                        "offer_after_riddle_s": None,
+                    }
+                    for tip in tips
+                ]
+        payload = {"version": HINT_TEMPLATE_VERSION, "templates": migrated}
+    # A valid v1 file already passed the persisted byte limit. Object wrappers
+    # increase only its in-memory representation and must not make migration lossy.
+    return _validate_hint_templates(payload, enforce_encoded_size=not legacy_v1)
 
 
 def load_hint_templates() -> dict[str, Any]:
@@ -2036,12 +2087,14 @@ class DashboardStore:
             except Exception:
                 return 0
 
-        def _numeric_seconds(*values: Any) -> int | None:
+        def _numeric_seconds(*values: Any) -> float | None:
             for value in values:
                 if value in {None, ""}:
                     continue
                 try:
-                    return int(round(float(value)))
+                    seconds = float(value)
+                    if math.isfinite(seconds):
+                        return round(seconds, 3)
                 except Exception:
                     continue
             return None
@@ -2308,15 +2361,17 @@ class DashboardStore:
                 if online and isinstance(uptime, (int, float)):
                     node_status = f"online ({int(uptime)}s)"
 
-            def _first_seconds(*values: Any) -> int:
+            def _first_seconds(*values: Any) -> float:
                 for value in values:
                     if value in {None, ""}:
                         continue
                     try:
-                        return max(0, int(round(float(value))))
+                        seconds = float(value)
+                        if math.isfinite(seconds):
+                            return round(max(0.0, seconds), 3)
                     except Exception:
                         continue
-                return 0
+                return 0.0
 
             display_seconds = _first_seconds(
                 timing.get("display_time_s"),
@@ -3668,6 +3723,113 @@ def get_website_json(path: str, timeout: int | None = None) -> dict[str, Any]:
     return website_json(path, None, method="GET", timeout=timeout)
 
 
+def _nonnegative_preview_number(value: Any, *, field: str) -> float:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Ungültiger Zahlenwert für {field}.") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Ungültiger Zahlenwert für {field}.")
+    return round(max(0.0, number), 3)
+
+
+def build_ranking_preview_candidate(snapshot: Any) -> dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        raise ValueError("Der aktuelle Dashboard-Zustand ist ungültig.")
+    game = snapshot.get("game") if isinstance(snapshot.get("game"), dict) else {}
+    run_id = str(game.get("run_id") or "").strip()
+    if not run_id:
+        raise ValueError("Es ist kein aktueller Spieldurchlauf für die Rangvorschau verfügbar.")
+
+    raw_rows = snapshot.get("riddles") if isinstance(snapshot.get("riddles"), list) else []
+    rows_by_key = {
+        _canonical_riddle_name(row.get("id")): row
+        for row in raw_rows
+        if isinstance(row, dict) and _canonical_riddle_name(row.get("id"))
+    }
+    raw_puzzles: list[dict[str, Any]] = []
+    for puzzle_key in RIDDLE_ORDER_V2:
+        row = rows_by_key.get(puzzle_key, {})
+        raw_hint_count = row.get("hint_count", 0)
+        if type(raw_hint_count) is bool:
+            raise ValueError(f"Ungültiger Tippzähler für {puzzle_key}.")
+        try:
+            hint_count = max(0, int(raw_hint_count or 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Ungültiger Tippzähler für {puzzle_key}.") from exc
+        phase_state = str(row.get("phase_state") or "pending").strip().lower()
+        skipped = phase_state == "skipped" or bool(row.get("skipped", False))
+        solved = not skipped and (phase_state == "solved" or bool(row.get("solved", False)))
+        raw_puzzles.append({
+            "puzzleKey": puzzle_key,
+            "timeS": _nonnegative_preview_number(
+                row.get("display_time_s", row.get("time_s", row.get("live_time_s", row.get("solve_time_s", 0)))),
+                field=f"Rätselzeit {puzzle_key}",
+            ),
+            "hintCount": hint_count,
+            "solved": solved,
+            "skipped": skipped,
+        })
+
+    return {
+        "runId": run_id,
+        "durationS": _nonnegative_preview_number(game.get("elapsed_s", 0), field="Spieldauer"),
+        "hintCount": sum(row["hintCount"] for row in raw_puzzles),
+        "rawPuzzles": raw_puzzles,
+    }
+
+
+def _ranking_value(value: Any, *, nullable: bool) -> int | None:
+    if value is None and nullable:
+        return None
+    if type(value) is not int or value < 0:
+        raise ValueError("Die Website hat eine ungültige Rangvorschau zurückgegeben.")
+    return value
+
+
+def build_ranking_preview_dashboard_dto(candidate: dict[str, Any], website_result: Any) -> dict[str, Any]:
+    if not isinstance(website_result, dict) or website_result.get("ok") is False:
+        raise ValueError("Die Website hat keine gültige Rangvorschau zurückgegeben.")
+    overall_rank = _ranking_value(website_result.get("overallRank"), nullable=False)
+    overall_total = _ranking_value(website_result.get("overallRankTotal"), nullable=False)
+    if overall_rank < 1 or overall_rank > overall_total:
+        raise ValueError("Die Website hat eine ungültige Rangvorschau zurückgegeben.")
+
+    raw_rankings = website_result.get("rawPuzzles")
+    if not isinstance(raw_rankings, list):
+        raise ValueError("Die Website hat keine Rätselränge zurückgegeben.")
+    ranking_by_key: dict[str, dict[str, Any]] = {}
+    for row in raw_rankings:
+        if not isinstance(row, dict):
+            raise ValueError("Die Website hat ungültige Rätselränge zurückgegeben.")
+        key = str(row.get("puzzleKey") or "").strip()
+        if key not in RIDDLE_ORDER_V2 or key in ranking_by_key:
+            raise ValueError("Die Website hat ungültige Rätselränge zurückgegeben.")
+        rank = _ranking_value(row.get("rank"), nullable=True)
+        rank_total = _ranking_value(row.get("rankTotal"), nullable=False)
+        if rank is not None and (rank < 1 or rank > rank_total):
+            raise ValueError("Die Website hat ungültige Rätselränge zurückgegeben.")
+        ranking_by_key[key] = {"rank": rank, "rank_total": rank_total}
+    if set(ranking_by_key) != set(RIDDLE_ORDER_V2):
+        raise ValueError("Die Website hat keine vollständige Rätselrangliste zurückgegeben.")
+
+    return {
+        "ok": True,
+        "run_id": candidate["runId"],
+        "duration_s": candidate["durationS"],
+        "hint_count": candidate["hintCount"],
+        "overall": {"rank": overall_rank, "rank_total": overall_total},
+        "riddles": [
+            {
+                "id": key,
+                "label": RIDDLE_LABELS_V2.get(key, key),
+                **ranking_by_key[key],
+            }
+            for key in RIDDLE_ORDER_V2
+        ],
+    }
+
+
 def _parse_tsv_table(text: str) -> list[dict[str, Any]]:
     lines = [line.rstrip("\n") for line in text.splitlines() if line.strip()]
     if not lines:
@@ -4702,6 +4864,8 @@ IDEMPOTENT_API_PATHS = frozenset({
     "/api/riddle-time",
     "/api/riddle-outcome",
 })
+# /api/riddle-time-preview is a read-only GET and therefore never reserves a
+# durable mutation receipt.
 
 
 def _normalize_operation_id(value: Any) -> str:
@@ -5009,7 +5173,12 @@ def api_operation_status(operation_id: str) -> Any:
 
 @app.get("/")
 def index() -> str:
-    return render_template("index.html")
+    return render_template("index.html", initial_view="control")
+
+
+@app.get("/admin")
+def admin_dashboard() -> str:
+    return render_template("index.html", initial_view="admin")
 
 
 
@@ -5110,6 +5279,32 @@ def api_state() -> Any:
     return response
 
 
+def _no_store_json(payload: dict[str, Any], status: int = 200) -> Any:
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response if status == 200 else (response, status)
+
+
+@app.get("/api/ranking-preview")
+def api_ranking_preview() -> Any:
+    snapshot = store.snapshot()
+    try:
+        candidate = build_ranking_preview_candidate(snapshot)
+    except ValueError as exc:
+        return _no_store_json({"ok": False, "error": str(exc)}, 409)
+    try:
+        website_result = post_website_json("/api/leaderboard/ranking-preview", candidate)
+        result = build_ranking_preview_dashboard_dto(candidate, website_result)
+    except Exception:
+        LOG.warning("Website ranking preview is unavailable", exc_info=True)
+        return _no_store_json({
+            "ok": False,
+            "error": "Die Rangvorschau ist derzeit nicht verfügbar.",
+        }, 503)
+    return _no_store_json(result)
+
+
 @app.post("/api/hint-templates")
 def api_hint_templates() -> Any:
     data = request.get_json(silent=True) or {}
@@ -5148,7 +5343,8 @@ def api_logs() -> Any:
         query = parse_logs_query(request.args)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    result = node_log_buffer.query(**query)
+    # Legacy nodes may still be parsed into the buffer, but only active nodes are presented.
+    result = node_log_buffer.query(**{**query, "nodes": query["nodes"] or LOG_NODE_ID_SET})
     selected_nodes = query["nodes"]
     selected_levels = query["levels"]
     response = jsonify({
@@ -5730,6 +5926,93 @@ def api_riddle_time() -> Any:
     return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "mqtt_queued": True})
 
 
+def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float) -> dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        raise ValueError("Der aktuelle Dashboard-Zustand ist ungültig.")
+    raw_rows = snapshot.get("riddles") if isinstance(snapshot.get("riddles"), list) else []
+    rows_by_key = {
+        _canonical_riddle_name(row.get("id")): row
+        for row in raw_rows
+        if isinstance(row, dict) and _canonical_riddle_name(row.get("id"))
+    }
+    times: dict[str, Any] = {}
+    statuses: dict[str, str] = {}
+    for key in RIDDLE_ORDER_V2:
+        row = rows_by_key.get(key, {})
+        times[key] = row.get(
+            "display_time_s",
+            row.get("time_s", row.get("live_time_s", row.get("solve_time_s", 0))),
+        )
+        statuses[key] = str(row.get("phase_state") or "pending").strip().lower()
+
+    correction = plan_riddle_time_change(
+        riddle,
+        solve_time_s,
+        times,
+        statuses,
+        max_time_s=MAX_RIDDLE_TIME_PREVIEW_S,
+    )
+
+    def rendered_change(key: str, old_time_s: float, new_time_s: float) -> dict[str, Any]:
+        row = rows_by_key.get(key, {})
+        return {
+            "riddle_id": key,
+            "label": str(row.get("label") or RIDDLE_LABELS_V2.get(key, key)),
+            "old_time_s": old_time_s,
+            "new_time_s": new_time_s,
+        }
+
+    source = rendered_change(
+        correction["source_riddle"],
+        correction["source_previous_s"],
+        correction["source_new_s"],
+    )
+    receiving = None
+    if correction["target_riddle"] is not None:
+        receiving = rendered_change(
+            correction["target_riddle"],
+            correction["target_previous_s"],
+            correction["target_new_s"],
+        )
+    return {
+        "source": source,
+        "receiving": receiving,
+        "source_stage_delta_s": correction["source_stage_delta_s"],
+    }
+
+
+@app.get("/api/riddle-time-preview")
+def api_riddle_time_preview() -> Any:
+    try:
+        data = {
+            "riddle": request.args.get("riddle", ""),
+            "time_text": request.args.get("time_text", ""),
+            "expected_phase": int(request.args.get("expected_phase", "")),
+            "expected_run_id": request.args.get("expected_run_id", ""),
+        }
+    except (TypeError, ValueError):
+        return _no_store_json({"ok": False, "error": "Ungültiger Zustandsabgleich."}, 400)
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    if data["expected_phase"] < 3:
+        return _no_store_json({
+            "ok": False,
+            "error": "Rätselzeiten können erst während oder nach einem gestarteten Spiel geändert werden.",
+        }, 409)
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return _no_store_json({"ok": False, "error": "Rätsel-ID fehlt"}, 400)
+    raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
+    try:
+        seconds = parse_mmss_input(raw_value)
+        seconds = float(seconds) if seconds is not None else 0.0
+        preview = build_riddle_time_preview(store.snapshot(), riddle, seconds)
+    except (TypeError, ValueError) as exc:
+        return _no_store_json({"ok": False, "error": str(exc)}, 400)
+    return _no_store_json({"ok": True, **preview})
+
+
 @app.post("/api/riddle-outcome")
 def api_riddle_outcome() -> Any:
     data = request.get_json(force=True) or {}
@@ -5789,8 +6072,8 @@ RIDDLE_LABELS_V2 = {
     "wheel": "Rad",
     "chains": "Ketten",
     "tangram": "Tangram",
-    "magnet": "Magnetschlüssel",
-    "chess": "Pferd",
+    "magnet": "Magnet",
+    "chess": "Schach",
     "knocking": "Klopfen",
     "candles": "Kerzen",
     "stars": "Sterne",
@@ -5822,8 +6105,8 @@ RIDDLES = [
     {"id": "wheel", "label": "Rad", "node_id": None, "manual": True},
     {"id": "chains", "label": "Ketten", "node_id": None, "manual": True},
     {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
-    {"id": "magnet", "label": "Magnetschlüssel", "node_id": None, "manual": True},
-    {"id": "chess", "label": "Pferd", "node_id": "chess", "manual": False},
+    {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
+    {"id": "chess", "label": "Schach", "node_id": "chess", "manual": False},
     {"id": "knocking", "label": "Klopfen", "node_id": "knocking", "manual": False},
     {"id": "candles", "label": "Kerzen", "node_id": "candles", "manual": False},
     {"id": "stars", "label": "Sterne", "node_id": "star_slider", "manual": False},
@@ -5833,16 +6116,15 @@ NODE_LABELS = [
     ("lighting", "Lichtsteuerung"),
     ("maglock", "Schlosssteuerung"),
     ("images_piano", "Bilder / Piano"),
-    ("chess", "Pferd"),
+    ("chess", "Schach"),
     ("knocking", "Klopfen"),
     ("candles", "Kerzen"),
     ("star_slider", "Sternenschieber"),
     ("star_sky", "Sternenhimmel"),
-    ("stop_timer", "Stop Timer (optional)"),
 ]
 
 PHASE_LABELS_DE = {
-    0: "Bereitschaft",
+    0: "Aus",
     1: "Wartung",
     2: "Vorbereitung",
     3: "Bilder",
@@ -5850,8 +6132,8 @@ PHASE_LABELS_DE = {
     5: "Gefängnis",
     6: "Rad",
     7: "Ketten",
-    8: "Tangram & Magnetschlüssel",
-    9: "Pferd",
+    8: "Tangram & Magnet",
+    9: "Schach",
     10: "Klopfen",
     11: "Kerzen",
     12: "Sterne",
@@ -5862,10 +6144,10 @@ PHASE_LABELS_DE = {
 def pretty_phase_name(name: str) -> str:
     text = str(name or "").strip().lower()
     by_name = {
-        "standby": "Bereitschaft", "maintenance": "Wartung", "prepare": "Vorbereitung",
+        "standby": "Aus", "maintenance": "Wartung", "prepare": "Vorbereitung",
         "start": "Bilder", "piano": "Piano", "prison": "Gefängnis", "wheel": "Rad",
-        "chains": "Ketten", "rope": "Ketten", "tangram_magnet": "Tangram & Magnetschlüssel",
-        "chess": "Pferd", "knocking": "Klopfen", "candles": "Kerzen",
+        "chains": "Ketten", "rope": "Ketten", "tangram_magnet": "Tangram & Magnet",
+        "chess": "Schach", "knocking": "Klopfen", "candles": "Kerzen",
         "stars": "Sterne", "sissi": "Sissi", "finished": "Beendet",
     }
     return by_name.get(text, str(name or "").replace("_", " ").strip().title())
@@ -5879,8 +6161,8 @@ LOCKS = [
 ]
 LIGHT_GROUPS = {
     "entrance": {"label": "Eingang", "lights": ["torch_stiege"], "dimmable": False},
-    "r1": {"label": "Raum 1", "lights": ["r1_stuen", "r1_bild"], "dimmable": False},
-    "r2_main": {"label": "R2 Pferd + Kiste", "lights": ["r2_chess", "r2_schronk"], "dimmable": False},
+    "r1": {"label": "Raum 1", "lights": ["r1_stuen", "r1_bild"], "dimmable": True},
+    "r2_main": {"label": "R2 Schach + Kiste", "lights": ["r2_chess", "r2_schronk"], "dimmable": True},
     "r2_torch": {"label": "R2 Fackel", "lights": ["torch_r2"], "dimmable": False},
     "r3_main": {"label": "R3 Schieber + Käfig", "lights": ["r3_slider", "r3_cage"], "dimmable": True},
     "r3_torch": {"label": "R2/R3 Fackel", "lights": ["torch_r2r3"], "dimmable": False},

@@ -29,7 +29,6 @@ PHYSICAL_NODE_IDS = (
     "candles",
     "star_slider",
     "star_sky",
-    "stop_timer",
 )
 AUTO_NODE_REBOOT_INTERVAL_S = 14 * 24 * 60 * 60
 AUTO_NODE_REBOOT_RETRY_S = 60 * 60

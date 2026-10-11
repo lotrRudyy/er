@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +22,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GAME_MASTER_DIR = ROOT / "scripts" / "game_master"
+sys.path.insert(0, str(GAME_MASTER_DIR))
+
+from riddle_time_correction import plan_riddle_time_change
+
 APP_PATH = ROOT / "web" / "er1_dashboard" / "app.py"
 JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "app.js"
 CSS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "style.css"
@@ -75,6 +81,7 @@ def extracted_method(class_name: str, method_name: str) -> tuple[Any, dict[str, 
     namespace: dict[str, Any] = {
         "Any": Any,
         "datetime": datetime,
+        "math": math,
         "timezone": timezone,
     }
     exec(
@@ -296,7 +303,7 @@ class DashboardMutationTests(unittest.TestCase):
             "jsonify": JsonResponse,
             "REBOOT_NODE_IDS": frozenset({
                 "lighting", "maglock", "images_piano", "chess", "knocking",
-                "candles", "star_slider", "star_sky", "stop_timer",
+                "candles", "star_slider", "star_sky",
             }),
             "store": store,
             "_stale_action_response": lambda _data: None,
@@ -317,8 +324,8 @@ class DashboardMutationTests(unittest.TestCase):
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "all"})
         response = namespace["api_node_reboot"]()
         self.assertTrue(response["mqtt_queued"])
-        self.assertEqual(response["queued_count"], 9)
-        self.assertEqual(len(published), 10)
+        self.assertEqual(response["queued_count"], 8)
+        self.assertEqual(len(published), 9)
         self.assertTrue(all(topic.endswith("/sys/cmd") and payload == "REBOOT" for topic, payload in published))
 
         store.game_state["phase"] = 3
@@ -326,13 +333,13 @@ class DashboardMutationTests(unittest.TestCase):
         response, status = namespace["api_node_reboot"]()
         self.assertEqual(status, 409)
         self.assertFalse(response["ok"])
-        self.assertEqual(len(published), 10)
+        self.assertEqual(len(published), 9)
 
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
         response, status = namespace["api_node_reboot"]()
         self.assertEqual(status, 409)
         self.assertFalse(response["ok"])
-        self.assertEqual(len(published), 10)
+        self.assertEqual(len(published), 9)
 
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "lighting"})
         response = namespace["api_node_reboot"]()
@@ -738,9 +745,10 @@ class HintTemplateTests(unittest.TestCase):
         namespace.update({
             "HINT_TEMPLATE_RIDDLES": tuple(self.defaults["templates"]),
             "HINT_TEMPLATE_LANGUAGES": ("de", "en", "it"),
-            "HINT_TEMPLATE_VERSION": 1,
+            "HINT_TEMPLATE_VERSION": 2,
             "MAX_HINT_TIPS_PER_LANGUAGE": 20,
             "MAX_HINT_TIP_CHARS": 2000,
+            "MAX_HINT_OFFER_AFTER_S": 86400,
             "MAX_HINT_TEMPLATE_BYTES": 96 * 1024,
             "_hint_templates_lock": threading.RLock(),
             "_hint_templates": {},
@@ -749,9 +757,14 @@ class HintTemplateTests(unittest.TestCase):
 
     def test_canonical_texts_and_neutral_empty_templates_are_server_owned(self) -> None:
         templates = self.defaults["templates"]
+        self.assertEqual(self.defaults["version"], 2)
         self.assertEqual(
-            templates["images"]["de"][0],
+            templates["images"]["de"][0]["text"],
             "Fällt euch irgendetwas Ungewöhnliches im Raum auf? Was könnte man damit machen?",
+        )
+        self.assertEqual(
+            {key: value for key, value in templates["images"]["de"][0].items() if key != "text"},
+            {"offer_after_total_s": None, "offer_after_riddle_s": None},
         )
         self.assertEqual(templates["tangram"], {"de": [], "en": [], "it": []})
         self.assertEqual(templates["sissi"], {"de": [], "en": [], "it": []})
@@ -773,10 +786,92 @@ class HintTemplateTests(unittest.TestCase):
         self.assertEqual(writes, [(runtime, self.defaults)])
 
         oversized = copy.deepcopy(self.defaults)
-        oversized["templates"]["images"]["de"] = ["x" * 2001]
+        oversized["templates"]["images"]["de"][0]["text"] = "x" * 2001
         with self.assertRaisesRegex(ValueError, "länger als 2000"):
             namespace["save_hint_templates"](oversized)
         self.assertEqual(len(writes), 1)
+
+    def test_v1_files_migrate_losslessly_but_saves_require_strict_v2_objects(self) -> None:
+        namespace = extracted("_validate_hint_templates", "_read_hint_templates")
+        namespace.update({
+            "HINT_TEMPLATE_RIDDLES": tuple(self.defaults["templates"]),
+            "HINT_TEMPLATE_LANGUAGES": ("de", "en", "it"),
+            "HINT_TEMPLATE_VERSION": 2,
+            "MAX_HINT_TIPS_PER_LANGUAGE": 20,
+            "MAX_HINT_TIP_CHARS": 2000,
+            "MAX_HINT_OFFER_AFTER_S": 86400,
+            "MAX_HINT_TEMPLATE_BYTES": 96 * 1024,
+        })
+        legacy = {
+            "version": 1,
+            "templates": {
+                riddle: {
+                    language: [tip["text"] for tip in tips]
+                    for language, tips in languages.items()
+                }
+                for riddle, languages in self.defaults["templates"].items()
+            },
+        }
+        legacy["templates"]["images"]["de"][0] = "  Text bleibt unverändert.  "
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "legacy.json"
+            path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            migrated = namespace["_read_hint_templates"](path)
+        self.assertEqual(migrated["version"], 2)
+        self.assertEqual(migrated["templates"]["images"]["de"][0], {
+            "text": "  Text bleibt unverändert.  ",
+            "offer_after_total_s": None,
+            "offer_after_riddle_s": None,
+        })
+
+        with self.assertRaisesRegex(ValueError, "Version 2"):
+            namespace["_validate_hint_templates"](legacy)
+        invalid = copy.deepcopy(self.defaults)
+        invalid["templates"]["images"]["de"][0]["offer_after_total_s"] = True
+        with self.assertRaisesRegex(ValueError, "0 und 86400"):
+            namespace["_validate_hint_templates"](invalid)
+        invalid = copy.deepcopy(self.defaults)
+        invalid["templates"]["images"]["de"][0]["extra"] = 1
+        with self.assertRaisesRegex(ValueError, "genau Text"):
+            namespace["_validate_hint_templates"](invalid)
+
+    def test_default_and_runtime_v1_files_both_load_as_v2(self) -> None:
+        namespace = extracted("_validate_hint_templates", "_read_hint_templates", "load_hint_templates")
+        namespace.update({
+            "HINT_TEMPLATE_RIDDLES": tuple(self.defaults["templates"]),
+            "HINT_TEMPLATE_LANGUAGES": ("de", "en", "it"),
+            "HINT_TEMPLATE_VERSION": 2,
+            "MAX_HINT_TIPS_PER_LANGUAGE": 20,
+            "MAX_HINT_TIP_CHARS": 2000,
+            "MAX_HINT_OFFER_AFTER_S": 86400,
+            "MAX_HINT_TEMPLATE_BYTES": 96 * 1024,
+            "LOG": types.SimpleNamespace(error=lambda *_args, **_kwargs: None),
+        })
+        legacy = {
+            "version": 1,
+            "templates": {
+                riddle: {
+                    language: [tip["text"] for tip in tips]
+                    for language, tips in languages.items()
+                }
+                for riddle, languages in self.defaults["templates"].items()
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            defaults_path = Path(temp_dir) / "defaults.json"
+            runtime_path = Path(temp_dir) / "runtime.json"
+            defaults_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            namespace.update({
+                "HINT_TEMPLATE_DEFAULTS_PATH": defaults_path,
+                "HINT_TEMPLATE_RUNTIME_PATH": runtime_path,
+            })
+            self.assertEqual(namespace["load_hint_templates"]()["version"], 2)
+
+            defaults_path.write_text(json.dumps(self.defaults, ensure_ascii=False), encoding="utf-8")
+            runtime_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            loaded = namespace["load_hint_templates"]()
+            self.assertEqual(loaded["version"], 2)
+            self.assertEqual(loaded["templates"]["images"]["de"][0]["text"], legacy["templates"]["images"]["de"][0])
 
     def test_hint_edit_endpoint_is_gated_to_maintenance(self) -> None:
         namespace = extracted("api_hint_templates")
@@ -801,21 +896,287 @@ class HintTemplateTests(unittest.TestCase):
         self.assertTrue(response["ok"])
 
 
+class DashboardPreviewTests(unittest.TestCase):
+    RIDDLE_KEYS = (
+        "images", "piano", "prison", "wheel", "chains", "tangram",
+        "magnet", "chess", "knocking", "candles", "stars", "sissi",
+    )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "game": {"run_id": "run-live", "elapsed_s": -5},
+            "riddles": [
+                {
+                    "id": key,
+                    "label": key.title(),
+                    "display_time_s": 0,
+                    "hint_count": 0,
+                    "phase_state": "pending",
+                    "skipped": False,
+                }
+                for key in self.RIDDLE_KEYS
+            ],
+        }
+
+    def ranking_namespace(self) -> dict[str, Any]:
+        namespace = extracted(
+            "_nonnegative_preview_number",
+            "build_ranking_preview_candidate",
+            "_ranking_value",
+            "build_ranking_preview_dashboard_dto",
+        )
+        namespace.update({
+            "RIDDLE_ORDER_V2": list(self.RIDDLE_KEYS),
+            "RIDDLE_LABELS_V2": {key: key.title() for key in self.RIDDLE_KEYS},
+            "_canonical_riddle_name": lambda value: str(value or ""),
+        })
+        return namespace
+
+    def test_ranking_candidate_uses_all_raw_rows_and_nonnegative_current_duration(self) -> None:
+        namespace = self.ranking_namespace()
+        snapshot = self.snapshot()
+        snapshot["riddles"][0].update({
+            "display_time_s": 12.345,
+            "hint_count": 2,
+            "phase_state": "solved",
+        })
+        snapshot["riddles"][5].update({
+            "display_time_s": 30,
+            "hint_count": 1,
+            "phase_state": "skipped",
+            "skipped": True,
+        })
+
+        candidate = namespace["build_ranking_preview_candidate"](snapshot)
+
+        self.assertEqual(candidate["runId"], "run-live")
+        self.assertEqual(candidate["durationS"], 0.0)
+        self.assertEqual(candidate["hintCount"], 3)
+        self.assertEqual([row["puzzleKey"] for row in candidate["rawPuzzles"]], list(self.RIDDLE_KEYS))
+        self.assertEqual(candidate["rawPuzzles"][0], {
+            "puzzleKey": "images",
+            "timeS": 12.345,
+            "hintCount": 2,
+            "solved": True,
+            "skipped": False,
+        })
+        self.assertEqual(candidate["rawPuzzles"][5], {
+            "puzzleKey": "tangram",
+            "timeS": 30.0,
+            "hintCount": 1,
+            "solved": False,
+            "skipped": True,
+        })
+
+        website_result = {
+            "ok": True,
+            "overallRank": 2,
+            "overallRankTotal": 9,
+            "rawPuzzles": [
+                {"puzzleKey": key, "rank": (3 if key == "images" else None), "rankTotal": 8}
+                for key in self.RIDDLE_KEYS
+            ],
+        }
+        dto = namespace["build_ranking_preview_dashboard_dto"](candidate, website_result)
+        self.assertEqual(dto["overall"], {"rank": 2, "rank_total": 9})
+        self.assertEqual(dto["riddles"][0], {
+            "id": "images", "label": "Images", "rank": 3, "rank_total": 8,
+        })
+        self.assertEqual(len(dto["riddles"]), 12)
+
+    def test_ranking_route_calls_website_once_and_controls_outages(self) -> None:
+        namespace = extracted("_no_store_json", "api_ranking_preview")
+        snapshot = self.snapshot()
+        snapshot_calls = 0
+        website_calls: list[tuple[str, dict[str, Any]]] = []
+
+        class FakeStore:
+            def snapshot(inner_self) -> dict[str, Any]:
+                nonlocal snapshot_calls
+                snapshot_calls += 1
+                return snapshot
+
+        candidate = {"runId": "run-live", "durationS": 1, "hintCount": 0, "rawPuzzles": []}
+        dto = {"ok": True, "run_id": "run-live", "overall": {"rank": 1, "rank_total": 1}, "riddles": []}
+        namespace.update({
+            "jsonify": JsonResponse,
+            "store": FakeStore(),
+            "LOG": types.SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+            "build_ranking_preview_candidate": lambda value: candidate if value is snapshot else None,
+            "build_ranking_preview_dashboard_dto": lambda sent, received: dto if sent is candidate and received == {"ok": True} else None,
+            "post_website_json": lambda path, payload: website_calls.append((path, payload)) or {"ok": True},
+        })
+
+        response = namespace["api_ranking_preview"]()
+        self.assertEqual(response, dto)
+        self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+        self.assertEqual(snapshot_calls, 1)
+        self.assertEqual(website_calls, [("/api/leaderboard/ranking-preview", candidate)])
+
+        namespace["post_website_json"] = lambda *_args: (_ for _ in ()).throw(RuntimeError("website down"))
+        response, status = namespace["api_ranking_preview"]()
+        self.assertEqual(status, 503)
+        self.assertFalse(response["ok"])
+        self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+        self.assertEqual(snapshot_calls, 2)
+
+    def riddle_preview_namespace(self) -> dict[str, Any]:
+        namespace = extracted("build_riddle_time_preview")
+        namespace.update({
+            "RIDDLE_ORDER_V2": list(self.RIDDLE_KEYS),
+            "RIDDLE_LABELS_V2": {
+                **{key: key.title() for key in self.RIDDLE_KEYS},
+                "magnet": "Magnet",
+                "chess": "Schach",
+            },
+            "MAX_RIDDLE_TIME_PREVIEW_S": 7 * 24 * 60 * 60,
+            "_canonical_riddle_name": lambda value: str(value or ""),
+            "plan_riddle_time_change": plan_riddle_time_change,
+        })
+        return namespace
+
+    def test_riddle_time_preview_matches_parallel_stage_and_active_receiver_semantics(self) -> None:
+        preview = self.riddle_preview_namespace()["build_riddle_time_preview"]
+        snapshot = self.snapshot()
+        rows = {row["id"]: row for row in snapshot["riddles"]}
+        rows["tangram"].update({"label": "Tangram", "display_time_s": 120, "phase_state": "solved"})
+        rows["magnet"].update({"label": "Magnet", "display_time_s": 100, "phase_state": "solved"})
+        rows["chess"].update({"label": "Schach", "display_time_s": 60, "phase_state": "active"})
+
+        result = preview(snapshot, "tangram", 90)
+        self.assertEqual(result, {
+            "source": {"riddle_id": "tangram", "label": "Tangram", "old_time_s": 120.0, "new_time_s": 90.0},
+            "receiving": {"riddle_id": "chess", "label": "Schach", "old_time_s": 60.0, "new_time_s": 80.0},
+            "source_stage_delta_s": -20.0,
+        })
+
+        unchanged_stage = preview(snapshot, "magnet", 90)
+        self.assertEqual(unchanged_stage["source"]["new_time_s"], 90.0)
+        self.assertEqual(unchanged_stage["source_stage_delta_s"], 0.0)
+        self.assertIsNone(unchanged_stage["receiving"])
+
+    def test_riddle_time_preview_uses_next_reached_stage_and_enforces_parallel_floor(self) -> None:
+        preview = self.riddle_preview_namespace()["build_riddle_time_preview"]
+        snapshot = self.snapshot()
+        rows = {row["id"]: row for row in snapshot["riddles"]}
+        rows["wheel"].update({"display_time_s": 100, "phase_state": "solved"})
+        rows["chess"].update({"label": "Schach", "display_time_s": 40, "phase_state": "active"})
+        result = preview(snapshot, "wheel", 90)
+        self.assertEqual(result["receiving"], {
+            "riddle_id": "chess", "label": "Schach", "old_time_s": 40.0, "new_time_s": 50.0,
+        })
+
+        rows["chains"].update({"display_time_s": 100, "phase_state": "solved"})
+        rows["tangram"].update({"display_time_s": 80, "phase_state": "active"})
+        rows["magnet"].update({"display_time_s": 60, "phase_state": "active"})
+        with self.assertRaisesRegex(ValueError, "parallel receiving stage below 60.000"):
+            preview(snapshot, "chains", 130)
+
+    def test_riddle_time_preview_route_is_guarded_read_only_and_not_receipted(self) -> None:
+        namespace = extracted("_no_store_json", "api_riddle_time_preview")
+        snapshot_calls = 0
+
+        class FakeStore:
+            def snapshot(inner_self) -> dict[str, Any]:
+                nonlocal snapshot_calls
+                snapshot_calls += 1
+                return {"snapshot": True}
+
+        namespace.update({
+            "jsonify": JsonResponse,
+            "store": FakeStore(),
+            "request": types.SimpleNamespace(args={
+                "riddle": "chess",
+                "time_text": "12.5",
+                "expected_phase": "9",
+                "expected_run_id": "run-live",
+            }),
+            "_stale_action_response": lambda _data: None,
+            "_canonical_riddle_name": lambda value: str(value or ""),
+            "parse_mmss_input": lambda value: float(value),
+            "build_riddle_time_preview": lambda value, riddle, seconds: {
+                "source": {"riddle_id": riddle, "old_time_s": 10, "new_time_s": seconds},
+                "receiving": None,
+                "source_stage_delta_s": 2.5,
+            } if value == {"snapshot": True} else None,
+        })
+        response = namespace["api_riddle_time_preview"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(snapshot_calls, 1)
+        self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+
+        source = APP_PATH.read_text(encoding="utf-8")
+        idempotent_block = source[source.index("IDEMPOTENT_API_PATHS"):source.index("def _normalize_operation_id")]
+        self.assertNotIn('"/api/riddle-time-preview",', idempotent_block)
+        self.assertIn("read-only GET", idempotent_block)
+
+
 class DashboardSourceContractTests(unittest.TestCase):
+    def test_effective_backend_labels_lights_and_active_nodes_match_er1(self) -> None:
+        tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+
+        def last_literal(name: str) -> Any:
+            values = [
+                node.value
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+            ]
+            self.assertTrue(values, name)
+            return ast.literal_eval(values[-1])
+
+        riddle_labels = last_literal("RIDDLE_LABELS_V2")
+        phase_labels = last_literal("PHASE_LABELS_DE")
+        light_groups = last_literal("LIGHT_GROUPS")
+        node_labels = last_literal("NODE_LABELS")
+        log_node_labels = last_literal("LOG_NODE_LABELS")
+        self.assertEqual(riddle_labels["magnet"], "Magnet")
+        self.assertEqual(riddle_labels["chess"], "Schach")
+        self.assertEqual(phase_labels[0], "Aus")
+        self.assertEqual(phase_labels[8], "Tangram & Magnet")
+        self.assertEqual(phase_labels[9], "Schach")
+        self.assertTrue(all(light_groups[key]["dimmable"] for key in ("r1", "r2_main", "r3_main")))
+        active_nodes = [
+            "lighting", "maglock", "images_piano", "chess", "knocking",
+            "candles", "star_slider", "star_sky",
+        ]
+        self.assertEqual([node for node, _label in node_labels], active_nodes)
+        self.assertEqual(list(log_node_labels), active_nodes)
+        reboot_assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "REBOOT_NODE_IDS" for target in node.targets)
+        )
+        self.assertIsInstance(reboot_assignment.value, ast.Call)
+        self.assertEqual(set(ast.literal_eval(reboot_assignment.value.args[0])), set(active_nodes))
+
+        config_tree = ast.parse((GAME_MASTER_DIR / "config.py").read_text(encoding="utf-8"))
+        physical_nodes = ast.literal_eval(next(
+            node.value
+            for node in config_tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "PHYSICAL_NODE_IDS" for target in node.targets)
+        ))
+        self.assertEqual(list(physical_nodes), active_nodes)
+
     def test_custom_confirmation_and_action_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         html = HTML_PATH.read_text(encoding="utf-8")
         self.assertNotIn("window.confirm", javascript)
         self.assertIn('id="confirmDialog"', html)
         self.assertIn("function confirmAction", javascript)
-        self.assertIn("window.setTimeout(() => confirmButton.focus(), 0)", javascript)
+        self.assertIn("window.setTimeout(() => cancelButton.focus(), 0)", javascript)
         self.assertIn("event.key === 'Enter'", javascript)
         self.assertIn("event.key === 'Escape'", javascript)
         self.assertNotIn("bookingConfirmDialog", javascript + html)
         self.assertIn(">Gelöst</button>", javascript)
         self.assertIn(">Überspringen</button>", javascript)
-        self.assertIn("min=\"1\"", javascript)
+        self.assertIn("/api/riddle-time-preview", javascript)
         self.assertIn(">OK</button>", javascript)
+        self.assertIn("card.querySelector('.light-bulb-button')", javascript)
+        self.assertIn("fmtEditableTime(seconds)", javascript)
+        self.assertIn("controlViewActive && gameMode", javascript)
         self.assertNotIn("resetRiddle", javascript)
         self.assertNotIn("outcome: 'reset'", javascript)
 
@@ -827,7 +1188,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         time_end = javascript.index("async function changeHint", time_start)
         self.assertIn("confirmAction", javascript[solve_start:solve_end])
         self.assertIn("confirmAction", javascript[start_start:start_end])
-        self.assertNotIn("confirmAction", javascript[time_start:time_end])
+        self.assertIn("confirmAction", javascript[time_start:time_end])
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -835,7 +1196,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         guarded = {
             "api_phase", "api_select_booking", "api_solve", "api_lock", "api_light",
-            "api_node_reboot", "api_service_restart", "api_set_hint_count", "api_riddle_time", "api_riddle_outcome",
+            "api_node_reboot", "api_service_restart", "api_set_hint_count", "api_riddle_time",
+            "api_riddle_time_preview", "api_riddle_outcome",
         }
         for name in guarded:
             segment = ast.get_source_segment(source, functions[name]) or ""
@@ -893,7 +1255,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261007-command-receipts", html)
+        self.assertIn("app.js') }}?v=20261011-dashboard-v6", html)
 
     def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -936,9 +1298,12 @@ class DashboardSourceContractTests(unittest.TestCase):
         javascript = JS_PATH.read_text(encoding="utf-8")
         css = CSS_PATH.read_text(encoding="utf-8")
 
-        self.assertIn('class="page dashboard-page dashboard-v5"', html)
-        self.assertLess(html.index('id="nodeStatusBar"'), html.index('class="dashboard-summary-grid"'))
-        self.assertLess(html.index('class="dashboard-summary-grid"'), html.index('id="currentRiddlesPanel"'))
+        self.assertIn('class="dashboard-body dashboard-v6"', html)
+        self.assertIn('class="operator-tabs"', html)
+        for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
+            self.assertIn(f">{label}</a>", html)
+        self.assertLess(html.index('id="phaseValue"'), html.index('id="currentRiddlesPanel"'))
+        self.assertLess(html.index('id="currentRiddlesPanel"'), html.index('id="allRiddlesPanel"'))
         for action in ("standby", "maintenance", "prepare"):
             self.assertIn(f'data-phase-action="{action}"', html)
         self.assertIn('id="startGameBtn"', html)
@@ -948,25 +1313,24 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn("emergencyOpen", javascript)
         self.assertIn("function isGameMode()", javascript)
         self.assertIn("Number(state.game.phase || 0) >= 2", javascript)
-        self.assertIn("for (const panel of [bookingDetails, allRiddles, diagnosticsDetails, hintEditor])", javascript)
-        self.assertIn("if (panel) panel.open = false", javascript)
+        self.assertIn("dashboard-preparation-mode", javascript)
+        self.assertNotIn("gameDrawerStrip", html)
         self.assertNotIn('id="hintTemplateDialog"', html)
         self.assertNotIn("openHintTemplateDialog", javascript)
         self.assertIn('data-service-restart="game_master"', html)
         self.assertIn('data-service-restart="dashboard"', html)
-        self.assertIn('class="database-viewer-button"', html)
         self.assertIn("href=\"{{ url_for('game_viewer') }}\"", html)
         restart_start = javascript.index("async function restartSystemService")
         restart_end = javascript.index("async function", restart_start + 20)
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
-        self.assertIn("item.id !== 'stop_timer'", javascript)
+        self.assertNotIn("('stop_timer', 'Stop Timer')", html)
 
         self.assertNotIn("/* Fixed operator console:", css)
-        control_room_css = css[css.index("/* Control-room dashboard */"):]
-        self.assertIn("grid-template-columns: repeat(8, minmax(0, 1fr));", control_room_css)
-        self.assertIn(".dashboard-game-mode #bookingDetails:not([open])", control_room_css)
-        self.assertIn("@media (min-width: 1600px) and (max-height: 980px)", control_room_css)
-        self.assertIn("@media (max-width: 760px)", control_room_css)
+        control_room_css = css[css.index("/* Dashboard v6:"):]
+        self.assertIn("grid-template-columns: minmax(0, 1.58fr) minmax(410px, 0.72fr);", control_room_css)
+        self.assertIn("body.dashboard-v6[data-initial-view=\"control\"] { overflow: hidden; }", control_room_css)
+        self.assertIn("@media (max-width: 900px)", control_room_css)
+        self.assertIn(".mission-grid, .mission-rail { display: contents; }", control_room_css)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]

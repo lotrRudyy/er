@@ -3,7 +3,7 @@ const state = {
     phase: 0,
     last_phase: null,
     phase_name: 'standby',
-    phase_display: '0: Bereitschaft',
+    phase_display: '0: Aus',
     elapsed_s: 0,
     current_riddle_elapsed_s: 0,
     current_riddle_name: '',
@@ -24,7 +24,7 @@ const state = {
     language: 'de',
     label: 'Keine Buchung ausgewählt',
   },
-  hint_templates: { version: 1, templates: {} },
+  hint_templates: { version: 2, templates: {} },
   start_assignment: { active: false, status: 'idle', message: '' },
   meta: { persistence_degraded: false },
 };
@@ -40,6 +40,10 @@ const HINT_LANGUAGE_LABELS = Object.freeze({ de: 'Deutsch', en: 'English', it: '
 const HINT_RIDDLE_ORDER = Object.freeze([
   'images', 'piano', 'prison', 'wheel', 'chains', 'tangram',
   'magnet', 'chess', 'knocking', 'candles', 'stars', 'sissi',
+]);
+const DASHBOARD_NODE_IDS = Object.freeze([
+  'lighting', 'maglock', 'images_piano', 'chess',
+  'knocking', 'candles', 'star_slider', 'star_sky',
 ]);
 const NO_HINT_TEMPLATE_TEXT = Object.freeze({
   de: 'Für dieses Rätsel ist keine Tippvorlage hinterlegt.',
@@ -73,6 +77,8 @@ const diagnostics = {
   timer: null,
   requestController: null,
 };
+const operatorLogEntries = [];
+let operatorLogView = 'all';
 
 let lastSnapshot = null;
 let queuedSnapshot = null;
@@ -94,6 +100,11 @@ let hintEditorDirty = false;
 let hintEditorSignature = '';
 let confirmationResolver = null;
 let mutationQueue = Promise.resolve();
+let bookingSuggestedKey = '';
+let rankingSignature = '';
+let rankingRequest = null;
+let rankingState = { overall: null, riddles: new Map(), unavailable: false };
+let pulseCooldown = { id: '', until: 0 };
 
 let localTimerBaseElapsed = 0;
 let localTimerSyncedAt = 0;
@@ -104,6 +115,7 @@ let lastRiddleTimerSignature = '';
 
 const dimDrafts = {};
 const dimEditing = {};
+const dimLastNonZero = {};
 const riddleTimeDrafts = {};
 const riddleTimeEditing = {};
 
@@ -453,12 +465,51 @@ async function reconcileStoredOperations(interactive = false) {
   }
 }
 
+function commandLabel(path) {
+  return ({
+    '/api/phase': 'Phase geändert',
+    '/api/select-booking': 'Buchung geändert',
+    '/api/solve': 'Rätsel gelöst',
+    '/api/riddle-outcome': 'Rätselstatus geändert',
+    '/api/riddle-time': 'Rätselzeit geändert',
+    '/api/hints': 'Tippanzahl geändert',
+    '/api/light': 'Lichtbefehl gesendet',
+    '/api/lock': 'Schlossbefehl gesendet',
+    '/api/node-reboot': 'Node-Neustart angefordert',
+    '/api/service-restart': 'Dienstneustart angefordert',
+    '/api/hint-templates': 'Tippvorlagen gespeichert',
+    '/api/log-level': 'Log-Stufe angefordert',
+  })[path] || `Befehl ${path}`;
+}
+
+function recordOperatorLog(message, level = 'INF', category = 'commands') {
+  operatorLogEntries.push({
+    seq: `local-${Date.now()}-${operatorLogEntries.length}`,
+    received_at: Date.now(),
+    time_valid: false,
+    node: 'Dashboard',
+    lv: level,
+    msg: String(message || ''),
+    d: {},
+    _category: category,
+  });
+  if (operatorLogEntries.length > 100) operatorLogEntries.splice(0, operatorLogEntries.length - 100);
+  replaceDiagnosticsLogs();
+}
+
 async function api(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   if (!['GET', 'HEAD'].includes(method)) {
     const queued = mutationQueue.then(async () => {
       await reconcileStoredOperations(true);
-      return executeIdempotentMutation(path, { ...options, method });
+      try {
+        const result = await executeIdempotentMutation(path, { ...options, method });
+        recordOperatorLog(commandLabel(path));
+        return result;
+      } catch (error) {
+        recordOperatorLog(`${commandLabel(path)} fehlgeschlagen: ${error.message || error}`, 'ERR');
+        throw error;
+      }
     });
     mutationQueue = queued.catch(() => {});
     return queued;
@@ -506,6 +557,18 @@ function fmtGameTime(totalSeconds) {
   const minutes = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const seconds = String(total % 60).padStart(2, '0');
   return hours > 0 ? `${sign}${hours}:${minutes}:${seconds}` : `${sign}${minutes}:${seconds}`;
+}
+
+function fmtEditableTime(totalSeconds) {
+  const rounded = Math.round(Math.max(0, Number(totalSeconds) || 0) * 1000) / 1000;
+  const whole = Math.floor(rounded);
+  const hours = Math.floor(whole / 3600);
+  const minutes = String(Math.floor((whole % 3600) / 60)).padStart(2, '0');
+  const seconds = String(whole % 60).padStart(2, '0');
+  const fraction = rounded % 1
+    ? rounded.toFixed(3).slice(-3).replace(/0+$/, '')
+    : '';
+  return `${hours > 0 ? `${hours}:` : ''}${minutes}:${seconds}${fraction ? `.${fraction}` : ''}`;
 }
 
 function actionGuard() {
@@ -580,7 +643,13 @@ function showFeedback(message, kind = '') {
   const box = document.getElementById('globalFeedback');
   if (!box) return;
   box.textContent = message || '';
-  box.className = `global-feedback ${kind ? `global-feedback--${kind}` : ''}`;
+  box.className = `global-feedback global-feedback-v6 ${message ? 'is-visible' : ''} ${kind ? `global-feedback--${kind}` : ''}`;
+  if (message && !recoverableStateFeedback) {
+    const expected = String(message);
+    window.setTimeout(() => {
+      if (box.textContent === expected) showFeedback('');
+    }, 5000);
+  }
 }
 
 function showRecoverableStateFeedback(message, kind = 'error') {
@@ -706,8 +775,14 @@ async function pollLoop() {
   let failed = false;
   try {
     await fetchAndPatch();
+    const connection = document.getElementById('connectionLabel');
+    if (connection) connection.textContent = 'Live verbunden';
+    document.body.classList.remove('connection-lost');
   } catch (error) {
     failed = true;
+    const connection = document.getElementById('connectionLabel');
+    if (connection) connection.textContent = 'Verbindung getrennt';
+    document.body.classList.add('connection-lost');
     showRecoverableStateFeedback(`Live-Aktualisierung unterbrochen; neuer Versuch läuft: ${error.message || error}`);
   } finally {
     const knockingIsCurrent = Number(state.game.phase || 0) === 10
@@ -821,7 +896,8 @@ function confirmAction({ title, message, confirmLabel = 'Bestätigen' }) {
   const titleNode = document.getElementById('confirmDialogTitle');
   const messageNode = document.getElementById('confirmDialogMessage');
   const confirmButton = document.getElementById('confirmDialogAccept');
-  if (!dialog || !titleNode || !messageNode || !confirmButton) return Promise.resolve(false);
+  const cancelButton = document.getElementById('confirmDialogCancel');
+  if (!dialog || !titleNode || !messageNode || !confirmButton || !cancelButton) return Promise.resolve(false);
 
   titleNode.textContent = title;
   messageNode.textContent = message;
@@ -829,7 +905,7 @@ function confirmAction({ title, message, confirmLabel = 'Bestätigen' }) {
   return new Promise((resolve) => {
     confirmationResolver = resolve;
     dialog.showModal();
-    window.setTimeout(() => confirmButton.focus(), 0);
+    window.setTimeout(() => cancelButton.focus(), 0);
   });
 }
 
@@ -846,7 +922,7 @@ function wireConfirmationDialog() {
     settleConfirmation(false);
   });
   dialog?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && document.activeElement === confirmButton) {
       event.preventDefault();
       settleConfirmation(true);
     }
@@ -993,6 +1069,10 @@ async function loadBookings({ silent = false } = {}) {
     bookingOptions = loaded.length ? loaded : [empty, fallback];
     if (!bookingOptions.some((item) => item.kind === 'empty')) bookingOptions.unshift(empty);
     if (!bookingOptions.some((item) => item.kind === 'test')) bookingOptions.unshift(fallback);
+    const nearest = bookingOptions
+      .filter((item) => item.kind === 'booking' && item.withinAutomaticWindow)
+      .sort((a, b) => Math.abs(Number(a.matchDifferenceSeconds || 0)) - Math.abs(Number(b.matchDifferenceSeconds || 0)))[0];
+    bookingSuggestedKey = nearest ? bookingKey(nearest) : '';
     bookingOptionsLoaded = true;
     if (!silent) setBookingFeedback(result.warning || '', result.warning ? 'warn' : '');
   } catch (error) {
@@ -1077,8 +1157,6 @@ function renderBookingControls() {
   const refreshButton = document.getElementById('refreshBookingsBtn');
   const applyButton = document.getElementById('applyBookingBtn');
   const compact = document.getElementById('bookingCompactValue');
-  const gameCompact = document.getElementById('gameBookingValue');
-  const gameHintLanguage = document.getElementById('gameHintLanguage');
   if (!select) return;
 
   if (!bookingOptionsLoaded && !bookingOptions.length) {
@@ -1111,7 +1189,10 @@ function renderBookingControls() {
     select.dataset.signature = signature;
   }
 
-  select.value = currentKey;
+  const suggested = current.kind === 'empty' && Number(state.game.phase || 0) === 2
+    ? bookingSuggestedKey
+    : '';
+  select.value = suggested || currentKey;
   select.disabled = bookingBusy;
   if (languageSelect) {
     languageSelect.value = current.language;
@@ -1129,8 +1210,11 @@ function renderBookingControls() {
   }
 
   if (info) {
-    if (current.kind === 'empty') {
-      info.textContent = 'Noch keine Buchung und keine Spieleranzahl zugeordnet.';
+    if (current.kind === 'empty' && suggested) {
+      const candidate = bookingOptions.find((item) => bookingKey(item) === suggested);
+      info.textContent = `Automatisch erkannt: ${bookingOptionLabel(candidate)}. Bitte Buchung bestätigen oder ändern.`;
+    } else if (current.kind === 'empty') {
+      info.textContent = 'Keine passende Buchung automatisch erkannt. Bitte Buchung auswählen.';
     } else if (current.kind === 'test') {
       info.textContent = `Testbuchung · ${current.players} Personen · ${current.customerEmail || 'keine E-Mail'}`;
     } else {
@@ -1142,8 +1226,6 @@ function renderBookingControls() {
 
   const compactLabel = bookingCompactLabel(current) || 'Keine Buchung ausgewählt';
   if (compact) compact.textContent = compactLabel;
-  if (gameCompact) gameCompact.textContent = compactLabel;
-  if (gameHintLanguage) gameHintLanguage.textContent = HINT_LANGUAGE_LABELS[current.language] || 'Deutsch';
 }
 
 function bookingOverrideMessage(booking) {
@@ -1199,6 +1281,66 @@ function renderStartAssignmentStatus() {
   box.classList.toggle('hidden', parts.length === 0);
 }
 
+function rankingRequestSignature() {
+  if (!currentRunId() || Number(state.game.phase || 0) < 3) return '';
+  return stableStringify({
+    run: currentRunId(),
+    durationBucket: Math.floor(Math.max(0, Number(state.game.elapsed_s || 0)) / 15),
+    riddles: (state.riddles || []).map((row) => [
+      row.id,
+      row.phase_state,
+      Math.round(Number(row.display_time_s ?? row.time_s ?? 0) * 1000),
+      Number(row.hint_count || 0),
+    ]),
+  });
+}
+
+function renderRanking() {
+  const rankNode = document.getElementById('overallRankValue');
+  const hintsNode = document.getElementById('overallRankHints');
+  const statusNode = document.getElementById('rankingStatus');
+  const totalHints = (state.riddles || []).reduce((sum, row) => sum + Math.max(0, Number(row.hint_count || 0)), 0);
+  if (hintsNode) hintsNode.textContent = `${totalHints} ${totalHints === 1 ? 'Tipp' : 'Tipps'}`;
+  if (rankNode) {
+    rankNode.textContent = rankingState.overall?.rank ? `#${rankingState.overall.rank}` : '--';
+    rankNode.title = rankingState.overall?.rank_total
+      ? `Rang ${rankingState.overall.rank} von ${rankingState.overall.rank_total}`
+      : '';
+  }
+  if (statusNode) statusNode.textContent = rankingState.unavailable ? 'Rang derzeit nicht verfügbar' : '';
+}
+
+async function refreshRankingPreview() {
+  const signature = rankingRequestSignature();
+  if (!signature) {
+    rankingSignature = '';
+    rankingState = { overall: null, riddles: new Map(), unavailable: false };
+    renderRanking();
+    return;
+  }
+  if (signature === rankingSignature || rankingRequest) return;
+  rankingSignature = signature;
+  rankingRequest = api('/api/ranking-preview')
+    .then((result) => {
+      if (signature !== rankingRequestSignature()) return;
+      rankingState = {
+        overall: result.overall || null,
+        riddles: new Map((result.riddles || []).map((row) => [row.id, row])),
+        unavailable: false,
+      };
+      renderRanking();
+      rerenderRiddleViews();
+    })
+    .catch(() => {
+      if (signature !== rankingRequestSignature()) return;
+      rankingState = { overall: null, riddles: new Map(), unavailable: true };
+      renderRanking();
+      rerenderRiddleViews();
+    })
+    .finally(() => { rankingRequest = null; });
+  await rankingRequest;
+}
+
 function renderTop() {
   const phaseValue = document.getElementById('phaseValue');
   const lastPhaseValue = document.getElementById('lastPhaseValue');
@@ -1209,7 +1351,7 @@ function renderTop() {
 
   const phase = Number(state.game.phase || 0);
   const phaseLabel = String(state.game.phase_name_pretty || state.game.phase_name || '').trim();
-  if (phaseValue) phaseValue.textContent = `Phase ${phase} · ${phaseLabel}`;
+  if (phaseValue) phaseValue.textContent = `Phase ${phase} · ${phaseLabel || 'Aus'}`;
   if (lastPhaseValue) {
     lastPhaseValue.textContent = state.game.last_phase == null
       ? '—'
@@ -1228,6 +1370,7 @@ function renderTop() {
     startButton.textContent = phase >= 3 ? 'Spiel läuft' : 'Spiel starten';
     startButton.disabled = !preparedRunReady || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
     startButton.classList.toggle('is-current-phase', phase >= 3);
+    startButton.classList.toggle('hidden', phase !== 2);
   }
 
   const currentAction = phase === 0 ? 'standby' : (phase === 1 ? 'maintenance' : (phase === 2 ? 'prepare' : 'start'));
@@ -1236,71 +1379,47 @@ function renderTop() {
     button.classList.toggle('is-current-phase', active);
     button.disabled = active;
   });
+  const runningIndicator = document.getElementById('runningPhaseIndicator');
+  if (runningIndicator) runningIndicator.classList.toggle('is-current-phase', phase >= 3 && phase <= 13);
 
   renderBookingControls();
   renderSummaryControls();
   renderStartAssignmentStatus();
   renderRiddleProgress();
   renderPanelVisibility();
+  renderRanking();
+  refreshRankingPreview().catch(() => {});
 }
 
 function renderPanelVisibility() {
   const gameMode = isGameMode();
+  const controlViewActive = Boolean(document.getElementById('controlView'));
   const currentPanel = document.getElementById('currentRiddlesPanel');
-  const drawerStrip = document.getElementById('gameDrawerStrip');
-  const bookingDetails = document.getElementById('bookingDetails');
-  const allRiddles = document.getElementById('allRiddlesPanel');
-  const diagnosticsDetails = document.getElementById('diagnosticsDetails');
-  const hintEditor = document.getElementById('maintenanceHintEditor');
+  const phase = Number(state.game.phase || 0);
 
-  document.body.classList.toggle('dashboard-game-mode', gameMode);
-  document.body.classList.toggle('dashboard-pregame', !gameMode);
-  currentPanel?.classList.toggle('hidden', !gameMode);
-  drawerStrip?.classList.toggle('hidden', !gameMode);
-
-  if (ui.gameMode !== gameMode) {
-    if (gameMode) {
-      for (const panel of [bookingDetails, allRiddles, diagnosticsDetails, hintEditor]) {
-        if (panel) panel.open = false;
-      }
-    } else {
-      if (bookingDetails) bookingDetails.open = true;
-      if (allRiddles) allRiddles.open = true;
-      if (diagnosticsDetails) diagnosticsDetails.open = false;
-      if (hintEditor) hintEditor.open = false;
-    }
-    ui.gameMode = gameMode;
-  }
-  ui.lastPhase = Number(state.game.phase || 0);
-  updateDrawerButtons();
+  document.body.classList.toggle('dashboard-game-mode', controlViewActive && gameMode);
+  document.body.classList.toggle('dashboard-pregame', controlViewActive && !gameMode);
+  document.body.classList.toggle('dashboard-preparation-mode', controlViewActive && phase === 2);
+  currentPanel?.classList.toggle('is-idle', phase < 2);
+  ui.gameMode = gameMode;
+  ui.lastPhase = phase;
 }
 
 function renderRiddleProgress() {
   const riddles = state.riddles || [];
-  const solved = riddles.filter((riddle) => ['solved', 'skipped'].includes(String(riddle.phase_state || ''))).length;
-  const text = `${solved} gelöst / ${riddles.length || 12}`;
+  const completed = riddles.filter((riddle) => ['solved', 'skipped', 'not_solved'].includes(String(riddle.phase_state || ''))).length;
+  const text = `${completed} abgeschlossen / ${riddles.length || 12}`;
   const summary = document.getElementById('riddleProgressValue');
-  const drawer = document.getElementById('gameRiddleProgress');
   if (summary) summary.textContent = text;
-  if (drawer) drawer.textContent = text;
-}
-
-function updateDrawerButtons() {
-  document.querySelectorAll('[data-panel-target]').forEach((button) => {
-    const panel = document.getElementById(button.dataset.panelTarget);
-    const expanded = Boolean(panel?.open);
-    button.setAttribute('aria-expanded', String(expanded));
-    button.classList.toggle('is-expanded', expanded);
-  });
 }
 
 function renderNodes() {
   const statusBar = document.getElementById('nodeStatusBar');
   const tableBody = document.getElementById('nodeDiagnosticsBody');
   const rebootAll = document.getElementById('rebootAllNodesBtn');
-  if (!statusBar || !tableBody) return;
-  statusBar.innerHTML = '';
-  tableBody.innerHTML = '';
+  if (!statusBar && !tableBody) return;
+  if (statusBar) statusBar.innerHTML = '';
+  if (tableBody) tableBody.innerHTML = '';
   const phase = Number(state.game.phase || 0);
   const phaseZero = phase === 0;
 
@@ -1343,23 +1462,27 @@ function renderNodes() {
   const diagnosticHealthText = `${diagnosticOnlineCount} online · ${diagnosticNodes.length - diagnosticOnlineCount} offline`;
   const statusHealthText = `${statusOnlineCount} online · ${statusNodes.length - statusOnlineCount} offline`;
   const diagnosticsSummary = document.getElementById('nodeDiagnosticsSummary');
-  const gameHealth = document.getElementById('gameNodeHealth');
   if (diagnosticsSummary) diagnosticsSummary.textContent = diagnosticHealthText;
-  if (gameHealth) gameHealth.textContent = statusHealthText;
 
   for (const item of diagnosticNodes) {
-    if (item.id !== 'stop_timer') {
+    if (statusBar) {
       const card = document.createElement('article');
-      card.className = `node-status-card ${item.online ? 'node-on' : 'node-off'}`;
-      const cardLabel = document.createElement('strong');
-      cardLabel.textContent = item.label;
-      const cardState = document.createElement('span');
-      cardState.className = 'node-status-state';
-      cardState.textContent = item.online ? 'Online' : 'Offline';
-      card.append(cardLabel, cardState);
+      card.className = 'node-row-v6';
+      card.innerHTML = `<span class="node-dot ${item.online ? 'is-online' : 'is-offline'}" aria-hidden="true"></span><strong>${escapeHtml(item.label)}</strong><span class="node-contact">(${Number.isFinite(Number(item.last_seen_s)) ? `vor ${Math.max(0, Math.round(Number(item.last_seen_s)))} s` : 'kein Kontakt'})</span>`;
+      const reboot = document.createElement('button');
+      reboot.type = 'button';
+      reboot.className = 'node-reboot-compact';
+      reboot.textContent = '↻ Reboot';
+      reboot.dataset.nodeLabel = item.label;
+      reboot.setAttribute('aria-label', `${item.label} neu starten; Status ${item.online ? 'online' : 'offline'}`);
+      const phaseRestricted = item.id === 'maglock' && !phaseZero;
+      reboot.disabled = !item.online || phaseRestricted;
+      reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
+      card.appendChild(reboot);
       statusBar.appendChild(card);
     }
 
+    if (!tableBody) continue;
     const row = document.createElement('tr');
     const labelCell = document.createElement('td');
     labelCell.textContent = item.label;
@@ -1430,10 +1553,11 @@ async function restartSystemService(target, button) {
 }
 
 async function confirmManualControl(title, message) {
-  if (!isLiveGame()) return true;
   return confirmAction({
     title,
-    message: `${message} Das Spiel läuft gerade; dieser Eingriff kann den normalen Ablauf verändern.`,
+    message: isLiveGame()
+      ? `${message} Das Spiel läuft gerade; dieser Eingriff kann den normalen Ablauf verändern.`
+      : message,
   });
 }
 
@@ -1441,37 +1565,53 @@ function renderLocks() {
   const wrap = document.getElementById('locksGrid');
   if (!wrap) return;
   wrap.innerHTML = '';
+  const labels = {
+    images: 'Falltür',
+    knocking: 'Kasten',
+    slider: 'Sternebox',
+    r2: 'Tür Raum 2',
+    r3: 'Tür Raum 3',
+  };
+  const order = ['images', 'knocking', 'slider', 'r2', 'r3'];
+  const locks = (state.locks || []).slice().sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  const localSeconds = Math.max(0, Math.ceil((pulseCooldown.until - Date.now()) / 1000));
+  const pulseBlocked = localSeconds > 0 || locks.some((item) => item.kind === 'pulse' && (
+    item.command_blocked || item.boot_guard || item.cooldown || item.pulsing
+  ));
 
-  for (const lock of state.locks || []) {
+  for (const lock of locks) {
     const card = document.createElement('div');
-    card.className = 'control-card';
+    card.className = `lock-card-v6 lock-card-v6--${lock.kind}`;
     const open = lock.is_open === true;
     const action = lock.kind === 'toggle' && open ? 'close' : 'open';
     const actionLabel = action === 'close' ? 'schließen' : 'öffnen';
-    const commandBlocked = Boolean(lock.command_blocked);
-    const protectionLabel = lock.boot_guard
-      ? 'STARTSPERRE'
-      : (lock.cooldown ? 'SPERRZEIT' : (lock.pulsing ? 'IMPULS AKTIV' : ''));
-    card.innerHTML = `
-      <button class="control-button ${open ? 'is-open' : 'is-closed'}" type="button" ${commandBlocked ? 'disabled' : ''}>
-        ${escapeHtml(lock.label)}
-        <span class="state-line">${escapeHtml(protectionLabel || String(lock.state_label || 'unbekannt').toUpperCase())}</span>
-      </button>
-    `;
+    const hardwareBlocked = Boolean(lock.command_blocked || lock.boot_guard || lock.cooldown || lock.pulsing);
+    const commandBlocked = lock.kind === 'pulse' ? (pulseBlocked || hardwareBlocked) : false;
+    const displayLabel = labels[lock.id] || lock.label;
+    const isTriggered = lock.kind === 'pulse' && pulseCooldown.id === lock.id && localSeconds > 0;
+    const icon = lock.kind === 'toggle' ? '&#128682;' : '&#128274;';
+    const stateText = lock.kind === 'toggle'
+      ? (open ? 'Offen' : 'Geschlossen')
+      : (isTriggered ? `${localSeconds} s` : 'Öffnen');
+    card.innerHTML = `<button class="lock-button-v6 ${open ? 'is-open' : 'is-closed'} ${isTriggered ? 'is-triggered' : ''}" type="button" ${commandBlocked ? 'disabled' : ''}><span class="lock-icon" aria-hidden="true">${icon}</span><span><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(stateText)}</small></span></button>`;
     const button = card.querySelector('button');
     button.title = commandBlocked
-      ? 'Öffnen ist durch Impuls, Sperrzeit oder Startschutz vorübergehend blockiert.'
-      : `${lock.label} ${actionLabel}`;
+      ? 'Alle Impulsschlösser sind während Impuls und Sperrzeit vorübergehend blockiert.'
+      : `${displayLabel} ${actionLabel}`;
     button.addEventListener('click', async () => {
       const confirmed = await confirmManualControl(
         'Schloss manuell betätigen?',
-        `${lock.label} wird manuell ${actionLabel}.`,
+        `${displayLabel} wird manuell ${actionLabel}.`,
       );
       if (!confirmed) return;
       await runAction(button, () => api('/api/lock', {
         method: 'POST',
         body: JSON.stringify({ lock: lock.id, action, ...actionGuard() }),
       }));
+      if (lock.kind === 'pulse') {
+        pulseCooldown = { id: lock.id, until: Date.now() + 5000 };
+        renderLocks();
+      }
     });
     wrap.appendChild(card);
   }
@@ -1488,11 +1628,24 @@ function renderLights() {
   if (!wrap) return;
   wrap.innerHTML = '';
 
-  for (const light of state.lights || []) {
+  const labels = {
+    entrance: 'Eingang-Fackeln',
+    r2_torch: 'Raum 2-Fackeln',
+    r3_torch: 'Raum 3-Fackeln',
+    star_sky: 'Sternenhimmel',
+    r1: 'Raum 1 LED',
+    r2_main: 'Raum 2 LED',
+    r3_main: 'Raum 3 LED',
+  };
+  const order = ['entrance', 'r2_torch', 'r3_torch', 'star_sky', 'r1', 'r2_main', 'r3_main'];
+  const lights = (state.lights || []).slice().sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+
+  for (const light of lights) {
     const card = document.createElement('div');
-    card.className = 'control-card';
+    card.className = light.dimmable ? 'light-dimmer-card' : 'light-toggle-card';
     const anyLightOn = Boolean(light.any_on ?? light.on);
     const lightState = String(light.state || (light.on ? 'on' : 'off'));
+    const stateLabel = String(light.state_label || (light.on ? 'an' : 'aus'));
     const buttonClass = {
       on: 'is-on',
       off: 'is-off',
@@ -1500,36 +1653,35 @@ function renderLights() {
       partial: 'is-partial',
       unknown: 'is-unknown',
     }[lightState] || 'is-unknown';
-    const stateLabel = String(light.state_label || (light.on ? 'an' : 'aus')).toUpperCase();
+    const displayLabel = labels[light.id] || light.label;
+    if (Number(light.pct) > 0) dimLastNonZero[light.id] = Number(light.pct);
 
     if (light.dimmable) {
       const dimValue = resolveDimValue(light);
       card.innerHTML = `
-        <div class="control-stack">
-          <button class="control-button ${buttonClass}" type="button">
-            ${escapeHtml(light.label)}
-            <span class="state-line">${escapeHtml(stateLabel)}</span>
-          </button>
-          <div class="dim-row dim-row-v4">
-            <input class="dim-input" type="number" min="0" max="100" value="${escapeAttr(dimValue)}" aria-label="Helligkeit ${escapeAttr(light.label)}" />
-            <button class="dim-apply-button" type="button">Setzen</button>
-          </div>
+        <div class="light-dimmer-head">
+          <button class="light-bulb-button ${buttonClass}" type="button" aria-label="${escapeAttr(displayLabel)} ein- oder ausschalten"><span aria-hidden="true">&#128161;</span></button>
+          <div><strong>${escapeHtml(displayLabel)}</strong><span class="dim-value">${escapeHtml(dimValue)} %</span></div>
         </div>
+        <div class="dim-row-v6">
+          <input class="dim-input" type="range" min="0" max="100" step="1" value="${escapeAttr(dimValue)}" aria-label="Helligkeit ${escapeAttr(displayLabel)}" />
+          <button class="dim-apply-button" type="button">Übernehmen</button>
+          </div>
       `;
-      const toggleButton = card.querySelector('.control-button');
+      const toggleButton = card.querySelector('.light-bulb-button');
       const input = card.querySelector('.dim-input');
       const applyButton = card.querySelector('.dim-apply-button');
 
       toggleButton.addEventListener('click', async () => {
-        let pct = Math.max(0, Math.min(100, safeInt(input.value, light.pct || 100)));
+        let pct = Math.max(0, Math.min(100, safeInt(dimLastNonZero[light.id], light.pct || 100)));
         const action = anyLightOn ? 'off' : 'on';
         if (!anyLightOn && pct <= 0) pct = 100;
         const confirmed = await confirmManualControl(
           'Licht manuell schalten?',
-          `${light.label} wird ${action === 'on' ? 'eingeschaltet' : 'ausgeschaltet'}.`,
+          `${displayLabel} wird ${action === 'on' ? `mit ${pct} % eingeschaltet` : 'ausgeschaltet'}.`,
         );
         if (!confirmed) return;
-        dimDrafts[light.id] = action === 'off' ? 0 : pct;
+        if (action === 'on') dimDrafts[light.id] = pct;
         await runAction(toggleButton, () => api('/api/light', {
           method: 'POST',
           body: JSON.stringify({ group: light.id, action, pct, ...actionGuard() }),
@@ -1541,13 +1693,17 @@ function renderLights() {
         dimEditing[light.id] = false;
         window.setTimeout(flushQueuedSnapshot, 0);
       });
-      input.addEventListener('input', () => { dimDrafts[light.id] = input.value; });
+      input.addEventListener('input', () => {
+        dimDrafts[light.id] = input.value;
+        const value = card.querySelector('.dim-value');
+        if (value) value.textContent = `${input.value} %`;
+      });
 
       const applyDim = async () => {
         const pct = Math.max(0, Math.min(100, safeInt(input.value, 0)));
         const confirmed = await confirmManualControl(
           'Helligkeit manuell ändern?',
-          `${light.label} wird auf ${pct} % gesetzt.`,
+          `${displayLabel} wird auf ${pct} % gesetzt.`,
         );
         if (!confirmed) return;
         dimDrafts[light.id] = pct;
@@ -1566,17 +1722,14 @@ function renderLights() {
       });
     } else {
       card.innerHTML = `
-        <button class="control-button ${buttonClass}" type="button">
-          ${escapeHtml(light.label)}
-          <span class="state-line">${escapeHtml(stateLabel)}</span>
-        </button>
+        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><span class="light-toggle-icon" aria-hidden="true">${light.id === 'star_sky' ? '&#10022;' : '&#128293;'}</span><strong>${escapeHtml(displayLabel)}</strong><small>${anyLightOn ? 'An' : 'Aus'}</small></button>
       `;
       const button = card.querySelector('button');
       button.addEventListener('click', async () => {
         const action = anyLightOn ? 'off' : 'on';
         const confirmed = await confirmManualControl(
           'Licht manuell schalten?',
-          `${light.label} wird ${action === 'on' ? 'eingeschaltet' : 'ausgeschaltet'}.`,
+          `${displayLabel} wird ${action === 'on' ? 'eingeschaltet' : 'ausgeschaltet'}.`,
         );
         if (!confirmed) return;
         await runAction(button, () => api('/api/light', {
@@ -1691,7 +1844,11 @@ function riddleTimeText(riddle) {
 function hintTemplatesFor(riddleId, language = state.booking?.language) {
   const selectedLanguage = normalizeHintLanguage(language);
   const templates = state.hint_templates?.templates?.[String(riddleId || '')];
-  return templates?.[selectedLanguage] || [];
+  return (templates?.[selectedLanguage] || []).map((tip) => (
+    typeof tip === 'string'
+      ? { text: tip, offer_after_total_s: null, offer_after_riddle_s: null }
+      : tip
+  ));
 }
 
 function riddleMutationsAvailable() {
@@ -1704,27 +1861,27 @@ function hintPanelHtml(riddle, compact = false) {
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
   const canMutate = riddleMutationsAvailable();
   if (compact) {
-    return `<span class="riddle-hint-summary">${count} / ${templates.length}</span>`;
+    return `<span class="riddle-hint-summary">${count}</span>`;
   }
   const templateContent = templates.length
-    ? `<ol class="hint-template-list">${templates.map((text, index) => `<li><span>${index + 1}</span><p>${escapeHtml(text)}</p></li>`).join('')}</ol>`
+    ? `<ol class="hint-template-list">${templates.map((tip, index) => `<li><div class="hint-card-meta"><span>Tipp ${index + 1}</span><span>Gesamt ${formatHintOfferTime(tip.offer_after_total_s)}</span><span>Rätsel ${formatHintOfferTime(tip.offer_after_riddle_s)}</span></div><p>${escapeHtml(tip.text)}</p></li>`).join('')}</ol>`
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
   return `
     <section class="hint-panel">
       <div class="hint-template-content">
-        <div class="hint-template-heading">Tipps für ${escapeHtml(riddle.label)} <span>· ${escapeHtml(HINT_LANGUAGE_LABELS[language])}</span></div>
+        <div class="hint-template-heading">Tipps <span>${escapeHtml(HINT_LANGUAGE_LABELS[language])}</span></div>
         ${templateContent}
-      </div>
-      <div class="hint-given-block">
-        <div class="hint-given-label">Aktuelle Tippanzahl</div>
-        <strong class="hint-counter-value">${count}</strong>
-        ${canMutate ? `<div class="hint-counter-buttons">
-          <button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippzähler um eins erhöhen">+</button>
-          <button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippzähler um eins verringern" ${count === 0 ? 'disabled' : ''}>−</button>
-        </div>` : ''}
       </div>
     </section>
   `;
+}
+
+function formatHintOfferTime(value) {
+  if (value == null || value === '') return '--:--';
+  const total = Math.max(0, safeInt(value, 0));
+  const minutes = String(Math.floor(total / 60)).padStart(2, '0');
+  const seconds = String(total % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }
 
 function riddleActionsHtml(riddle, compact = false) {
@@ -1735,22 +1892,25 @@ function riddleActionsHtml(riddle, compact = false) {
     && stateName !== 'pending'
     && stateName !== 'skipped';
 
-  return `
-    <div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
-      <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>Gelöst</button>
-      ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button">Überspringen</button>` : ''}
-    </div>
-  `;
+  const count = Math.max(0, safeInt(riddle.hint_count, 0));
+  const canMutateHints = riddleMutationsAvailable();
+  return `<div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
+    <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}>Gelöst</button>
+    <div class="current-hint-control"><button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippanzahl verringern" ${!canMutateHints || count === 0 ? 'disabled' : ''}>−</button><span><strong>${count}</strong><small>Tipps</small></span><button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippanzahl erhöhen" ${canMutateHints ? '' : 'disabled'}>+</button></div>
+    ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button">Überspringen</button>` : ''}
+  </div>`;
 }
 
 function riddleTimeEditorHtml(riddle) {
   const timeEditable = riddleMutationsAvailable()
     && ['solved', 'skipped', 'not_solved'].includes(String(riddle.phase_state || 'pending'));
-  if (!timeEditable) return '<span class="muted-info">—</span>';
+  if (!timeEditable) return '<span class="table-empty">--</span>';
+  const seconds = Number(riddle.display_time_s ?? riddle.time_s ?? riddle.solve_time_s ?? 0);
   return `
     <div class="riddle-time-edit">
-      <input class="riddle-time-input" type="number" inputmode="decimal" min="1" step="0.001" value="${escapeAttr(riddleTimeText(riddle))}" placeholder="Min. 1 Sek." aria-label="Rätselzeit in Sekunden, mindestens eine Sekunde" />
-      <button class="riddle-time-save" type="button">OK</button>
+      <span class="riddle-time-current">${fmtGameTime(seconds)}</span>
+      <button class="riddle-time-toggle" type="button" aria-label="Zeit von ${escapeAttr(riddle.label)} ändern">&#9881;</button>
+      <div class="riddle-time-editor" hidden><input class="riddle-time-input" type="text" inputmode="decimal" value="${escapeAttr(fmtEditableTime(seconds))}" placeholder="mm:ss" aria-label="Rätselzeit als Minuten und Sekunden" /><button class="riddle-time-save" type="button">OK</button></div>
     </div>
   `;
 }
@@ -1809,16 +1969,34 @@ async function saveRiddleTime(riddle, input, button) {
     return;
   }
   const value = input.value.trim();
-  if (!Number.isFinite(Number(value)) || Number(value) < 1) {
-    showFeedback('Die Rätselzeit muss mindestens eine Sekunde betragen.', 'error');
+  if (!/^\d+(?::[0-5]?\d(?::[0-5]?\d)?)?(?:\.\d+)?$/.test(value)) {
+    showFeedback('Die Zeit muss als Sekunden, mm:ss oder hh:mm:ss angegeben werden.', 'error');
     input.focus();
     return;
   }
 
   await runAction(button, async () => {
+    const guard = actionGuard();
+    const params = new URLSearchParams({
+      riddle: riddle.id,
+      time_text: value,
+      expected_phase: String(guard.expected_phase),
+      expected_run_id: guard.expected_run_id,
+    });
+    const preview = await api(`/api/riddle-time-preview?${params.toString()}`);
+    const source = preview.source;
+    const receiving = preview.receiving;
+    const changes = [`${source.label}: ${fmtEditableTime(source.old_time_s)} → ${fmtEditableTime(source.new_time_s)}`];
+    if (receiving) changes.push(`${receiving.label}: ${fmtEditableTime(receiving.old_time_s)} → ${fmtEditableTime(receiving.new_time_s)}`);
+    const confirmed = await confirmAction({
+      title: 'Rätselzeit korrigieren?',
+      message: `${changes.join('\n')}\nDie Gesamtdauer bleibt durch den Ausgleich konsistent.`,
+      confirmLabel: 'Zeit übernehmen',
+    });
+    if (!confirmed) return;
     await api('/api/riddle-time', {
       method: 'POST',
-      body: JSON.stringify({ riddle: riddle.id, time_text: value, ...actionGuard() }),
+      body: JSON.stringify({ riddle: riddle.id, time_text: value, ...guard }),
     });
     delete riddleTimeDrafts[riddle.id];
     riddleTimeEditing[riddle.id] = false;
@@ -1826,6 +2004,13 @@ async function saveRiddleTime(riddle, input, button) {
 }
 
 async function changeHint(riddle, delta, button) {
+  const nextCount = Math.max(0, safeInt(riddle.hint_count, 0) + delta);
+  const confirmed = await confirmAction({
+    title: 'Tippanzahl ändern?',
+    message: `${riddle.label}: Tippanzahl auf ${nextCount} setzen. Der Rang wird anschließend neu berechnet.`,
+    confirmLabel: 'Tippanzahl ändern',
+  });
+  if (!confirmed) return;
   await runAction(button, () => api('/api/hints', {
     method: 'POST',
     body: JSON.stringify({ riddle: riddle.id, delta, ...actionGuard() }),
@@ -1855,6 +2040,13 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
   if (!includeTimeEditor) return;
   const input = container.querySelector('.riddle-time-input');
   const saveButton = container.querySelector('.riddle-time-save');
+  const toggleButton = container.querySelector('.riddle-time-toggle');
+  const editor = container.querySelector('.riddle-time-editor');
+  toggleButton?.addEventListener('click', () => {
+    if (!editor || !input) return;
+    editor.hidden = !editor.hidden;
+    if (!editor.hidden) input.focus();
+  });
   if (!input || !saveButton || input.disabled || saveButton.disabled) return;
 
   input.addEventListener('focus', () => { riddleTimeEditing[riddle.id] = true; });
@@ -1885,17 +2077,39 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
 function buildRiddleRow(riddle) {
   const row = document.createElement('tr');
   row.dataset.riddleId = riddle.id;
-  row.className = riddle.phase_state === 'active' ? 'current-riddle-row' : '';
-  row.innerHTML = `
-    <td>${escapeHtml(riddle.label)}</td>
-    <td><span class="status-badge ${escapeAttr(riddle.phase_state_class || '')}">${escapeHtml(riddle.phase_state_label || riddle.phase_state)}</span></td>
-    <td>${riddleTimeEditorHtml(riddle)}</td>
-    <td>${riddleActionsHtml(riddle)}</td>
-    <td><div class="riddle-info-cell">${renderRiddleInfo(riddle)}</div></td>
-    <td>${hintPanelHtml(riddle, true)}</td>
-  `;
+  const stateName = String(riddle.phase_state || 'pending');
+  const final = ['solved', 'skipped', 'not_solved'].includes(stateName);
+  const active = stateName === 'active';
+  const count = Math.max(0, safeInt(riddle.hint_count, 0));
+  const ranking = rankingState.riddles.get(riddle.id);
+  const rank = stateName === 'skipped' ? '--' : (ranking?.rank ? `#${ranking.rank}` : '--');
+  const status = final && riddle.id !== 'sissi'
+    ? `<button class="status-correction status-correction--${escapeAttr(stateName)}" type="button">${escapeHtml(riddle.phase_state_label || stateName)}</button>`
+    : `<span class="table-status table-status--${escapeAttr(stateName)}"><span aria-hidden="true"></span>${escapeHtml(riddle.phase_state_label || stateName)}</span>`;
+  const tips = final
+    ? `<div class="table-hint-control"><button type="button" class="table-hint-button" data-delta="-1" ${count === 0 ? 'disabled' : ''}>−</button><strong>${count}</strong><button type="button" class="table-hint-button" data-delta="1">+</button></div>`
+    : (active ? `<strong class="active-hint-count">${count}</strong>` : '<span class="table-empty">--</span>');
+  row.className = active ? 'current-riddle-row' : `riddle-row--${stateName}`;
+  row.innerHTML = `<td data-label="#" class="riddle-number">${escapeHtml(String((state.riddles || []).indexOf(riddle) + 1).padStart(2, '0'))}</td><td data-label="Rätsel"><strong>${escapeHtml(riddle.label)}</strong></td><td data-label="Status">${status}</td><td data-label="Zeit">${final ? riddleTimeEditorHtml(riddle) : '<span class="table-empty">--</span>'}</td><td data-label="Tipps">${tips}</td><td data-label="Rang" class="riddle-rank">${rank}</td>`;
   bindRiddleActions(row, riddle, { includeTimeEditor: true });
+  row.querySelector('.status-correction')?.addEventListener('click', (event) => togglePastOutcome(riddle, event.currentTarget).catch(() => {}));
+  row.querySelectorAll('.table-hint-button').forEach((button) => button.addEventListener('click', () => changeHint(riddle, safeInt(button.dataset.delta, 0), button).catch(() => {})));
   return row;
+}
+
+async function togglePastOutcome(riddle, button) {
+  const markSkipped = String(riddle.phase_state || '') !== 'skipped';
+  const outcome = markSkipped ? 'skipped' : 'solved';
+  const confirmed = await confirmAction({
+    title: `${riddle.label}: Status ändern?`,
+    message: `Das Rätsel wird nachträglich als ${markSkipped ? 'übersprungen' : 'gelöst'} markiert. Zeit, Rang und Gesamtwertung werden neu berechnet.`,
+    confirmLabel: 'Status ändern',
+  });
+  if (!confirmed) return;
+  await runAction(button, () => api('/api/riddle-outcome', {
+    method: 'POST',
+    body: JSON.stringify({ riddle: riddle.id, outcome, advance: false, ...actionGuard() }),
+  }));
 }
 
 function buildCurrentRiddleCard(riddle) {
@@ -1904,21 +2118,16 @@ function buildCurrentRiddleCard(riddle) {
   card.dataset.riddleId = riddle.id;
   card.innerHTML = `
     <div class="current-riddle-card-head">
-      <div>
-        <div class="card-heading"><span class="card-icon" aria-hidden="true">&#10021;</span><span>Aktuelles Rätsel</span></div>
-        <h2>${escapeHtml(riddle.label)}</h2>
-      </div>
-      <div class="current-card-status">
-        <span class="status-badge ${escapeAttr(riddle.phase_state_class || '')}">${escapeHtml(riddle.phase_state_label || riddle.phase_state)}</span>
-      </div>
+      <h2><span>Aktuelles Rätsel</span>${escapeHtml(riddle.label)}</h2>
     </div>
-    <div class="current-riddle-facts">
-      <div><span>Rätselzeit</span><strong class="current-card-time">${fmtTime(riddle.display_time_s || 0)}</strong></div>
-      <div><span>Live-Informationen</span><div class="current-fact-content">${renderRiddleInfo(riddle)}</div></div>
-      <div><span>Typ</span><strong>${riddle.manual ? 'Manuelles Rätsel' : 'Elektronisches Rätsel'}</strong></div>
+    <div class="current-riddle-body">
+      <div class="current-riddle-facts">
+        <div class="current-time-block"><span>Rätselzeit</span><strong class="current-card-time">${fmtGameTime(riddle.display_time_s || 0)}</strong></div>
+        <div class="current-fact-content">${renderRiddleInfo(riddle)}</div>
+      </div>
+      ${hintPanelHtml(riddle)}
     </div>
     <div class="current-riddle-controls">${riddleActionsHtml(riddle, true)}</div>
-    ${hintPanelHtml(riddle)}
   `;
   bindRiddleActions(card, riddle);
   return card;
@@ -1940,15 +2149,11 @@ function renderCurrentRiddles() {
     preparation.className = 'current-riddle-card preparation-card';
     preparation.innerHTML = `
       <div>
-        <div class="card-heading"><span class="card-icon" aria-hidden="true">&#9654;</span><span>Vorbereitung</span></div>
-        <h2>Bereit zum Spielstart</h2>
-        <p>Prüfe Buchung, Spieleranzahl und Raum. Der Start beginnt den Countdown und kann nicht versehentlich ohne Bestätigung ausgelöst werden.</p>
+        <span class="eyebrow">Vorbereitung</span>
+        <h2>Raum und Buchung prüfen</h2>
+        <p>Die passende Buchung wurde vorausgewählt, sofern sie im Zeitfenster liegt. Bestätige Buchung, Spieleranzahl und Tipp-Sprache vor dem Start.</p>
       </div>
-      <button class="preparation-start-button" type="button">Spiel wirklich starten</button>
     `;
-    const button = preparation.querySelector('.preparation-start-button');
-    button.disabled = !currentRunId() || bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
-    button.addEventListener('click', () => handleStart(button));
     wrap.appendChild(preparation);
     return;
   }
@@ -1956,7 +2161,7 @@ function renderCurrentRiddles() {
     riddle.phase_state === 'active'
   ));
   if (!current.length) {
-    wrap.innerHTML = '<div class="viewer-message">Für diese Phase ist derzeit kein aktives Rätsel gemeldet.</div>';
+    wrap.innerHTML = '<div class="current-riddle-empty"><span class="eyebrow">Aktuelles Rätsel</span><h2>Noch kein Rätsel aktiv</h2><p>Wechsle in die Vorbereitung, ordne die Buchung zu und starte anschließend das Spiel.</p></div>';
     return;
   }
   for (const riddle of current) wrap.appendChild(buildCurrentRiddleCard(riddle));
@@ -1969,11 +2174,24 @@ function copyHintTemplateMap(payload = state.hint_templates) {
     copy[riddle] = {};
     for (const language of Object.keys(HINT_LANGUAGE_LABELS)) {
       copy[riddle][language] = Array.isArray(source?.[riddle]?.[language])
-        ? source[riddle][language].map((tip) => String(tip))
+        ? source[riddle][language].map((tip) => ({
+          text: String(typeof tip === 'string' ? tip : tip?.text || ''),
+          offer_after_total_s: typeof tip === 'object' && tip?.offer_after_total_s != null ? Number(tip.offer_after_total_s) : null,
+          offer_after_riddle_s: typeof tip === 'object' && tip?.offer_after_riddle_s != null ? Number(tip.offer_after_riddle_s) : null,
+        }))
         : [];
     }
   }
   return copy;
+}
+
+function parseHintOfferTime(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const match = /^(\d+):([0-5]\d)$/.exec(text);
+  if (!match) return Number.NaN;
+  const seconds = Number(match[1]) * 60 + Number(match[2]);
+  return seconds <= 86400 ? seconds : Number.NaN;
 }
 
 function selectedHintEditorValues() {
@@ -2016,7 +2234,11 @@ function renderHintEditor() {
   list.innerHTML = tips.length
     ? tips.map((tip, index) => `
       <div class="hint-editor-row" data-index="${index}">
-        <textarea class="hint-editor-text" rows="3" maxlength="2000" ${maintenance ? '' : 'disabled'}>${escapeHtml(tip)}</textarea>
+        <textarea class="hint-editor-text" rows="3" maxlength="2000" ${maintenance ? '' : 'disabled'}>${escapeHtml(tip.text)}</textarea>
+        <div class="hint-editor-time-fields">
+          <label>Gesamtzeit (mm:ss)<input class="hint-editor-time" data-time-field="offer_after_total_s" type="text" inputmode="numeric" placeholder="--:--" value="${tip.offer_after_total_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_total_s))}" ${maintenance ? '' : 'disabled'} /></label>
+          <label>Rätselzeit (mm:ss)<input class="hint-editor-time" data-time-field="offer_after_riddle_s" type="text" inputmode="numeric" placeholder="--:--" value="${tip.offer_after_riddle_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_riddle_s))}" ${maintenance ? '' : 'disabled'} /></label>
+        </div>
         <div class="hint-editor-row-actions">
           <button type="button" data-editor-action="up" ${!maintenance || index === 0 ? 'disabled' : ''} aria-label="Tipp nach oben">↑</button>
           <button type="button" data-editor-action="down" ${!maintenance || index === tips.length - 1 ? 'disabled' : ''} aria-label="Tipp nach unten">↓</button>
@@ -2045,12 +2267,20 @@ function wireHintEditor() {
   languageSelect?.addEventListener('change', renderHintEditor);
   riddleSelect?.addEventListener('change', renderHintEditor);
   list?.addEventListener('input', (event) => {
-    const input = event.target.closest?.('.hint-editor-text');
+    const input = event.target.closest?.('.hint-editor-text, .hint-editor-time');
     if (!input || Number(state.game.phase || 0) !== 1) return;
     const index = safeInt(input.closest('.hint-editor-row')?.dataset.index, -1);
     const { language, riddle } = selectedHintEditorValues();
     if (index < 0 || !hintEditorDraft?.[riddle]?.[language]) return;
-    hintEditorDraft[riddle][language][index] = input.value;
+    const tip = hintEditorDraft[riddle][language][index];
+    if (input.matches('.hint-editor-text')) {
+      tip.text = input.value;
+    } else {
+      const parsed = parseHintOfferTime(input.value);
+      input.setCustomValidity(Number.isNaN(parsed) ? 'Zeit bitte als mm:ss eingeben.' : '');
+      if (Number.isNaN(parsed)) return;
+      tip[input.dataset.timeField] = parsed;
+    }
     hintEditorDirty = true;
     if (saveButton) saveButton.disabled = false;
     const status = document.getElementById('hintEditorStatus');
@@ -2072,13 +2302,22 @@ function wireHintEditor() {
   addButton?.addEventListener('click', () => {
     if (Number(state.game.phase || 0) !== 1) return;
     const { language, riddle } = selectedHintEditorValues();
-    hintEditorDraft[riddle][language].push('Neuer Tipp');
+    hintEditorDraft[riddle][language].push({
+      text: 'Neuer Tipp',
+      offer_after_total_s: null,
+      offer_after_riddle_s: null,
+    });
     hintEditorDirty = true;
     renderHintEditor();
     list?.querySelector('.hint-editor-row:last-child .hint-editor-text')?.focus();
   });
   saveButton?.addEventListener('click', async () => {
     if (Number(state.game.phase || 0) !== 1 || !hintEditorDirty) return;
+    const invalid = list?.querySelector(':invalid');
+    if (invalid) {
+      invalid.reportValidity();
+      return;
+    }
     try {
       await runAction(saveButton, async () => {
         const result = await api('/api/hint-templates', {
@@ -2104,11 +2343,13 @@ function updateRiddleTimeDisplays() {
     const row = document.querySelector(`#riddlesBody tr[data-riddle-id="${CSS.escape(riddle.id)}"]`);
     const input = row?.querySelector('.riddle-time-input');
     if (input && !riddleTimeEditing[riddle.id] && riddleTimeDrafts[riddle.id] == null) {
-      input.value = seconds >= 1 ? String(Math.round(Number(seconds) * 1000) / 1000) : '';
+      input.value = seconds >= 1 ? fmtGameTime(seconds) : '';
     }
+    const current = row?.querySelector('.riddle-time-current');
+    if (current) current.textContent = seconds >= 1 ? fmtGameTime(seconds) : '--';
     const card = document.querySelector(`#currentRiddlesGrid .current-riddle-card[data-riddle-id="${CSS.escape(riddle.id)}"]`);
     const cardTime = card?.querySelector('.current-card-time');
-    if (cardTime) cardTime.textContent = fmtTime(seconds);
+    if (cardTime) cardTime.textContent = fmtGameTime(seconds);
   }
 }
 
@@ -2137,6 +2378,7 @@ function patchState(data) {
   state.meta = data.meta || state.meta;
 
   for (const light of state.lights) {
+    if (light.dimmable && Number(light.pct) > 0) dimLastNonZero[light.id] = Number(light.pct);
     if (!dimEditing[light.id] && light.dimmable && dimDrafts[light.id] == null) {
       dimDrafts[light.id] = light.pct;
     }
@@ -2232,26 +2474,27 @@ async function handlePhaseAction(action, button) {
 
   if (!await refreshPhaseActionView()) return;
 
-  if (shouldConfirmPhaseChange()) {
-    const label = {
-      standby: 'Bereitschaft',
-      maintenance: 'Wartung',
-      prepare: 'Vorbereitung',
-    }[action] || action;
-    const confirmed = await confirmAction({
-      title: `Phase auf „${label}“ ändern?`,
-      message: 'Das Spiel läuft gerade. Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.',
-      confirmLabel: 'Phase ändern',
-    });
-    if (!confirmed) return;
-    if (!await refreshPhaseActionView()) return;
-  }
+  const label = {
+    standby: 'Aus',
+    maintenance: 'Wartung',
+    prepare: 'Vorbereitung',
+  }[action] || action;
+  const confirmed = await confirmAction({
+    title: `Phase auf „${label}“ ändern?`,
+    message: isGameMode()
+      ? 'Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.'
+      : `Die Spielleitung wechselt in die Phase „${label}“.`,
+    confirmLabel: 'Phase ändern',
+  });
+  if (!confirmed) return;
+  if (!await refreshPhaseActionView()) return;
 
   startInFlight = false;
   await runAction(button, () => api('/api/phase', {
     method: 'POST',
     body: JSON.stringify({ action, ...actionGuard() }),
   })).catch(() => {});
+  if (action === 'prepare') loadBookings().catch(() => {});
 }
 
 async function sendSummaryEmail(button) {
@@ -2296,26 +2539,6 @@ function wireTopControls() {
 
   const sendButton = document.getElementById('sendSummaryEmailBtn');
   sendButton?.addEventListener('click', () => sendSummaryEmail(sendButton));
-
-  document.querySelectorAll('[data-panel-target]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const panel = document.getElementById(button.dataset.panelTarget);
-      if (!panel) return;
-      panel.open = !panel.open;
-      updateDrawerButtons();
-    });
-  });
-
-  for (const panelId of ['bookingDetails', 'allRiddlesPanel', 'diagnosticsDetails', 'maintenanceHintEditor']) {
-    document.getElementById(panelId)?.addEventListener('toggle', updateDrawerButtons);
-  }
-
-  document.querySelectorAll('.booking-details > summary, .section-summary').forEach((summary) => {
-    summary.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      window.setTimeout(updateDrawerButtons, 0);
-    });
-  });
 
   const bookingSelect = document.getElementById('bookingSelect');
   const languageSelect = document.getElementById('hintLanguageSelect');
@@ -2384,19 +2607,21 @@ function wireTopControls() {
 }
 
 function setDiagnosticsStatus(message, kind = '') {
-  const status = document.getElementById('diagnosticsStatus');
+  const status = document.getElementById('diagnosticsStatus') || document.getElementById('adminDiagnosticsStatus');
   if (!status) return;
   status.textContent = message || '';
   status.className = `diagnostics-status ${kind ? `diagnostics-status--${kind}` : ''}`;
 }
 
 function readDiagnosticsFilters() {
-  diagnostics.nodes = new Set(
-    Array.from(document.querySelectorAll('.diagnostics-node-filter:checked'), (input) => input.value),
-  );
-  diagnostics.levels = new Set(
-    Array.from(document.querySelectorAll('.diagnostics-level-filter:checked'), (input) => input.value),
-  );
+  const nodeInputs = document.querySelectorAll('.diagnostics-node-filter');
+  const levelInputs = document.querySelectorAll('.diagnostics-level-filter');
+  diagnostics.nodes = new Set(nodeInputs.length
+    ? Array.from(document.querySelectorAll('.diagnostics-node-filter:checked'), (input) => input.value)
+    : DASHBOARD_NODE_IDS);
+  diagnostics.levels = new Set(levelInputs.length
+    ? Array.from(document.querySelectorAll('.diagnostics-level-filter:checked'), (input) => input.value)
+    : ['INF', 'WRN', 'ERR']);
 }
 
 function formatDiagnosticsTimestamp(value) {
@@ -2438,6 +2663,7 @@ function diagnosticsEntryTimestamp(entry) {
 function createDiagnosticsLogEntry(entry) {
   const item = document.createElement('article');
   item.className = 'diagnostics-log-entry';
+  item.dataset.logCategory = entry._category || (entry.lv === 'ERR' ? 'errors' : 'system');
 
   const header = document.createElement('div');
   header.className = 'diagnostics-log-header';
@@ -2488,27 +2714,38 @@ function createDiagnosticsLogEntry(entry) {
 }
 
 function updateDiagnosticsCount() {
-  const count = document.getElementById('diagnosticsCount');
-  if (count) count.textContent = `${diagnostics.entries.length} Einträge`;
+  const count = document.getElementById('diagnosticsCount') || document.getElementById('adminDiagnosticsCount');
+  if (count) count.textContent = `${visibleDiagnosticsEntries().length} Einträge`;
+}
+
+function visibleDiagnosticsEntries() {
+  const merged = [...diagnostics.entries, ...operatorLogEntries].sort((a, b) => {
+    const left = Number(a.received_at || a.ts || 0);
+    const right = Number(b.received_at || b.ts || 0);
+    return left - right;
+  });
+  if (operatorLogView === 'commands') return merged.filter((entry) => entry._category === 'commands');
+  if (operatorLogView === 'errors') return merged.filter((entry) => entry.lv === 'ERR');
+  if (operatorLogView === 'system') return merged.filter((entry) => entry._category !== 'commands' && entry.lv !== 'ERR');
+  return merged;
 }
 
 function replaceDiagnosticsLogs() {
-  const list = document.getElementById('diagnosticsLogList');
+  const list = document.getElementById('diagnosticsLogList') || document.getElementById('adminDiagnosticsLogList');
   if (!list) return;
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 32;
+  const previousTop = list.scrollTop;
   const fragment = document.createDocumentFragment();
-  for (const entry of diagnostics.entries) fragment.appendChild(createDiagnosticsLogEntry(entry));
+  for (const entry of visibleDiagnosticsEntries()) fragment.appendChild(createDiagnosticsLogEntry(entry));
   list.replaceChildren(fragment);
+  if (nearBottom) list.scrollTop = list.scrollHeight;
+  else list.scrollTop = previousTop;
   updateDiagnosticsCount();
 }
 
 function appendDiagnosticsLogs(entries) {
-  const list = document.getElementById('diagnosticsLogList');
-  if (!list) return;
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries) fragment.appendChild(createDiagnosticsLogEntry(entry));
-  list.appendChild(fragment);
-  while (list.childElementCount > DIAGNOSTICS_MAX_ENTRIES) list.firstElementChild?.remove();
-  updateDiagnosticsCount();
+  if (!entries.length) return;
+  replaceDiagnosticsLogs();
 }
 
 function applyLastRequestedLogLevels(records) {
@@ -2561,8 +2798,8 @@ function diagnosticsBufferStatus(data) {
 }
 
 function diagnosticsCanPoll() {
-  const details = document.getElementById('diagnosticsDetails');
-  return Boolean(details?.open)
+  const list = document.getElementById('diagnosticsLogList') || document.getElementById('adminDiagnosticsLogList');
+  return Boolean(list && list.offsetParent !== null)
     && document.visibilityState === 'visible'
     && diagnostics.nodes.size > 0
     && diagnostics.levels.size > 0;
@@ -2709,22 +2946,12 @@ async function requestDiagnosticLogLevel(row, button) {
 
 function wireDiagnostics() {
   const details = document.getElementById('diagnosticsDetails');
-  if (!details) return;
   readDiagnosticsFilters();
   replaceDiagnosticsLogs();
-
-  details.addEventListener('toggle', () => {
-    if (details.open) {
-      readDiagnosticsFilters();
-      startDiagnosticsPolling();
-    } else {
-      stopDiagnosticsPolling();
-      setDiagnosticsStatus('Log-Abruf pausiert. Beim Öffnen wird inkrementell fortgesetzt.');
-    }
-  });
+  startDiagnosticsPolling();
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && details.open) {
+    if (document.visibilityState === 'visible' && diagnosticsCanPoll()) {
       readDiagnosticsFilters();
       startDiagnosticsPolling();
     } else {
@@ -2756,6 +2983,13 @@ function wireDiagnostics() {
     });
     button?.addEventListener('click', () => requestDiagnosticLogLevel(row, button));
   });
+  document.querySelectorAll('[data-log-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      operatorLogView = button.dataset.logView || 'all';
+      document.querySelectorAll('[data-log-view]').forEach((item) => item.classList.toggle('is-active', item === button));
+      replaceDiagnosticsLogs();
+    });
+  });
 }
 
 function updateFastTimers() {
@@ -2768,8 +3002,15 @@ function updateFastTimers() {
       ? fmtTime(readLocalRiddleTimer())
       : '—';
   }
-  if (prepareCounter && Number(state.game.phase || 0) === 2) {
-    prepareCounter.textContent = String(Math.floor(Date.now() / 1000) % 11);
+  if (prepareCounter) prepareCounter.textContent = '--';
+  const now = new Date();
+  const date = document.getElementById('operatorDate');
+  const clock = document.getElementById('operatorTime');
+  if (date) date.textContent = now.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  if (clock) clock.textContent = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (pulseCooldown.until > Date.now() || pulseCooldown.id) {
+    if (pulseCooldown.until <= Date.now()) pulseCooldown = { id: '', until: 0 };
+    renderLocks();
   }
 }
 
@@ -2779,7 +3020,7 @@ wireTopControls();
 wireHintEditor();
 wireDiagnostics();
 window.setInterval(updateFastTimers, 200);
-loadBookings().catch(() => {});
+if (document.getElementById('bookingSelect')) loadBookings().catch(() => {});
 reconcileStoredOperations().catch((error) => {
   showRecoverableStateFeedback(error.message || String(error), 'warn');
 });

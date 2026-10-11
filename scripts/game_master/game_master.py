@@ -21,6 +21,7 @@ import config
 from db import Database
 from models import CurrentRun, RiddleTiming, RuntimeState, ScheduledAction
 from phases import PHASES, ADMIN_TARGET_PHASE, RIDDLE_SOLVE_EVENTS
+from riddle_time_correction import RIDDLE_STAGES, plan_riddle_time_change
 
 LOG = logging.getLogger("game_master")
 
@@ -44,21 +45,6 @@ MAX_HINTS_BYTES = 48 * 1024
 MAX_BOOKING_BYTES = 65536
 MAX_BOOKING_FIELD_BYTES = 8192
 _CONTROL_CHAR_TRANSLATION = {codepoint: None for codepoint in range(32) if codepoint not in {9, 10}}
-RIDDLE_STAGES: tuple[tuple[str, ...], ...] = (
-    ("images",),
-    ("piano",),
-    ("prison",),
-    ("wheel",),
-    ("chains",),
-    ("tangram", "magnet"),
-    ("chess",),
-    ("knocking",),
-    ("candles",),
-    ("stars",),
-    ("sissi",),
-)
-
-
 class RecoveryPersistenceError(RuntimeError):
     pass
 
@@ -2075,84 +2061,36 @@ class GameMaster:
             timing = run.riddle_timings.get(riddle)
             if timing is None:
                 raise ValueError(f"Unknown riddle: {riddle}")
-            current_status = timing.status()
-            if current_status == "pending":
-                raise ValueError(f"Cannot set time for pending riddle: {riddle}")
-
             now_mono = self._monotonic()
-            source_was_final = timing.is_final()
-            source_previous_s = self._timing_elapsed_s(timing, now_mono)
-            source_stage_index = next(
-                index for index, stage in enumerate(RIDDLE_STAGES) if riddle in stage
+            correction = plan_riddle_time_change(
+                riddle,
+                seconds,
+                {
+                    key: self._timing_elapsed_s(item, now_mono)
+                    for key, item in run.riddle_timings.items()
+                },
+                {key: item.status() for key, item in run.riddle_timings.items()},
+                max_time_s=MAX_RECOVERABLE_ELAPSED_S,
             )
-            source_stage = RIDDLE_STAGES[source_stage_index]
-            old_stage_effective_s = max(
-                self._timing_elapsed_s(run.riddle_timings[key], now_mono)
-                for key in source_stage
-            )
-            self._set_timing_elapsed_locked(timing, seconds, now_mono)
-            new_stage_effective_s = max(
-                self._timing_elapsed_s(run.riddle_timings[key], now_mono)
-                for key in source_stage
-            )
-            stage_delta_s = round(new_stage_effective_s - old_stage_effective_s, 3)
-
-            target_riddle: str | None = None
-            target_previous_s: float | None = None
-            target_new_s: float | None = None
-            if source_was_final and abs(stage_delta_s) >= 0.0005:
-                for target_stage in RIDDLE_STAGES[source_stage_index + 1:]:
-                    reached = [
-                        key for key in target_stage
-                        if run.riddle_timings[key].status() != "pending"
-                    ]
-                    if not reached:
-                        continue
-                    target_riddle = max(
-                        reached,
-                        key=lambda key: self._timing_elapsed_s(run.riddle_timings[key], now_mono),
-                    )
-                    target_timing = run.riddle_timings[target_riddle]
-                    target_previous_s = self._timing_elapsed_s(target_timing, now_mono)
-                    target_stage_previous_s = max(
-                        self._timing_elapsed_s(run.riddle_timings[key], now_mono)
-                        for key in reached
-                    )
-                    desired_stage_s = round(target_stage_previous_s - stage_delta_s, 3)
-                    if desired_stage_s < 1.0:
-                        raise ValueError(
-                            f"Time correction would reduce receiving riddle {target_riddle} below 1 second"
-                        )
-                    sibling_floor_s = max(
-                        (
-                            self._timing_elapsed_s(run.riddle_timings[key], now_mono)
-                            for key in reached if key != target_riddle
-                        ),
-                        default=0.0,
-                    )
-                    if desired_stage_s < sibling_floor_s:
-                        raise ValueError(
-                            f"Time correction cannot reduce parallel receiving stage below {sibling_floor_s:.3f} seconds"
-                        )
-                    if desired_stage_s > MAX_RECOVERABLE_ELAPSED_S:
-                        raise ValueError("receiving riddle time exceeds the recoverable range")
-                    target_new_s = desired_stage_s
-                    self._set_timing_elapsed_locked(target_timing, target_new_s, now_mono)
-                    break
+            self._set_timing_elapsed_locked(timing, correction["source_new_s"], now_mono)
+            target_riddle = correction["target_riddle"]
+            if target_riddle is not None:
+                self._set_timing_elapsed_locked(
+                    run.riddle_timings[target_riddle],
+                    correction["target_new_s"],
+                    now_mono,
+                )
             run.duration_s = self.db._compute_effective_duration_s(run)
         self._record_event("riddle_time_corrected", {
             "source_riddle": riddle,
-            "source_previous_s": source_previous_s,
-            "source_new_s": seconds,
-            "source_delta_s": round(seconds - source_previous_s, 3),
-            "source_stage_delta_s": stage_delta_s,
+            "source_previous_s": correction["source_previous_s"],
+            "source_new_s": correction["source_new_s"],
+            "source_delta_s": correction["source_delta_s"],
+            "source_stage_delta_s": correction["source_stage_delta_s"],
             "target_riddle": target_riddle,
-            "target_previous_s": target_previous_s,
-            "target_new_s": target_new_s,
-            "target_delta_s": (
-                None if target_previous_s is None or target_new_s is None
-                else round(target_new_s - target_previous_s, 3)
-            ),
+            "target_previous_s": correction["target_previous_s"],
+            "target_new_s": correction["target_new_s"],
+            "target_delta_s": correction["target_delta_s"],
         })
         self._checkpoint_after_mutation("riddle_time_corrected")
         self.publish_game_state()

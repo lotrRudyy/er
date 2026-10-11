@@ -70,8 +70,8 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - `ER1_DASHBOARD_PORT` default: `8080`
 - `ER1_DASHBOARD_CLIENT_ID` optional override; otherwise port 8080 uses `er1_dashboard` and previews use `er1_dashboard_<port>`
 - `ER1_OPERATION_LEDGER_PATH` optional command-receipt database path; defaults to `data/dashboard_operations.sqlite3`
-- `ER1_WEBSITE_API_BASE` optional website URL used only when `ER1_SUMMARY_EMAIL_MODE=http`
-- `ER1_WEBSITE_API_TOKEN` optional shared token for HTTP summary email mode, matching `GAME_SUMMARY_API_TOKEN` on the website
+- `ER1_WEBSITE_API_BASE` website URL used by the live ranking preview and by optional HTTP summary delivery
+- `ER1_WEBSITE_API_TOKEN` shared ranking/summary token, matching `GAME_DASHBOARD_API_TOKEN` or `GAME_SUMMARY_API_TOKEN` on the website
 
 ## Notes
 
@@ -91,6 +91,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - On its first MQTT connection, the dashboard stores retained `WRN` log-level defaults for all nodes. Manual per-node diagnostic levels remain temporary and non-retained.
 - Automatic booking matching is restricted to an inclusive ±30-minute Europe/Rome window. Cached SSH copies are eligible for automatic matching only while younger than `ER1_BOOKINGS_CACHE_MAX_AGE_S` (default 900 seconds); older copies remain available for warned manual selection.
 - If the website server is unreachable, the locally started game continues without automatic booking assignment. Cached, test, or empty bookings remain available for manual selection. Summary-email failures do not change the completed run and can be retried later.
+- If the ranking API is unreachable or its token is not configured, only the rank display is marked unavailable; game control and state polling continue normally.
 - Deferred security boundary: the dashboard control APIs have no application-level authentication and rely on the trusted escape-room LAN/deployment boundary. Adding authentication requires a coordinated deployment/client migration and is intentionally not changed here.
 
 
