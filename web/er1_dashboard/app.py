@@ -33,7 +33,18 @@ import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG = logging.getLogger("er1_dashboard")
-GAME_MASTER_SUPPORT_DIR = BASE_DIR.parents[1] / "scripts" / "game_master"
+_repo_game_master_support_dir = BASE_DIR.parents[1] / "scripts" / "game_master"
+_installed_game_master_support_dir = BASE_DIR.parent / "scripts" / "game_master"
+GAME_MASTER_SUPPORT_DIR = Path(
+    os.getenv(
+        "ER1_GAME_MASTER_SUPPORT_DIR",
+        str(
+            _repo_game_master_support_dir
+            if _repo_game_master_support_dir.is_dir()
+            else _installed_game_master_support_dir
+        ),
+    )
+).expanduser().resolve()
 if str(GAME_MASTER_SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(GAME_MASTER_SUPPORT_DIR))
 
