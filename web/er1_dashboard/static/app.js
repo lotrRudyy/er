@@ -37,22 +37,13 @@ const ui = {
 const TEST_BOOKING_ID = '__test__';
 const EMPTY_BOOKING_ID = '__empty__';
 const HINT_LANGUAGE_LABELS = Object.freeze({ de: 'Deutsch', en: 'English', it: 'Italiano' });
+const STAR_SIGN_SYMBOLS = Object.freeze({
+  scorpio: '♏', gemini: '♊', libra: '♎', sagittarius: '♐',
+  aquarius: '♒', pisces: '♓', leo: '♌', none: '—', empty: '—',
+});
 const HINT_RIDDLE_ORDER = Object.freeze([
   'images', 'piano', 'prison', 'wheel', 'chains', 'tangram',
   'magnet', 'chess', 'knocking', 'candles', 'stars', 'sissi',
-]);
-const RIDDLE_TIME_STAGES = Object.freeze([
-  Object.freeze(['images']),
-  Object.freeze(['piano']),
-  Object.freeze(['prison']),
-  Object.freeze(['wheel']),
-  Object.freeze(['chains']),
-  Object.freeze(['tangram', 'magnet']),
-  Object.freeze(['chess']),
-  Object.freeze(['knocking']),
-  Object.freeze(['candles']),
-  Object.freeze(['stars']),
-  Object.freeze(['sissi']),
 ]);
 const DASHBOARD_NODE_IDS = Object.freeze([
   'lighting', 'maglock', 'images_piano', 'chess',
@@ -108,6 +99,8 @@ let bookingBusy = false;
 let bookingOptions = [];
 let bookingOptionsLoaded = false;
 let bookingEditorOpen = false;
+let bookingDraftKey = '';
+let bookingDraft = null;
 let startInFlight = false;
 let hintEditorDraft = null;
 let hintEditorDirty = false;
@@ -730,9 +723,6 @@ function hasFocusedEditor() {
   const active = document.activeElement;
   if (!active) return false;
   if (active.closest?.('#diagnosticsDetails')) return false;
-  // This select is outside both riddle views, so its retained focus must not
-  // strand a language-driven riddle rerender after the change event.
-  if (active.id === 'hintLanguageSelect') return false;
   return Boolean(active.matches('input, select, textarea, [contenteditable="true"]'));
 }
 
@@ -1175,6 +1165,10 @@ async function saveSelectedBooking(booking, { expectedRunId = '', languageOnly =
     setBookingFeedback(
       languageOnly
         ? 'Tipp-Sprache gespeichert.'
+        : result.scope === 'next_run'
+        ? 'Buchung für den nächsten Lauf vorgemerkt.'
+        : result.scope === 'completed_summary'
+        ? 'Buchung für die Spielzusammenfassung gespeichert.'
         : state.booking.kind === 'empty'
         ? 'Keine Buchung ausgewählt.'
         : state.booking.kind === 'test'
@@ -1200,6 +1194,7 @@ async function saveSelectedBooking(booking, { expectedRunId = '', languageOnly =
 
 function renderBookingControls() {
   const section = document.getElementById('bookingDetails');
+  const dialog = document.getElementById('bookingDialog');
   const select = document.getElementById('bookingSelect');
   const languageSelect = document.getElementById('hintLanguageSelect');
   const info = document.getElementById('bookingSelectedInfo');
@@ -1210,6 +1205,7 @@ function renderBookingControls() {
   const applyButton = document.getElementById('applyBookingBtn');
   const editButton = document.getElementById('bookingEditBtn');
   const compact = document.getElementById('bookingCompactValue');
+  const currentInfo = document.getElementById('bookingCurrentInfo');
   if (!select) return;
 
   if (!bookingOptionsLoaded && !bookingOptions.length) {
@@ -1230,14 +1226,10 @@ function renderBookingControls() {
 
   const current = normalizeBooking(state.booking || bookingOptions[0] || {});
   const currentKey = bookingKey(current);
-  const phase = Number(state.game.phase || 0);
-  const editAllowed = phase >= 3 && phase <= 13 && Boolean(currentRunId());
-  if (!editAllowed) bookingEditorOpen = false;
-  section?.classList.toggle('is-editing', editAllowed && bookingEditorOpen);
+  bookingEditorOpen = Boolean(dialog?.open);
   if (editButton) {
-    editButton.classList.toggle('hidden', !editAllowed);
-    editButton.textContent = bookingEditorOpen ? 'Schließen' : 'Buchung ändern';
-    editButton.setAttribute('aria-expanded', String(editAllowed && bookingEditorOpen));
+    editButton.textContent = 'Buchung ändern';
+    editButton.setAttribute('aria-expanded', String(bookingEditorOpen));
   }
   if (currentKey && !bookingOptions.some((item) => bookingKey(item) === currentKey)) {
     bookingOptions = [current, ...bookingOptions];
@@ -1254,36 +1246,51 @@ function renderBookingControls() {
   const suggested = current.kind === 'empty' && Number(state.game.phase || 0) === 2
     ? bookingSuggestedKey
     : '';
-  select.value = suggested || currentKey;
+  const draftKey = bookingDraftKey || suggested || currentKey;
+  const selectedDraft = bookingOptions.find((item) => bookingKey(item) === draftKey) || current;
+  const draft = normalizeBooking(
+    bookingEditorOpen && bookingDraft && bookingKey(bookingDraft) === draftKey
+      ? bookingDraft
+      : selectedDraft,
+  );
+  bookingDraftKey = bookingKey(draft);
+  if (bookingEditorOpen) bookingDraft = draft;
+  select.value = bookingDraftKey;
   select.disabled = bookingBusy;
   if (languageSelect) {
-    languageSelect.value = current.language;
-    languageSelect.disabled = bookingBusy || startInFlight || Boolean(state.start_assignment?.active);
+    languageSelect.value = draft.language;
+    languageSelect.disabled = bookingBusy || startInFlight;
   }
   if (refreshButton) refreshButton.disabled = bookingBusy;
   if (applyButton) applyButton.disabled = bookingBusy;
-  if (fields) fields.classList.toggle('hidden', current.kind === 'empty');
+  if (fields) fields.classList.toggle('hidden', draft.kind === 'empty');
 
   if (emailInput && document.activeElement !== emailInput) {
-    emailInput.value = current.customerEmail || (current.kind === 'test' ? 'rudolf.dosser@gmail.com' : '');
+    emailInput.value = draft.customerEmail || (draft.kind === 'test' ? 'rudolf.dosser@gmail.com' : '');
   }
   if (playersInput && document.activeElement !== playersInput) {
-    playersInput.value = String(current.kind === 'empty' ? 0 : (current.players || (current.kind === 'test' ? 2 : 1)));
+    playersInput.value = String(draft.kind === 'empty' ? 0 : (draft.players || (draft.kind === 'test' ? 2 : 1)));
   }
 
   if (info) {
-    if (current.kind === 'empty' && suggested) {
+    if (draft.kind === 'empty' && suggested) {
       const candidate = bookingOptions.find((item) => bookingKey(item) === suggested);
       info.textContent = `Automatisch erkannt: ${bookingOptionLabel(candidate)}. Bitte Buchung bestätigen oder ändern.`;
-    } else if (current.kind === 'empty') {
+    } else if (draft.kind === 'empty') {
       info.textContent = 'Keine passende Buchung automatisch erkannt. Bitte Buchung auswählen.';
     } else {
-      info.innerHTML = bookingInfoHtml(current);
+      info.innerHTML = bookingInfoHtml(draft);
     }
   }
 
   const compactLabel = bookingCompactLabel(current) || 'Keine Buchung ausgewählt';
   if (compact) compact.textContent = compactLabel;
+  if (currentInfo) {
+    currentInfo.innerHTML = current.kind === 'empty'
+      ? '<span class="muted-info">Keine Buchung ausgewählt.</span>'
+      : bookingInfoHtml(current);
+  }
+  section?.classList.toggle('has-booking', current.kind !== 'empty');
 }
 
 function bookingOverrideMessage(booking) {
@@ -1310,6 +1317,9 @@ async function confirmAndSaveBooking(booking) {
   }
   const saved = await saveSelectedBooking(normalized);
   bookingEditorOpen = false;
+  bookingDraftKey = bookingKey(saved);
+  bookingDraft = null;
+  document.getElementById('bookingDialog')?.close();
   renderBookingControls();
   return saved;
 }
@@ -1635,9 +1645,9 @@ function renderLocks() {
   const labels = {
     images: 'Falltür',
     knocking: 'Kasten',
-    slider: 'Sternebox',
-    r2: 'Tür Raum 2',
-    r3: 'Tür Raum 3',
+    slider: 'Sterne',
+    r2: 'Raum 2',
+    r3: 'Raum 3',
   };
   const order = ['images', 'knocking', 'slider', 'r2', 'r3'];
   const locks = (state.locks || []).slice().sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
@@ -1824,10 +1834,10 @@ function renderImagesButtons(buttons) {
 function renderChessSlots(slots) {
   if (!slots || !slots.length) return '';
   return `
-    <div class="inline-info inline-info-wrap">
+    <div class="chess-grid">
       ${slots.map((slot) => `
-        <span>${escapeHtml(slot.slot)}: <span class="inline-status ${slot.correct ? 'inline-status-good' : 'inline-status-bad'}">${escapeHtml(slot.value)}</span><small class="chess-expected">Soll: ${escapeHtml(slot.expected || slot.slot)}</small></span>
-      `).join('<span class="inline-sep">|</span>')}
+        <span class="chess-slot"><strong>${escapeHtml(slot.slot)}</strong><span class="inline-status ${slot.correct ? 'inline-status-good' : 'inline-status-bad'}">${escapeHtml(slot.value)}</span></span>
+      `).join('')}
     </div>
   `;
 }
@@ -1865,13 +1875,17 @@ function renderKnockingSummary(summary) {
 
 function renderStarSliderSummary(summary) {
   if (!summary) return '';
-  const current = (summary.current || []).map(escapeHtml).join(' ');
-  const attempts = (summary.attempts || []).map((item) => `(${item.map(escapeHtml).join(' ')})`).join(' ');
+  const symbol = (value) => {
+    const key = String(value || 'none').trim().toLowerCase();
+    const glyph = STAR_SIGN_SYMBOLS[key] || '?';
+    return `<span class="star-sign-symbol" title="${escapeAttr(key)}" aria-label="${escapeAttr(key)}">${glyph}</span>`;
+  };
+  const current = (summary.current || []).map(symbol).join('');
+  const attempts = (summary.attempts || []).map((item) => `<span class="star-sign-attempt">${item.map(symbol).join('')}</span>`).join('');
   return `
-    <div class="inline-info inline-info-wrap">
-      <span><b>Aktuell:</b> ${current || 'keine'}</span>
-      <span class="inline-sep">|</span>
-      <span><b>Versuche:</b> ${attempts || '—'}</span>
+    <div class="star-sign-summary">
+      <span><b>Aktuell:</b><span class="star-sign-row">${current || '—'}</span></span>
+      <span><b>Versuche:</b><span class="star-sign-attempts">${attempts || '—'}</span></span>
     </div>
   `;
 }
@@ -1897,7 +1911,7 @@ function renderRiddleInfo(riddle) {
   if (riddle.id === 'knocking') return renderKnockingSummary(riddle.attempts_summary);
   if (riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
   if (riddle.id === 'stars' || riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
-  return riddle.info ? `<span>${escapeHtml(riddle.info)}</span>` : '<span class="muted-info">Keine zusätzlichen Live-Daten.</span>';
+  return riddle.info ? `<span>${escapeHtml(riddle.info)}</span>` : '<span class="muted-info">Keine Live-Daten.</span>';
 }
 
 function riddleTimeText(riddle) {
@@ -1967,30 +1981,21 @@ function riddleActionsHtml(riddle, compact = false) {
   </div>`;
 }
 
-function riddleTimeDirectionOptions(riddle) {
-  const sourceStageIndex = RIDDLE_TIME_STAGES.findIndex((stage) => stage.includes(riddle.id));
-  const rows = new Map((state.riddles || []).map((row) => [row.id, row]));
-  return [
-    ['previous', sourceStageIndex - 1, '+ vorheriges Rätsel'],
-    ['next', sourceStageIndex + 1, '+ nächstes Rätsel'],
-  ].map(([value, stageIndex, label]) => {
-    const stage = RIDDLE_TIME_STAGES[stageIndex];
-    const available = Boolean(stage?.some((id) => String(rows.get(id)?.phase_state || 'pending') !== 'pending'));
-    return { value, label, available };
-  });
-}
-
 function riddleTimeEditorHtml(riddle) {
   const timeEditable = riddleMutationsAvailable()
     && ['solved', 'skipped', 'not_solved'].includes(String(riddle.phase_state || 'pending'));
   if (!timeEditable) return '<span class="table-empty">--</span>';
   const seconds = Number(riddle.display_time_s ?? riddle.time_s ?? riddle.solve_time_s ?? 0);
-  const directions = riddleTimeDirectionOptions(riddle);
+  const editorId = `riddle-time-editor-${riddle.id}`;
   return `
     <div class="riddle-time-edit">
       <span class="riddle-time-current">${fmtGameTime(seconds)}</span>
-      <button class="riddle-time-toggle" type="button" aria-label="Zeit von ${escapeAttr(riddle.label)} ändern">&#9881;</button>
-      <div class="riddle-time-editor" hidden><input class="riddle-time-input" type="text" inputmode="decimal" value="${escapeAttr(fmtEditableTime(seconds))}" placeholder="mm:ss" aria-label="Rätselzeit als Minuten und Sekunden" /><select class="riddle-time-direction" aria-label="Ausgleich mit vorherigem oder nächstem Rätsel"><option value="">Ausgleich wählen</option>${directions.map((item) => `<option value="${item.value}" ${item.available ? '' : 'disabled'}>${escapeHtml(item.label)}</option>`).join('')}</select><button class="riddle-time-save" type="button" disabled>Vorschau</button></div>
+      <button class="riddle-time-toggle" type="button" aria-label="Zeit von ${escapeAttr(riddle.label)} ändern" aria-controls="${escapeAttr(editorId)}" aria-expanded="false">&#9881;</button>
+      <div class="riddle-time-editor" id="${escapeAttr(editorId)}" popover="manual">
+        <label class="riddle-time-input-wrap"><span>Neue Zeit</span><input class="riddle-time-input" type="text" inputmode="decimal" value="${escapeAttr(fmtEditableTime(seconds))}" placeholder="mm:ss" aria-label="Rätselzeit als Minuten und Sekunden" /></label>
+        <div class="riddle-time-options" aria-label="Ausgleichsvariante" aria-live="polite"><span class="riddle-time-preview-hint">Zeit eingeben, um beide Ausgleichsvarianten zu berechnen.</span></div>
+        <button class="riddle-time-save" type="button" disabled>Speichern</button>
+      </div>
     </div>
   `;
 }
@@ -2043,51 +2048,114 @@ async function toggleSkip(riddle, button) {
   }));
 }
 
-async function saveRiddleTime(riddle, input, directionSelect, button) {
+function validRiddleTimeText(value) {
+  return /^\d+(?::[0-5]?\d(?::[0-5]?\d)?)?(?:[.,]\d+)?$/.test(value);
+}
+
+function renderRiddleTimeOptions(editor, preview) {
+  const options = editor.querySelector('.riddle-time-options');
+  const saveButton = editor.querySelector('.riddle-time-save');
+  if (!options || !saveButton) return;
+  editor.dataset.solveTime = String(preview.solve_time_s);
+  editor.dataset.adjustmentSide = '';
+  saveButton.disabled = true;
+  options.innerHTML = (preview.options || []).map((option) => {
+    if (!option.available) {
+      return `<button class="riddle-time-option is-unavailable" type="button" disabled><strong>${escapeHtml(option.label)}</strong><span>${escapeHtml(option.error || 'Nicht verfügbar')}</span></button>`;
+    }
+    const receiving = option.receiving;
+    const detail = receiving
+      ? `${receiving.label}: ${fmtEditableTime(receiving.old_time_s)} → ${fmtEditableTime(receiving.new_time_s)}`
+      : 'Keine zusätzliche Zeitverschiebung nötig';
+    return `<button class="riddle-time-option" type="button" data-adjustment-side="${escapeAttr(option.adjustment_side)}" aria-pressed="false"><strong>${escapeHtml(option.label)}</strong><span>${escapeHtml(detail)}</span></button>`;
+  }).join('');
+  options.querySelectorAll('.riddle-time-option:not(.is-unavailable)').forEach((optionButton) => {
+    optionButton.addEventListener('click', () => {
+      options.querySelectorAll('.riddle-time-option').forEach((item) => {
+        item.classList.remove('is-selected');
+        item.setAttribute('aria-pressed', 'false');
+      });
+      optionButton.classList.add('is-selected');
+      optionButton.setAttribute('aria-pressed', 'true');
+      editor.dataset.adjustmentSide = String(optionButton.dataset.adjustmentSide || '');
+      saveButton.disabled = !editor.dataset.adjustmentSide;
+    });
+  });
+}
+
+async function refreshRiddleTimeOptions(riddle, input, editor) {
+  const options = editor.querySelector('.riddle-time-options');
+  const saveButton = editor.querySelector('.riddle-time-save');
+  const value = input.value.trim();
+  editor.dataset.adjustmentSide = '';
+  editor.dataset.solveTime = '';
+  if (saveButton) saveButton.disabled = true;
+  if (!validRiddleTimeText(value)) {
+    if (options) options.innerHTML = '<span class="riddle-time-preview-hint">Zeit als Sekunden, mm:ss oder hh:mm:ss eingeben.</span>';
+    return;
+  }
+  const requestId = String(Number(editor.dataset.previewRequestId || 0) + 1);
+  editor.dataset.previewRequestId = requestId;
+  if (options) options.innerHTML = '<span class="riddle-time-preview-hint">Varianten werden berechnet…</span>';
+  const guard = actionGuard();
+  const params = new URLSearchParams({
+    riddle: riddle.id,
+    time_text: value,
+    expected_phase: String(guard.expected_phase),
+    expected_run_id: guard.expected_run_id,
+  });
+  try {
+    const preview = await api(`/api/riddle-time-preview?${params.toString()}`);
+    if (editor.dataset.previewRequestId !== requestId || input.value.trim() !== value) return;
+    renderRiddleTimeOptions(editor, preview);
+  } catch (error) {
+    if (editor.dataset.previewRequestId !== requestId) return;
+    if (options) options.innerHTML = `<span class="riddle-time-preview-error">${escapeHtml(error.message || 'Varianten konnten nicht berechnet werden.')}</span>`;
+  }
+}
+
+async function saveRiddleTime(riddle, input, editor, button) {
   if (String(riddle.phase_state || 'pending') === 'pending') {
     showFeedback('Die Zeit eines noch nicht erreichten Rätsels kann nicht geändert werden.', 'warn');
     return;
   }
   const value = input.value.trim();
-  const adjustmentSide = String(directionSelect?.value || '');
+  const adjustmentSide = String(editor.dataset.adjustmentSide || '');
+  const solveTimeS = Number(editor.dataset.solveTime);
   if (!['previous', 'next'].includes(adjustmentSide)) {
-    showFeedback('Bitte auswählen, ob die Zeit mit dem vorherigen oder nächsten Rätsel ausgeglichen wird.', 'warn');
-    directionSelect?.focus();
+    showFeedback('Bitte eine der berechneten Ausgleichsvarianten auswählen.', 'warn');
     return;
   }
-  if (!/^\d+(?::[0-5]?\d(?::[0-5]?\d)?)?(?:\.\d+)?$/.test(value)) {
-    showFeedback('Die Zeit muss als Sekunden, mm:ss oder hh:mm:ss angegeben werden.', 'error');
+  if (!validRiddleTimeText(value) || !Number.isFinite(solveTimeS) || solveTimeS < 1) {
+    showFeedback('Die Zeitvorschau ist nicht mehr aktuell. Bitte die Zeit erneut eingeben.', 'error');
     input.focus();
     return;
   }
 
   await runAction(button, async () => {
     const guard = actionGuard();
-    const params = new URLSearchParams({
-      riddle: riddle.id,
-      time_text: value,
-      adjustment_side: adjustmentSide,
-      expected_phase: String(guard.expected_phase),
-      expected_run_id: guard.expected_run_id,
-    });
-    const preview = await api(`/api/riddle-time-preview?${params.toString()}`);
-    const source = preview.source;
-    const receiving = preview.receiving;
-    const changes = [`${source.label}: ${fmtEditableTime(source.old_time_s)} → ${fmtEditableTime(source.new_time_s)}`];
-    if (receiving) changes.push(`${receiving.label}: ${fmtEditableTime(receiving.old_time_s)} → ${fmtEditableTime(receiving.new_time_s)}`);
-    const confirmed = await confirmAction({
-      title: 'Rätselzeit korrigieren?',
-      message: `${adjustmentSide === 'previous' ? 'Ausgleich mit dem vorherigen Rätsel' : 'Ausgleich mit dem nächsten Rätsel'}\n\n${changes.join('\n')}\n\nDie Gesamtdauer bleibt durch den Ausgleich konsistent.`,
-      confirmLabel: 'Zeit übernehmen',
-    });
-    if (!confirmed) return;
     await api('/api/riddle-time', {
       method: 'POST',
-      body: JSON.stringify({ riddle: riddle.id, time_text: value, adjustment_side: adjustmentSide, ...guard }),
+      body: JSON.stringify({ riddle: riddle.id, solve_time_s: solveTimeS, adjustment_side: adjustmentSide, ...guard }),
     });
     delete riddleTimeDrafts[riddle.id];
     riddleTimeEditing[riddle.id] = false;
+    if (editor.matches(':popover-open')) editor.hidePopover();
   });
+}
+
+function positionRiddleTimeEditor(editor, toggleButton) {
+  const gap = 8;
+  const margin = 12;
+  const anchor = toggleButton.getBoundingClientRect();
+  const editorRect = editor.getBoundingClientRect();
+  const left = Math.max(margin, Math.min(anchor.right + gap, window.innerWidth - editorRect.width - margin));
+  const below = anchor.bottom + gap;
+  const top = below + editorRect.height <= window.innerHeight - margin
+    ? below
+    : Math.max(margin, anchor.top - editorRect.height - gap);
+  editor.style.left = `${Math.round(left)}px`;
+  editor.style.top = `${Math.round(top)}px`;
 }
 
 async function changeHint(riddle, delta, button) {
@@ -2119,44 +2187,71 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
 
   if (!includeTimeEditor) return;
   const input = container.querySelector('.riddle-time-input');
-  const directionSelect = container.querySelector('.riddle-time-direction');
   const saveButton = container.querySelector('.riddle-time-save');
   const toggleButton = container.querySelector('.riddle-time-toggle');
   const editor = container.querySelector('.riddle-time-editor');
+  editor?.addEventListener('toggle', (event) => {
+    const open = event.newState === 'open';
+    toggleButton?.setAttribute('aria-expanded', String(open));
+    if (!open) {
+      riddleTimeEditing[riddle.id] = false;
+      flushQueuedSnapshot();
+    }
+  });
   toggleButton?.addEventListener('click', () => {
     if (!editor || !input) return;
-    editor.hidden = !editor.hidden;
-    if (!editor.hidden) input.focus();
+    if (editor.matches(':popover-open')) {
+      editor.hidePopover();
+      toggleButton.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    toggleButton.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    editor.showPopover();
+    toggleButton.setAttribute('aria-expanded', 'true');
+    positionRiddleTimeEditor(editor, toggleButton);
+    input.focus();
+    refreshRiddleTimeOptions(riddle, input, editor).catch(() => {});
   });
   if (!input || !saveButton || input.disabled) return;
 
-  directionSelect?.addEventListener('change', () => {
-    saveButton.disabled = !directionSelect.value;
-  });
-
   input.addEventListener('focus', () => { riddleTimeEditing[riddle.id] = true; });
-  input.addEventListener('input', () => { riddleTimeDrafts[riddle.id] = input.value; });
+  let previewTimer = null;
+  input.addEventListener('input', () => {
+    riddleTimeDrafts[riddle.id] = input.value;
+    editor.dataset.adjustmentSide = '';
+    editor.dataset.solveTime = '';
+    saveButton.disabled = true;
+    const options = editor.querySelector('.riddle-time-options');
+    if (options) options.innerHTML = '<span class="riddle-time-preview-hint">Varianten werden berechnet…</span>';
+    window.clearTimeout(previewTimer);
+    previewTimer = window.setTimeout(() => refreshRiddleTimeOptions(riddle, input, editor).catch(() => {}), 250);
+  });
   input.addEventListener('blur', () => {
     window.setTimeout(() => {
       riddleTimeEditing[riddle.id] = false;
       flushQueuedSnapshot();
     }, 180);
   });
-  input.addEventListener('keydown', (event) => {
+  editor.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       event.preventDefault();
       delete riddleTimeDrafts[riddle.id];
       riddleTimeEditing[riddle.id] = false;
+      if (editor.matches(':popover-open')) editor.hidePopover();
+      toggleButton?.setAttribute('aria-expanded', 'false');
+      toggleButton?.focus();
       flushQueuedSnapshot();
-      return;
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      saveRiddleTime(riddle, input, directionSelect, saveButton).catch(() => {});
     }
   });
-  saveButton.addEventListener('pointerdown', () => { riddleTimeEditing[riddle.id] = true; });
-  saveButton.addEventListener('click', () => saveRiddleTime(riddle, input, directionSelect, saveButton).catch(() => {}));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (editor.dataset.adjustmentSide) saveRiddleTime(riddle, input, editor, saveButton).catch(() => {});
+      else refreshRiddleTimeOptions(riddle, input, editor).catch(() => {});
+    }
+  });
+  editor.addEventListener('pointerdown', () => { riddleTimeEditing[riddle.id] = true; });
+  saveButton.addEventListener('click', () => saveRiddleTime(riddle, input, editor, saveButton).catch(() => {}));
 }
 
 function buildRiddleRow(riddle) {
@@ -2193,11 +2288,11 @@ async function togglePastOutcome(riddle, button) {
 
 function buildCurrentRiddleCard(riddle) {
   const card = document.createElement('article');
-  card.className = 'current-riddle-card';
+  card.className = `current-riddle-card current-riddle-card--${escapeAttr(String(riddle.phase_state || 'pending'))}`;
   card.dataset.riddleId = riddle.id;
   card.innerHTML = `
     <div class="current-riddle-card-head">
-      <h2><span>&#129504; Aktuelles Rätsel</span>${escapeHtml(riddle.label)}</h2>
+      <h2><span aria-hidden="true">&#129513;</span>${escapeHtml(riddle.label)}</h2>
     </div>
     <div class="current-riddle-body">
       <div class="current-riddle-facts" aria-label="Live-Informationen">
@@ -2252,9 +2347,13 @@ function renderCurrentRiddles() {
     wrap.appendChild(preparation);
     return;
   }
-  const current = phase >= 3 ? (state.riddles || []).filter((riddle) => (
+  let current = phase >= 3 ? (state.riddles || []).filter((riddle) => (
     riddle.phase_state === 'active'
   )) : [];
+  if (current.some((riddle) => riddle.id === 'tangram' || riddle.id === 'magnet')) {
+    const parallelIds = new Set(['tangram', 'magnet']);
+    current = (state.riddles || []).filter((riddle) => parallelIds.has(riddle.id));
+  }
   if (!current.length) {
     wrap.innerHTML = '<div class="current-riddle-empty"><h2>Noch kein Rätsel aktiv</h2><p>Wechsle in die Vorbereitung, ordne die Buchung zu und starte anschließend das Spiel.</p></div>';
     return;
@@ -2637,33 +2736,53 @@ function wireTopControls() {
   const refreshBookingsButton = document.getElementById('refreshBookingsBtn');
   const applyBookingButton = document.getElementById('applyBookingBtn');
   const editBookingButton = document.getElementById('bookingEditBtn');
+  const bookingDialog = document.getElementById('bookingDialog');
+  const bookingDialogClose = document.getElementById('bookingDialogClose');
   const emailInput = document.getElementById('testBookingEmail');
   const playersInput = document.getElementById('testBookingPlayers');
 
   editBookingButton?.addEventListener('click', () => {
-    bookingEditorOpen = !bookingEditorOpen;
+    bookingEditorOpen = true;
+    bookingDraftKey = bookingKey(state.booking);
+    bookingDraft = normalizeBooking(state.booking);
+    if (!bookingDialog?.open) bookingDialog?.showModal();
     renderBookingControls();
-    if (bookingEditorOpen && !bookingOptionsLoaded) loadBookings().catch(() => {});
+    if (!bookingOptionsLoaded) loadBookings().catch(() => {});
   });
 
-  bookingSelect?.addEventListener('change', async () => {
+  const closeBookingDialog = () => {
+    bookingEditorOpen = false;
+    bookingDraftKey = '';
+    bookingDraft = null;
+    if (bookingDialog?.open) bookingDialog.close();
+    renderBookingControls();
+  };
+  bookingDialogClose?.addEventListener('click', closeBookingDialog);
+  bookingDialog?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    closeBookingDialog();
+  });
+  bookingDialog?.addEventListener('close', () => {
+    bookingEditorOpen = false;
+    bookingDraftKey = '';
+    bookingDraft = null;
+    renderBookingControls();
+  });
+
+  bookingSelect?.addEventListener('change', () => {
     const selected = bookingOptions.find((item) => bookingKey(item) === bookingSelect.value);
     if (!selected) return;
-    const normalized = normalizeBooking(selected);
-    try {
-      await confirmAndSaveBooking(normalized);
-      await fetchAndPatch();
-    } catch (error) {
-      setBookingFeedback(error.message || 'Buchung konnte nicht gespeichert werden.', 'error');
-    }
+    bookingDraftKey = bookingKey(selected);
+    bookingDraft = normalizeBooking(selected);
+    renderBookingControls();
   });
 
   languageSelect?.addEventListener('change', () => {
-    const corrected = normalizeBooking({ ...state.booking, language: languageSelect.value });
-    saveSelectedBooking(corrected, { languageOnly: true }).catch((error) => {
-      setBookingFeedback(error.message || 'Tipp-Sprache konnte nicht gespeichert werden.', 'error');
+    bookingDraft = normalizeBooking({
+      ...(bookingDraft || state.booking),
+      language: languageSelect.value,
     });
-    window.setTimeout(flushQueuedSnapshot, 0);
+    renderBookingControls();
   });
 
   refreshBookingsButton?.addEventListener('click', async () => {
@@ -2673,10 +2792,13 @@ function wireTopControls() {
 
   const applyBookingDraft = async () => {
     if (bookingBusy) return;
-    const option = bookingOptions.find((item) => bookingKey(item) === bookingSelect?.value) || state.booking;
+    const option = bookingDraft && bookingKey(bookingDraft) === bookingSelect?.value
+      ? bookingDraft
+      : (bookingOptions.find((item) => bookingKey(item) === bookingSelect?.value) || state.booking);
     const selected = normalizeBooking(option);
     const draft = selected.kind === 'empty' ? selected : normalizeBooking({
       ...selected,
+      language: languageSelect?.value || selected.language,
       customerEmail: String(emailInput?.value || selected.customerEmail || '').trim(),
       players: Math.max(1, safeInt(playersInput?.value, selected.players || 1)),
     });
@@ -2689,6 +2811,12 @@ function wireTopControls() {
   };
 
   applyBookingButton?.addEventListener('click', applyBookingDraft);
+  emailInput?.addEventListener('input', () => {
+    bookingDraft = normalizeBooking({
+      ...(bookingDraft || state.booking),
+      customerEmail: emailInput.value,
+    });
+  });
   emailInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
@@ -2697,6 +2825,10 @@ function wireTopControls() {
 
   playersInput?.addEventListener('input', () => {
     playersInput.value = playersInput.value.replace(/[^0-9]/g, '');
+    bookingDraft = normalizeBooking({
+      ...(bookingDraft || state.booking),
+      players: Math.max(1, safeInt(playersInput.value, 1)),
+    });
   });
   playersInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;

@@ -892,17 +892,33 @@ def save_start_assignment(value: dict[str, Any]) -> bool:
     })
 
 
-def load_selected_booking() -> dict[str, Any]:
+def _load_selected_booking_document() -> dict[str, Any]:
     try:
         if SELECTED_BOOKING_PATH.exists():
-            return normalize_booking_selection(json.loads(SELECTED_BOOKING_PATH.read_text(encoding="utf-8")))
+            payload = json.loads(SELECTED_BOOKING_PATH.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
     except Exception:
         pass
+    return {}
+
+
+def load_selected_booking() -> dict[str, Any]:
+    payload = _load_selected_booking_document()
+    if payload:
+        return normalize_booking_selection(payload)
     return dict(EMPTY_BOOKING_SELECTION)
 
 
-def save_selected_booking(booking: dict[str, Any]) -> bool:
-    return _atomic_write_dashboard_json(SELECTED_BOOKING_PATH, normalize_booking_selection(booking))
+def load_selected_booking_override_phase() -> int | None:
+    phase = _load_selected_booking_document().get("_dashboard_local_override_phase")
+    return phase if type(phase) is int and phase in {0, 1, 2, 14} else None
+
+
+def save_selected_booking(booking: dict[str, Any], *, local_override_phase: int | None = None) -> bool:
+    payload = normalize_booking_selection(booking)
+    if local_override_phase in {0, 1, 2, 14}:
+        payload["_dashboard_local_override_phase"] = local_override_phase
+    return _atomic_write_dashboard_json(SELECTED_BOOKING_PATH, payload)
 _repo_game_db_path = BASE_DIR.parents[1] / "scripts" / "game_master" / "data" / "game_master.sqlite3"
 _installed_game_db_path = BASE_DIR.parent / "scripts" / "game_master" / "data" / "game_master.sqlite3"
 _default_game_db_path = _repo_game_db_path if _repo_game_db_path.parent.is_dir() else _installed_game_db_path
@@ -1631,6 +1647,7 @@ class DashboardStore:
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_hint_counts: dict[str, int] = field(default_factory=load_hint_store)
     local_players_count_override: int | None = None
+    local_booking_override_phase: int | None = field(default_factory=load_selected_booking_override_phase)
     selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
     game_state_revision: int = 0
     start_assignment: dict[str, Any] = field(default_factory=load_start_assignment)
@@ -1646,6 +1663,7 @@ class DashboardStore:
             raise
         self.selected_booking = selected
         self.local_players_count_override = None
+        self.local_booking_override_phase = None
         if not directory_synced:
             self.persistence_degraded = True
 
@@ -1783,7 +1801,6 @@ class DashboardStore:
                     and str(self.start_assignment.get("run_id") or "") == current_run_id
                 )
                 if not restored_claim_matches:
-                    self._reset_selected_booking_locked()
                     self._reset_start_assignment_locked()
             elif authoritative_run_state and phase in {0, 1}:
                 self._reset_start_assignment_locked()
@@ -1820,7 +1837,18 @@ class DashboardStore:
             if has_run_booking:
                 run_booking = current_run["booking"]
                 normalized_booking = normalize_booking_selection(run_booking)
-                if normalized_booking != normalize_booking_selection(self.selected_booking):
+                local_booking = normalize_booking_selection(self.selected_booking)
+                local_override_phase = getattr(self, "local_booking_override_phase", None)
+                preserve_local_booking = (
+                    (phase == 14 and local_override_phase == 14)
+                    or (
+                        phase == 2
+                        and local_override_phase in {0, 1, 2}
+                        and normalized_booking.get("kind") == "empty"
+                        and local_booking.get("kind") != "empty"
+                    )
+                )
+                if not preserve_local_booking and normalized_booking != local_booking:
                     try:
                         directory_synced = save_selected_booking(normalized_booking)
                     except Exception:
@@ -1829,6 +1857,7 @@ class DashboardStore:
                     else:
                         self.selected_booking = normalized_booking
                         self.local_players_count_override = None
+                        self.local_booking_override_phase = None
                         if not directory_synced:
                             self.persistence_degraded = True
 
@@ -1851,8 +1880,10 @@ class DashboardStore:
             current["current_riddle_started_at"] = None
             if phase == 2:
                 current["run"] = None
-                current["players_count"] = 0
+                current["players_count"] = int(self.selected_booking.get("players") or 0)
+            elif phase in {0, 1} and prev_phase >= 2:
                 self._reset_selected_booking_locked()
+                self.local_booking_override_phase = None
             self.game_state = current
             if phase in {0, 1, 2}:
                 self._reset_riddle_display_state_locked()
@@ -1874,18 +1905,24 @@ class DashboardStore:
         booking: dict[str, Any],
         *,
         expected_run_id: str = "",
+        expected_phase: int | None = None,
+        local_only: bool = False,
         require_durable: bool = False,
     ) -> dict[str, Any]:
         normalized = normalize_booking_selection(booking)
         players_count = int(normalized.get("players") or 0)
         with self.lock:
+            try:
+                phase = int(self.game_state.get("phase", 0) or 0)
+            except Exception:
+                phase = 0
+            run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
+            current_run_id = str(run.get("run_id") or run.get("id") or self.game_state.get("run_id") or "").strip()
+            if expected_phase is not None and phase != expected_phase:
+                raise ValueError("Die Buchungszuordnung gehört nicht mehr zur erwarteten Spielphase.")
+            if local_only and not (phase in {0, 1, 14} or (phase == 2 and not current_run_id)):
+                raise ValueError("Die lokale Buchungszuordnung ist für den aktuellen Spieldurchlauf nicht mehr zulässig.")
             if expected_run_id:
-                run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
-                current_run_id = str(run.get("run_id") or run.get("id") or "").strip()
-                try:
-                    phase = int(self.game_state.get("phase", 0) or 0)
-                except Exception:
-                    phase = 0
                 if current_run_id != expected_run_id or not 2 <= phase <= 13:
                     raise ValueError("Die Buchungszuordnung gehört nicht mehr zum aktiven Spiel.")
             current = dict(self.game_state)
@@ -1894,7 +1931,7 @@ class DashboardStore:
             current["booking_email"] = str(normalized.get("customerEmail") or "")
             current["players_count"] = players_count
             run = current.get("run") if isinstance(current.get("run"), dict) else None
-            if run is not None:
+            if run is not None and not local_only:
                 run = dict(run)
                 run["players_count"] = players_count
                 run["booking"] = normalized
@@ -1902,11 +1939,15 @@ class DashboardStore:
                 run["booking_email"] = str(normalized.get("customerEmail") or "")
                 current["run"] = run
             try:
-                directory_synced = save_selected_booking(normalized)
+                directory_synced = save_selected_booking(
+                    normalized,
+                    local_override_phase=phase if local_only else None,
+                )
             except Exception:
                 self.persistence_degraded = True
                 raise
             self.local_players_count_override = players_count
+            self.local_booking_override_phase = phase if local_only else None
             self.selected_booking = normalized
             self.game_state = current
             if not directory_synced:
@@ -2772,17 +2813,30 @@ def parse_players_count_input(value: Any) -> int:
 
 
 def parse_mmss_input(value: Any) -> float | None:
-    text = str(value or "").strip()
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a valid time")
+    text = str(value if value is not None else "").strip()
     if not text or text == "—":
         return None
-    if re.fullmatch(r"\d{1,2}:\d{1,2}(?::\d{1,2})?", text):
-        chunks = [int(part) for part in text.split(":")]
+    if ":" in text:
+        if not re.fullmatch(r"\d+(?::\d{1,2}){1,2}(?:[.,]\d+)?", text):
+            raise ValueError("invalid clock time")
+        chunks = [float(part) for part in text.replace(",", ".").split(":")]
         if len(chunks) == 2:
             minutes, seconds = chunks
-            return float(minutes * 60 + seconds)
-        hours, minutes, seconds = chunks
-        return float(hours * 3600 + minutes * 60 + seconds)
-    return float(text)
+            if seconds >= 60:
+                raise ValueError("seconds must be below 60")
+            parsed = minutes * 60 + seconds
+        else:
+            hours, minutes, seconds = chunks
+            if minutes >= 60 or seconds >= 60:
+                raise ValueError("minutes and seconds must be below 60")
+            parsed = hours * 3600 + minutes * 60 + seconds
+    else:
+        parsed = float(text.replace(",", "."))
+    if not math.isfinite(parsed):
+        raise ValueError("time must be finite")
+    return round(parsed, 3)
 
 
 def _seconds_or_none(value: Any) -> float | None:
@@ -5540,8 +5594,24 @@ def api_select_booking() -> Any:
         except Exception:
             current_phase = 0
     expected_run_id = guard_run_id if 2 <= current_phase <= 13 else ""
+    local_only = current_phase in {0, 1, 14} or (current_phase == 2 and not guard_run_id)
     try:
-        if "hint_language" in data:
+        if local_only:
+            if "hint_language" in data:
+                current_selection = store.get_selected_booking()
+                booking = {
+                    **current_selection,
+                    "language": normalize_hint_language(data.get("hint_language")),
+                }
+            else:
+                booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else data)
+            selected = store.set_selected_booking(
+                booking,
+                expected_phase=data["expected_phase"],
+                local_only=True,
+                require_durable=True,
+            )
+        elif "hint_language" in data:
             selected = update_hint_language_selection(
                 data.get("hint_language"),
                 expected_run_id=expected_run_id,
@@ -5567,8 +5637,9 @@ def api_select_booking() -> Any:
         "ok": True,
         "booking": selected,
         "players_count": players_count,
-        "mqtt_queued": True,
-        "applied": False,
+        "mqtt_queued": not local_only,
+        "applied": local_only,
+        "scope": "completed_summary" if current_phase == 14 else ("next_run" if local_only else "current_run"),
         "start_assignment": store.get_start_assignment(),
     })
 
@@ -6011,13 +6082,34 @@ def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float, a
     }
 
 
+def build_riddle_time_preview_options(snapshot: Any, riddle: str, solve_time_s: float) -> list[dict[str, Any]]:
+    options = []
+    for adjustment_side, label in (("previous", "Vorheriges Rätsel"), ("next", "Nächstes Rätsel")):
+        try:
+            preview = build_riddle_time_preview(snapshot, riddle, solve_time_s, adjustment_side)
+        except (TypeError, ValueError) as exc:
+            options.append({
+                "adjustment_side": adjustment_side,
+                "label": label,
+                "available": False,
+                "error": f"{label} ist für diesen Zeitwert nicht verfügbar.",
+                "reason": str(exc),
+            })
+        else:
+            options.append({
+                **preview,
+                "label": label,
+                "available": True,
+            })
+    return options
+
+
 @app.get("/api/riddle-time-preview")
 def api_riddle_time_preview() -> Any:
     try:
         data = {
             "riddle": request.args.get("riddle", ""),
             "time_text": request.args.get("time_text", ""),
-            "adjustment_side": request.args.get("adjustment_side", ""),
             "expected_phase": int(request.args.get("expected_phase", "")),
             "expected_run_id": request.args.get("expected_run_id", ""),
         }
@@ -6038,10 +6130,17 @@ def api_riddle_time_preview() -> Any:
     try:
         seconds = parse_mmss_input(raw_value)
         seconds = float(seconds) if seconds is not None else 0.0
-        preview = build_riddle_time_preview(store.snapshot(), riddle, seconds, data["adjustment_side"])
+        if not 1 <= seconds <= MAX_RIDDLE_TIME_PREVIEW_S:
+            raise ValueError("Die Rätselzeit muss zwischen einer Sekunde und dem zulässigen Höchstwert liegen.")
+        options = build_riddle_time_preview_options(store.snapshot(), riddle, seconds)
     except (TypeError, ValueError) as exc:
         return _no_store_json({"ok": False, "error": str(exc)}, 400)
-    return _no_store_json({"ok": True, **preview})
+    return _no_store_json({
+        "ok": True,
+        "riddle": riddle,
+        "solve_time_s": round(seconds, 3),
+        "options": options,
+    })
 
 
 @app.post("/api/riddle-outcome")

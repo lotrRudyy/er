@@ -520,18 +520,76 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertTrue(namespace["api_select_booking"]()["ok"])
         self.assertEqual(expected_run_ids, ["prepared-run", "prepared-run"])
 
+    def test_booking_changes_are_local_without_mutating_absent_or_completed_runs(self) -> None:
+        namespace = extracted("api_select_booking")
+
+        class Store:
+            def __init__(self, phase: int) -> None:
+                self.lock = threading.RLock()
+                self.game_state = {"phase": phase, "run": {"run_id": "completed-run"} if phase == 14 else None}
+                self.selected = {"id": "__empty__", "kind": "empty", "players": 0, "language": "de"}
+
+            def set_selected_booking(
+                self,
+                booking: dict[str, Any],
+                *,
+                expected_phase: int | None = None,
+                local_only: bool = False,
+                require_durable: bool = False,
+            ) -> dict[str, Any]:
+                self.assert_durable = require_durable
+                self.expected_phase = expected_phase
+                self.local_only = local_only
+                self.selected = dict(booking)
+                return self.selected
+
+            def get_selected_booking(self) -> dict[str, Any]:
+                return dict(self.selected)
+
+            @staticmethod
+            def get_start_assignment() -> dict[str, Any]:
+                return {}
+
+        published = []
+        namespace.update({
+            "jsonify": JsonResponse,
+            "_stale_action_response": lambda _data: None,
+            "normalize_booking_selection": lambda booking: dict(booking),
+            "normalize_hint_language": lambda language: str(language),
+            "publish_booking_selection": lambda *_args, **_kwargs: published.append(True),
+        })
+        for phase, expected_scope in ((0, "next_run"), (1, "next_run"), (2, "next_run"), (14, "completed_summary")):
+            with self.subTest(phase=phase):
+                store = Store(phase)
+                namespace["store"] = store
+                namespace["request"] = types.SimpleNamespace(get_json=lambda force, phase=phase: {
+                    "booking": {"id": f"booking-{phase}", "kind": "booking", "players": 4},
+                    "expected_phase": phase,
+                    "expected_run_id": "completed-run" if phase == 14 else "",
+                })
+                response = namespace["api_select_booking"]()
+                self.assertTrue(response["ok"])
+                self.assertTrue(response["applied"])
+                self.assertFalse(response["mqtt_queued"])
+                self.assertEqual(response["scope"], expected_scope)
+                self.assertTrue(store.assert_durable)
+                self.assertEqual(store.expected_phase, phase)
+                self.assertTrue(store.local_only)
+        self.assertEqual(published, [])
+
     def test_prepared_run_accepts_scoped_booking_selection(self) -> None:
         set_selected_booking, namespace = extracted_method("DashboardStore", "set_selected_booking")
         persisted: list[dict[str, Any]] = []
         namespace.update({
             "normalize_booking_selection": lambda booking: dict(booking),
-            "save_selected_booking": lambda booking: persisted.append(dict(booking)) or True,
+            "save_selected_booking": lambda booking, **_kwargs: persisted.append(dict(booking)) or True,
         })
         store = types.SimpleNamespace(
             lock=threading.RLock(),
             game_state={"phase": 2, "run": {"run_id": "prepared-run"}},
             selected_booking={},
             local_players_count_override=None,
+            local_booking_override_phase=None,
             persistence_degraded=False,
         )
 
@@ -546,6 +604,52 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertEqual(store.game_state["run"]["booking"], selected)
         self.assertEqual(store.game_state["players_count"], 4)
         self.assertEqual(persisted, [selected])
+
+    def test_local_booking_is_atomic_and_does_not_mutate_completed_run(self) -> None:
+        set_selected_booking, namespace = extracted_method("DashboardStore", "set_selected_booking")
+        persisted: list[tuple[dict[str, Any], int | None]] = []
+        namespace.update({
+            "normalize_booking_selection": lambda booking: dict(booking),
+            "save_selected_booking": lambda booking, *, local_override_phase=None: (
+                persisted.append((dict(booking), local_override_phase)) or True
+            ),
+        })
+        completed_run = {
+            "run_id": "completed-run",
+            "players_count": 2,
+            "booking": {"id": "original", "players": 2},
+        }
+        store = types.SimpleNamespace(
+            lock=threading.RLock(),
+            game_state={"phase": 14, "run": copy.deepcopy(completed_run)},
+            selected_booking={},
+            local_players_count_override=None,
+            local_booking_override_phase=None,
+            persistence_degraded=False,
+        )
+
+        selected = set_selected_booking(
+            store,
+            {"id": "summary-recipient", "players": 4},
+            expected_phase=14,
+            local_only=True,
+            require_durable=True,
+        )
+
+        self.assertEqual(store.game_state["run"], completed_run)
+        self.assertEqual(store.game_state["booking"], selected)
+        self.assertEqual(store.local_booking_override_phase, 14)
+        self.assertEqual(persisted, [(selected, 14)])
+
+        store.game_state = {"phase": 2, "run": {"run_id": "new-run"}}
+        with self.assertRaisesRegex(ValueError, "nicht mehr zulässig"):
+            set_selected_booking(
+                store,
+                {"id": "too-late", "players": 3},
+                expected_phase=2,
+                local_only=True,
+            )
+        self.assertEqual(persisted, [(selected, 14)])
 
     def test_riddle_time_rejects_zero_and_negative_before_mqtt(self) -> None:
         namespace = extracted("parse_mmss_input", "api_riddle_time")
@@ -1111,6 +1215,32 @@ class DashboardPreviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "parallel receiving stage below 60.000"):
             preview(snapshot, "chains", 130, "next")
 
+    def test_riddle_time_preview_options_return_both_server_calculations(self) -> None:
+        namespace = self.riddle_preview_namespace()
+        options_namespace = extracted("build_riddle_time_preview_options")
+        options_namespace["build_riddle_time_preview"] = namespace["build_riddle_time_preview"]
+        snapshot = self.snapshot()
+        rows = {row["id"]: row for row in snapshot["riddles"]}
+        rows["prison"].update({"display_time_s": 30, "phase_state": "solved"})
+        rows["wheel"].update({"display_time_s": 100, "phase_state": "solved"})
+        rows["chains"].update({"display_time_s": 40, "phase_state": "active"})
+
+        options = options_namespace["build_riddle_time_preview_options"](snapshot, "wheel", 90)
+
+        self.assertEqual([item["adjustment_side"] for item in options], ["previous", "next"])
+        self.assertTrue(all(item["available"] for item in options))
+        self.assertEqual(options[0]["receiving"]["new_time_s"], 40.0)
+        self.assertEqual(options[1]["receiving"]["new_time_s"], 50.0)
+
+    def test_parse_mmss_normalizes_strings_and_numbers_once(self) -> None:
+        parse = extracted("parse_mmss_input")["parse_mmss_input"]
+        self.assertEqual(parse("01:02,5"), 62.5)
+        self.assertEqual(parse(12.25), 12.25)
+        with self.assertRaises(ValueError):
+            parse("01:75")
+        with self.assertRaises(ValueError):
+            parse(True)
+
     def test_riddle_time_preview_route_is_guarded_read_only_and_not_receipted(self) -> None:
         namespace = extracted("_no_store_json", "api_riddle_time_preview")
         snapshot_calls = 0
@@ -1127,22 +1257,25 @@ class DashboardPreviewTests(unittest.TestCase):
             "request": types.SimpleNamespace(args={
                 "riddle": "chess",
                 "time_text": "12.5",
-                "adjustment_side": "previous",
                 "expected_phase": "9",
                 "expected_run_id": "run-live",
             }),
             "_stale_action_response": lambda _data: None,
             "_canonical_riddle_name": lambda value: str(value or ""),
             "parse_mmss_input": lambda value: float(value),
-            "build_riddle_time_preview": lambda value, riddle, seconds, adjustment_side: {
+            "MAX_RIDDLE_TIME_PREVIEW_S": 1000,
+            "build_riddle_time_preview_options": lambda value, riddle, seconds: [{
                 "source": {"riddle_id": riddle, "old_time_s": 10, "new_time_s": seconds},
                 "receiving": None,
-                "adjustment_side": adjustment_side,
+                "adjustment_side": "previous",
                 "source_stage_delta_s": 2.5,
-            } if value == {"snapshot": True} else None,
+                "available": True,
+            }] if value == {"snapshot": True} else None,
         })
         response = namespace["api_riddle_time_preview"]()
         self.assertTrue(response["ok"])
+        self.assertEqual(response["solve_time_s"], 12.5)
+        self.assertEqual(len(response["options"]), 1)
         self.assertEqual(snapshot_calls, 1)
         self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
 
@@ -1214,7 +1347,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn(" Gelöst</button>", javascript)
         self.assertIn(" Überspringen</button>", javascript)
         self.assertIn("/api/riddle-time-preview", javascript)
-        self.assertIn(">Vorschau</button>", javascript)
+        self.assertIn(">Speichern</button>", javascript)
+        self.assertIn("riddle-time-options", javascript)
         self.assertIn("card.querySelector('.light-bulb-button')", javascript)
         self.assertIn("fmtEditableTime(seconds)", javascript)
         self.assertIn("controlViewActive && gameMode", javascript)
@@ -1232,7 +1366,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         time_end = javascript.index("async function changeHint", time_start)
         self.assertIn("confirmAction", javascript[solve_start:solve_end])
         self.assertIn("confirmAction", javascript[start_start:start_end])
-        self.assertIn("confirmAction", javascript[time_start:time_end])
+        self.assertNotIn("confirmAction", javascript[time_start:time_end])
         hint_start = javascript.index("async function changeHint")
         hint_end = javascript.index("function bindRiddleActions", hint_start)
         status_start = javascript.index("async function togglePastOutcome")
@@ -1264,7 +1398,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn('state_payload.get("sequence_current")', source)
         self.assertIn("[1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3]", javascript)
         self.assertIn("knockingIsCurrent ? 250 : 1000", javascript)
-        self.assertIn("slot.expected", javascript)
+        self.assertNotIn("slot.expected", javascript)
+        self.assertIn('class="chess-grid"', javascript)
         self.assertNotIn("elapsed_s -= GAME_COUNTDOWN_S", source)
         self.assertIn("fmtGameTime(readLocalTimer())", javascript)
 
@@ -1305,7 +1440,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261011-dashboard-v8", html)
+        self.assertIn("app.js') }}?v=20261011-dashboard-v9", html)
 
     def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1350,7 +1485,7 @@ class DashboardSourceContractTests(unittest.TestCase):
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v9", html)
+        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v10", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -1391,16 +1526,30 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn(".mission-rail {", css)
         self.assertIn(".hidden,", css)
         self.assertIn("[hidden]", css)
-        self.assertIn(".dashboard-preparation-mode .booking-card", css)
         self.assertIn(".dashboard-preparation-mode .mission-metrics", css)
-        self.assertIn("body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .field-label", css)
+        self.assertIn('id="bookingDialog"', html)
+        self.assertNotIn('id="bookingSelect" class="booking-select"', html[html.index('id="bookingDetails"'):html.index('id="currentRiddlesPanel"')])
+        self.assertIn(".booking-dialog-form", css)
         self.assertIn('id="bookingEditBtn"', html)
+        self.assertIn("bookingEditorOpen = Boolean(dialog?.open)", javascript)
+        self.assertIn("let bookingDraft = null;", javascript)
+        self.assertIn("bookingDraft = normalizeBooking", javascript)
+        self.assertNotIn("active.id === 'hintLanguageSelect'", javascript)
+        self.assertIn("Keine Live-Daten.", javascript)
+        self.assertNotIn("Keine zusätzlichen Live-Daten.", javascript)
+        self.assertIn("STAR_SIGN_SYMBOLS", javascript)
+        self.assertIn("parallelIds.has(riddle.id)", javascript)
+        self.assertIn("repeat(4, minmax(0, 1fr))", css)
+        self.assertIn("minmax(0, 1.38fr) minmax(0, 0.78fr)", css)
         self.assertIn('id="startAssignmentClose"', html)
         self.assertIn('id="diagnosticsMqttStatus"', html)
         self.assertNotIn('class="hint-template-heading"', javascript)
         self.assertNotIn(".dashboard-preparation-mode .control-workspace", css)
-        self.assertIn("grid-template-columns: minmax(45px, 1fr) 72px;", css)
-        self.assertIn('font: 17px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)
+        self.assertIn("grid-template-columns: minmax(45px, 1fr) 92px;", css)
+        self.assertIn('font: 19px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)
+        self.assertIn('aria-controls="${escapeAttr(editorId)}" aria-expanded="false"', javascript)
+        self.assertIn('aria-pressed="false"', javascript)
+        self.assertIn("editor.addEventListener('keydown'", javascript)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]

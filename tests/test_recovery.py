@@ -2887,16 +2887,31 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
             "_fsync_parent_directory",
             "_ensure_dashboard_directory_durable",
             "_atomic_write_dashboard_json",
+            "_load_selected_booking_document",
+            "load_selected_booking",
+            "load_selected_booking_override_phase",
             "save_selected_booking",
         }
         namespace = self.extracted_namespace(names)
         namespace["normalize_booking_selection"] = lambda value: dict(value)
+        namespace["EMPTY_BOOKING_SELECTION"] = {"id": "__empty__", "kind": "empty", "players": 0}
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "selected.json"
             namespace["SELECTED_BOOKING_PATH"] = path
-            namespace["save_selected_booking"]({"id": "booking-1", "players": 4})
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["id"], "booking-1")
+            namespace["save_selected_booking"](
+                {"id": "booking-1", "players": 4},
+                local_override_phase=14,
+            )
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["id"], "booking-1")
+            self.assertEqual(persisted["_dashboard_local_override_phase"], 14)
+            self.assertEqual(namespace["load_selected_booking"]()["id"], "booking-1")
+            self.assertEqual(namespace["load_selected_booking_override_phase"](), 14)
             self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
+
+            namespace["save_selected_booking"]({"id": "booking-1", "players": 4})
+            self.assertNotIn("_dashboard_local_override_phase", json.loads(path.read_text(encoding="utf-8")))
+            self.assertIsNone(namespace["load_selected_booking_override_phase"]())
 
             namespace["_atomic_write_dashboard_json"] = mock.Mock(side_effect=OSError("selected write failed"))
             with self.assertRaisesRegex(OSError, "selected write failed"):
@@ -2913,6 +2928,7 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
                 self.lock = threading.RLock()
                 self.selected_booking = {"id": "old", "players": 2}
                 self.local_players_count_override = None
+                self.local_booking_override_phase = None
                 self.persistence_degraded = False
                 self.game_state = {
                     "phase": 3,
@@ -2967,6 +2983,7 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
                 self.game_state = {"phase": 0}
                 self.game_state_revision = 0
                 self.local_players_count_override = None
+                self.local_booking_override_phase = None
                 self.selected_booking = {"id": "old-booking", "kind": "booking", "players": 2}
                 self.start_assignment = {
                     "active": True,
@@ -3002,6 +3019,27 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
         })
         self.assertTrue(store.start_assignment["active"])
         self.assertEqual(store.selected_booking["id"], "__empty__")
+
+        pending = Store()
+        pending.start_assignment = {"active": False, "claim_id": "", "run_id": ""}
+        pending.local_booking_override_phase = 0
+        pending.update_game_state({
+            "phase": 2,
+            "timer_running": False,
+            "run": {"run_id": "run-pending", "booking": {}},
+        })
+        self.assertEqual(pending.selected_booking["id"], "old-booking")
+
+        completed = Store()
+        completed.start_assignment = {"active": False, "claim_id": "", "run_id": ""}
+        completed.selected_booking = {"id": "__empty__", "kind": "empty", "players": 0}
+        completed.local_booking_override_phase = 14
+        completed.update_game_state({
+            "phase": 14,
+            "timer_running": False,
+            "run": {"run_id": "run-completed", "booking": {"id": "old", "kind": "booking", "players": 2}},
+        })
+        self.assertEqual(completed.selected_booking["id"], "__empty__")
 
         booking = {"id": "booking-7", "kind": "booking", "players": 4, "bookingCode": "B-7"}
         store.update_game_state({

@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v9" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v10" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
@@ -69,24 +69,10 @@
             <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
               <div class="panel-heading-v6">
                 <h2 id="bookingHeading">Aktuelle Buchung</h2>
-                <div class="booking-heading-actions"><span id="bookingCompactValue" class="booking-state">Keine Buchung</span><button id="bookingEditBtn" class="booking-edit-button hidden" type="button">Buchung ändern</button></div>
+                <div class="booking-heading-actions"><span id="bookingCompactValue" class="booking-state">Keine Buchung</span><button id="bookingEditBtn" class="booking-edit-button" type="button" aria-haspopup="dialog" aria-controls="bookingDialog">Buchung ändern</button></div>
               </div>
               <div class="booking-details-body">
-                <label class="field-label" for="bookingSelect">Buchung auswählen</label>
-                <select id="bookingSelect" class="booking-select" aria-label="Buchung"></select>
-                <div id="bookingSelectedInfo" class="booking-selected-info"></div>
-                <div class="booking-inline-fields">
-                  <label><span>Tipp-Sprache</span><select id="hintLanguageSelect" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
-                </div>
-                <div id="testBookingFields" class="test-booking-fields hidden">
-                  <input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="E-Mail-Adresse" />
-                  <input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" />
-                </div>
-                <div class="booking-action-row">
-                  <button id="refreshBookingsBtn" class="secondary-button" type="button">Aktualisieren</button>
-                  <button id="applyBookingBtn" class="secondary-button" type="button">Buchung bestätigen</button>
-                </div>
-                <div id="bookingFeedback" class="summary-email-feedback"></div>
+                <div id="bookingCurrentInfo" class="booking-selected-info"></div>
                 <div id="postGameActions" class="post-game-actions hidden"><button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button></div>
               </div>
             </section>
@@ -213,6 +199,31 @@
     </main>
     {% endif %}
 
+    <dialog id="bookingDialog" class="booking-dialog" aria-labelledby="bookingDialogTitle">
+      <button id="bookingDialogClose" class="dialog-close" type="button" aria-label="Buchungsdialog schließen">&#215;</button>
+      <div class="booking-dialog-heading">
+        <span class="booking-dialog-symbol" aria-hidden="true">&#128197;</span>
+        <div><span>Buchungszuordnung</span><h2 id="bookingDialogTitle">Buchung ändern</h2></div>
+      </div>
+      <div class="booking-dialog-form">
+        <label class="field-label" for="bookingSelect">Buchung auswählen</label>
+        <select id="bookingSelect" class="booking-select" aria-label="Buchung"></select>
+        <div id="bookingSelectedInfo" class="booking-selected-info"></div>
+        <div class="booking-inline-fields">
+          <label><span>Tipp-Sprache</span><select id="hintLanguageSelect" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
+        </div>
+        <div id="testBookingFields" class="test-booking-fields hidden">
+          <label><span>E-Mail-Adresse</span><input id="testBookingEmail" class="booking-input" type="email" value="rudolf.dosser@gmail.com" placeholder="E-Mail-Adresse" /></label>
+          <label><span>Spieler</span><input id="testBookingPlayers" class="booking-input booking-input-small" type="text" inputmode="numeric" value="2" placeholder="Spieler" /></label>
+        </div>
+        <div id="bookingFeedback" class="summary-email-feedback"></div>
+        <div class="booking-action-row">
+          <button id="refreshBookingsBtn" class="secondary-button" type="button">Buchungen aktualisieren</button>
+          <button id="applyBookingBtn" class="confirm-primary" type="button">Auswahl bestätigen</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogMessage">
       <button id="confirmDialogClose" class="dialog-close" type="button" aria-label="Dialog schließen">&#215;</button>
       <div class="confirm-symbol" aria-hidden="true">?</div>
@@ -222,6 +233,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v8"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v9"></script>
 </body>
 </html>

@@ -41,7 +41,7 @@ body.dashboard-v6 {
   background:
     radial-gradient(circle at 50% -20%, rgba(133, 82, 19, 0.12), transparent 42rem),
     linear-gradient(145deg, #070605, #0c0a08 55%, #060504);
-  font: 17px/1.35 Inter, "Segoe UI", Arial, sans-serif;
+  font: 19px/1.35 Inter, "Segoe UI", Arial, sans-serif;
 }
 
 body.dashboard-v6[data-initial-view="control"] {
@@ -152,12 +152,12 @@ textarea {
   border-color: var(--line-soft);
   background: #11100e;
   color: #e3ddd4;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .operator-menu span {
   color: var(--gold-light);
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .operator-brand {
@@ -172,13 +172,13 @@ textarea {
 
 .operator-brand-mark {
   color: #ffd11f;
-  font-size: 23px;
+  font-size: 25px;
   filter: drop-shadow(0 0 6px rgba(255, 209, 31, 0.25));
 }
 
 .operator-brand strong {
   overflow: hidden;
-  font: 600 20px/1 Georgia, "Times New Roman", serif;
+  font: 600 22px/1 Georgia, "Times New Roman", serif;
   text-overflow: ellipsis;
 }
 
@@ -192,7 +192,7 @@ textarea {
   align-items: center;
   gap: 7px;
   color: #42e891;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -229,7 +229,7 @@ textarea {
   border-right: 1px solid rgba(220, 205, 184, 0.1);
   color: #ddd6cd;
   text-decoration: none;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
 }
 
@@ -256,14 +256,14 @@ textarea {
   align-items: baseline;
   gap: 18px;
   color: #bbb3a8;
-  font-size: 16px;
+  font-size: 18px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .operator-clock strong {
   color: #f5eee5;
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .panel-v6 {
@@ -329,11 +329,6 @@ textarea {
   border-radius: 0 0 8px 8px;
 }
 
-.dashboard-preparation-mode .booking-card {
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
 .dashboard-preparation-mode .mission-metrics,
 .dashboard-preparation-mode .previous-phase,
 .dashboard-preparation-mode .ranking-status,
@@ -360,12 +355,12 @@ textarea {
 }
 
 .panel-heading-v6 h1 {
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .panel-heading-v6 h2,
 .technical-heading h2 {
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .heading-icon {
@@ -378,7 +373,7 @@ textarea {
   order: 2;
   margin-top: 6px;
   color: #dce5fa;
-  font: 700 clamp(26px, calc(1.8vw + 4px), 34px)/1 Georgia, "Times New Roman", serif;
+  font: 700 clamp(28px, calc(1.8vw + 6px), 36px)/1 Georgia, "Times New Roman", serif;
 }
 
 .phase-overview .panel-heading-v6 {
@@ -389,7 +384,7 @@ textarea {
   order: 3;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .phase-action-grid-v6 {
@@ -405,7 +400,7 @@ textarea {
   min-height: 40px;
   padding-inline: 4px;
   overflow: hidden;
-  font-size: 14px;
+  font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -457,7 +452,7 @@ textarea {
   display: block;
   overflow: hidden;
   color: #c3b9ad;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -467,7 +462,7 @@ textarea {
   display: block;
   margin-top: 3px;
   color: #fff8ed;
-  font-size: clamp(26px, calc(2vw + 4px), 36px);
+  font-size: clamp(28px, calc(2vw + 6px), 38px);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -486,7 +481,7 @@ textarea {
   order: 6;
   min-height: 0;
   color: #ff8c8f;
-  font-size: 13px;
+  font-size: 15px;
   text-align: right;
 }
 
@@ -499,12 +494,12 @@ textarea {
   padding-top: 6px;
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .prepare-countdown strong {
   color: var(--gold-light);
-  font-size: 22px;
+  font-size: 24px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -514,7 +509,7 @@ textarea {
   max-width: 58%;
   overflow: hidden;
   color: #cbaa75;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -532,23 +527,17 @@ textarea {
   max-width: min(360px, 48vw);
 }
 
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-state {
-  display: none;
-}
-
 .booking-edit-button {
   min-height: 28px;
   flex: 0 0 auto;
   padding: 3px 8px;
   border-color: rgba(240, 170, 36, 0.5);
   color: var(--gold-light);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .booking-details-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
+  display: block;
   margin-top: 7px;
 }
 
@@ -569,7 +558,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-stat
   display: grid;
   gap: 3px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -583,7 +572,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-stat
   min-height: 16px;
   overflow-wrap: anywhere;
   color: #c8beb1;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.35;
 }
 
@@ -624,7 +613,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-stat
 .secondary-button,
 .summary-email-btn {
   min-height: 32px;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .summary-email-btn {
@@ -638,30 +627,11 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-stat
   border: 1px solid var(--line-soft);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.025);
-  font-size: 13px;
+  font-size: 15px;
 }
 
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .field-label,
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .booking-select,
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .booking-inline-fields,
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .test-booking-fields,
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .booking-action-row,
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .summary-email-feedback:empty {
-  display: none;
-}
-
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .booking-details-body {
-  display: block;
-  margin-top: 4px;
-}
-
-body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-selected-info {
+.booking-card .booking-selected-info {
   min-height: 0;
-}
-
-.booking-card.is-editing {
-  overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .current-riddles-panel {
@@ -696,13 +666,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .current-riddle-card-head h2 {
   margin: 0;
   color: #dce5fa;
-  font: 700 clamp(26px, calc(2vw + 4px), 35px)/1 Georgia, "Times New Roman", serif;
+  font: 700 clamp(28px, calc(2vw + 6px), 37px)/1 Georgia, "Times New Roman", serif;
 }
 
 .current-riddle-card-head h2 span {
-  margin-right: 14px;
-  color: #f3ede5;
-  font: 700 18px/1 Georgia, "Times New Roman", serif;
+  margin-right: 10px;
+  color: var(--gold-light);
+  font: 700 27px/1 "Segoe UI Symbol", sans-serif;
 }
 
 .current-riddle-body {
@@ -738,7 +708,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .current-time-block span {
   display: block;
   color: #8eb6a9;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -747,21 +717,21 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   display: block;
   margin-top: 2px;
   color: #00e6a1;
-  font: 700 clamp(29px, calc(2.6vw + 4px), 47px)/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 700 clamp(31px, calc(2.6vw + 6px), 49px)/1 ui-monospace, SFMono-Regular, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 .current-fact-content,
 .maintenance-riddle-info {
   color: #00e6a1;
-  font: 500 16px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 500 18px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .current-fact-content {
   min-height: 100%;
   display: flex;
   align-items: flex-start;
-  font-size: clamp(22px, 1.4vw, 27px);
+  font-size: clamp(24px, calc(1.4vw + 2px), 29px);
   line-height: 1.42;
   white-space: pre-line;
 }
@@ -773,7 +743,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .current-fact-content .status-badge,
 .current-fact-content .inline-status {
   padding: 4px 9px;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .hint-panel {
@@ -795,14 +765,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   justify-content: space-between;
   padding-bottom: 6px;
   color: var(--gold-light);
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .hint-template-heading span {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .hint-template-list {
@@ -827,7 +797,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .hint-template-list p {
   margin: 6px 0 0;
   color: #e2dbd2;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.4;
 }
 
@@ -842,7 +812,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 4px;
   color: #d0c4b5;
   background: rgba(255, 255, 255, 0.055);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -903,11 +873,15 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   gap: 5px;
 }
 
+.current-riddles-grid:has(> :nth-child(2)) .current-hint-control {
+  grid-template-columns: 38px minmax(70px, 1fr) 38px;
+}
+
 .current-hint-control button {
   min-width: 0;
   min-height: 100%;
   padding: 0;
-  font-size: 26px;
+  font-size: 28px;
 }
 
 .current-hint-control span {
@@ -927,13 +901,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .current-hint-control strong {
   margin-top: 4px;
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .current-hint-control small {
   margin-top: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .current-riddle-empty,
@@ -949,7 +923,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .preparation-card h2 {
   margin: 5px 0 8px;
   color: #e2e9f8;
-  font: 700 clamp(28px, calc(2.5vw + 4px), 44px)/1.05 Georgia, "Times New Roman", serif;
+  font: 700 clamp(30px, calc(2.5vw + 6px), 46px)/1.05 Georgia, "Times New Roman", serif;
 }
 
 .current-riddle-empty p,
@@ -985,7 +959,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .maintenance-riddle-head h2 {
   margin: 0;
   overflow: hidden;
-  font: 700 18px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -993,13 +967,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .maintenance-riddle-info {
   max-height: 44px;
   overflow: auto;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .maintenance-riddle-card .solve-btn {
   min-height: 28px;
   padding: 3px 6px;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .images-buttons,
@@ -1019,7 +993,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 999px;
   color: #d6cfc6;
   background: rgba(255, 255, 255, 0.04);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .pill-true,
@@ -1040,10 +1014,25 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   color: var(--dim);
 }
 
-.chess-expected {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
+.chess-grid {
+  width: min(100%, 520px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chess-slot {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.chess-slot strong {
+  color: #eee6dc;
 }
 
 .knocking-telemetry {
@@ -1063,14 +1052,52 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .knocking-dot {
-  width: 18px;
-  height: 18px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 50%;
   color: #bcb4aa;
   background: #282521;
-  font-size: 12px;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.star-sign-summary,
+.star-sign-summary > span,
+.star-sign-row,
+.star-sign-attempts,
+.star-sign-attempt {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.star-sign-summary {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.star-sign-symbol {
+  min-width: 34px;
+  display: inline-grid;
+  place-items: center;
+  color: #f6de86;
+  font-family: "Segoe UI Symbol", sans-serif;
+  font-size: 32px;
+  line-height: 1;
+}
+
+.star-sign-attempt {
+  padding: 4px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+
+.star-sign-attempt .star-sign-symbol {
+  min-width: 24px;
+  font-size: 24px;
 }
 
 .knocking-dot-good {
@@ -1086,7 +1113,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .knocking-error {
   color: #ff9599;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .all-riddles-panel {
@@ -1115,14 +1142,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .riddles-table-v6 {
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .riddles-table-v6 th,
 .simple-table th {
   color: #b7ada2;
   background: rgba(255, 255, 255, 0.035);
-  font-size: 12px;
+  font-size: 14px;
   letter-spacing: 0.06em;
   text-align: left;
   text-transform: uppercase;
@@ -1187,7 +1214,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   align-items: center;
   gap: 5px;
   color: #aaa198;
-  font-size: 13px;
+  font-size: 15px;
   white-space: nowrap;
 }
 
@@ -1213,7 +1240,20 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   background: var(--green);
 }
 
-.table-status--skipped > span,
+.status-correction--skipped {
+  border-color: rgba(240, 170, 36, 0.55);
+  color: #ffd884;
+  background: rgba(172, 101, 10, 0.24);
+}
+
+.table-status--skipped {
+  color: #ffd884;
+}
+
+.table-status--skipped > span {
+  background: var(--gold);
+}
+
 .table-status--not_solved > span {
   background: var(--red);
 }
@@ -1222,7 +1262,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   min-height: 23px;
   padding: 2px 7px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .status-correction--solved {
@@ -1231,7 +1271,6 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   background: rgba(0, 123, 62, 0.2);
 }
 
-.status-correction--skipped,
 .status-correction--not_solved {
   border-color: rgba(240, 79, 85, 0.45);
   color: #ffb6b8;
@@ -1255,7 +1294,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   width: 21px;
   min-height: 21px;
   padding: 0;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .riddle-time-edit {
@@ -1270,26 +1309,105 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .riddle-time-editor {
-  width: min(420px, calc(100vw - 40px));
+  width: min(680px, calc(100vw - 40px));
   display: grid;
-  grid-template-columns: minmax(92px, 0.7fr) minmax(190px, 1.4fr) minmax(78px, 0.55fr);
-  gap: 4px;
-  position: absolute;
+  grid-template-columns: minmax(105px, 0.42fr) minmax(360px, 1.58fr) minmax(90px, 0.42fr);
+  align-items: stretch;
+  gap: 6px;
+  position: fixed;
   z-index: 20;
-  top: 25px;
-  right: 0;
-  padding: 5px;
+  inset: auto;
+  margin: 0;
+  padding: 7px;
   border: 1px solid #a8732b;
   border-radius: 5px;
   background: #15120f;
   box-shadow: 0 12px 30px #000;
 }
 
+.riddle-time-editor:not(:popover-open) {
+  display: none;
+}
+
+.riddle-time-editor:popover-open {
+  display: grid;
+}
+
 .riddle-time-input,
-.riddle-time-direction,
 .riddle-time-save {
   min-height: 28px;
   padding: 3px 5px;
+}
+
+.riddle-time-save {
+  border-color: var(--gold);
+  color: #211300;
+  background: linear-gradient(180deg, #ffc85a, #e8980f);
+}
+
+.riddle-time-input-wrap {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.riddle-time-options {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.riddle-time-option {
+  min-width: 0;
+  min-height: 48px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  padding: 4px 7px;
+  text-align: left;
+}
+
+.riddle-time-option strong,
+.riddle-time-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.riddle-time-option strong {
+  color: var(--gold-light);
+  font-size: 14px;
+}
+
+.riddle-time-option span,
+.riddle-time-preview-hint,
+.riddle-time-preview-error {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.riddle-time-option.is-selected {
+  border-color: var(--gold);
+  background: rgba(240, 170, 36, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(240, 170, 36, 0.25);
+}
+
+.riddle-time-option.is-unavailable {
+  opacity: 0.55;
+}
+
+.riddle-time-preview-hint,
+.riddle-time-preview-error {
+  grid-column: 1 / -1;
+  align-self: center;
+  padding: 4px 6px;
+}
+
+.riddle-time-preview-error {
+  color: #ff9a9d;
 }
 
 .control-technical {
@@ -1298,7 +1416,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   display: grid;
   grid-column: 2;
   grid-row: 2;
-  grid-template-columns: minmax(0, 1.16fr) minmax(0, 0.94fr) minmax(0, 0.94fr);
+  grid-template-columns: minmax(0, 1.38fr) minmax(0, 0.78fr) minmax(0, 0.84fr);
   grid-template-rows: minmax(210px, 0.52fr) minmax(170px, 0.48fr);
   gap: var(--gap);
 }
@@ -1314,7 +1432,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .technical-heading > span:first-child {
   color: var(--gold-light);
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .technical-heading .technical-summary {
@@ -1372,7 +1490,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .light-toggle-icon {
   grid-row: 1 / 3;
   color: #8a8077;
-  font-size: 21px;
+  font-size: 23px;
 }
 
 .light-toggle-button strong,
@@ -1384,13 +1502,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .light-toggle-button strong {
   align-self: end;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .light-toggle-button small {
   align-self: start;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
 }
 
@@ -1414,7 +1532,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .light-dimmer-card {
   min-width: 0;
-  min-height: 42px;
+  min-height: 36px;
   display: grid;
   grid-column: span 4;
   grid-template-columns: minmax(100px, 0.65fr) minmax(0, 1.35fr);
@@ -1434,9 +1552,9 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .light-bulb-button {
-  width: 31px;
-  height: 31px;
-  min-height: 31px;
+  width: 27px;
+  height: 27px;
+  min-height: 27px;
   flex: 0 0 auto;
   padding: 0;
   border-radius: 50%;
@@ -1457,14 +1575,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .light-dimmer-head strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dim-value {
   color: var(--gold-light);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1473,14 +1591,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .dim-row-v6 {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(45px, 1fr) 72px;
+  grid-template-columns: minmax(45px, 1fr) 92px;
   align-items: center;
   gap: 8px;
 }
 
 .dim-input {
-  height: 22px;
-  min-height: 22px;
+  height: 14px;
+  min-height: 14px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1489,56 +1607,62 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .dim-apply-button {
-  min-height: 28px;
+  min-height: 25px;
   padding: 3px 6px;
   border-color: rgba(240, 170, 36, 0.48);
   color: var(--gold-light);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .locks-grid-v6 {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 
 .lock-card-v6--pulse {
-  grid-column: span 2;
+  grid-column: span 1;
 }
 
 .lock-card-v6--toggle {
-  grid-column: span 3;
+  grid-column: span 1;
 }
 
 .lock-button-v6 {
   width: 100%;
   min-height: 55px;
-  display: flex;
+  display: grid;
+  grid-template-rows: auto auto;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 5px;
+  gap: 2px;
+  padding: 4px 2px;
+  text-align: center;
 }
 
 .lock-icon {
+  justify-self: center;
   color: #bcb2a7;
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .lock-button-v6 strong,
 .lock-button-v6 small {
   display: block;
-  text-align: left;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lock-button-v6 strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .lock-button-v6 small {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
 }
 
@@ -1585,12 +1709,12 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .node-row-v6 strong {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .node-contact {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .node-dot {
@@ -1609,7 +1733,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .node-reboot-compact {
   min-height: 21px;
   padding: 2px 5px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .operator-log-toolbar {
@@ -1639,7 +1763,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1680,7 +1804,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   min-width: 0;
   min-height: 27px;
   padding: 3px 4px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
 }
 
@@ -1695,7 +1819,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   margin-bottom: 3px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1747,7 +1871,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .diagnostics-log-sequence {
   overflow: hidden;
   color: #8e877f;
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1761,7 +1885,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 3px;
   color: #bbb4ab;
   background: #282622;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1779,7 +1903,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-log-message {
   color: #d4cdc4;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 400;
   line-height: 1.25;
 }
@@ -1787,7 +1911,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .diagnostics-log-detail {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .diagnostics-log-detail pre {
@@ -1853,7 +1977,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border: 0;
   background: transparent;
   color: #c5baad;
-  font-size: 24px;
+  font-size: 26px;
   line-height: 1;
 }
 
@@ -1970,13 +2094,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .service-restart-section h2 {
   margin: 0;
-  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 22px/1.1 Georgia, "Times New Roman", serif;
 }
 
 .service-restart-section p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .service-restart-actions {
@@ -2023,7 +2147,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-check-grid label {
   color: #d0c8be;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .diagnostics-check-grid input {
@@ -2057,14 +2181,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-section-heading h2 {
   margin: 0;
-  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 22px/1.1 Georgia, "Times New Roman", serif;
 }
 
 .diagnostics-section-heading span,
 .diagnostics-level-status,
 .hint-editor-status {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .diagnostics-level-grid {
@@ -2138,6 +2262,97 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   opacity: 0.78;
 }
 
+.booking-dialog {
+  width: min(720px, calc(100vw - 30px));
+  max-height: min(760px, calc(100dvh - 30px));
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid rgba(232, 164, 45, 0.6);
+  border-radius: 12px;
+  background: #191612;
+  color: var(--text);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.78);
+}
+
+.booking-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+.booking-dialog-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 28px;
+}
+
+.booking-dialog-symbol {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(240, 170, 36, 0.5);
+  border-radius: 10px;
+  background: rgba(240, 170, 36, 0.1);
+  font-size: 26px;
+}
+
+.booking-dialog-heading span:not(.booking-dialog-symbol) {
+  color: var(--gold-light);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.booking-dialog-heading h2 {
+  margin: 2px 0 0;
+  font: 700 30px/1.1 Georgia, "Times New Roman", serif;
+}
+
+.booking-dialog-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.booking-dialog-form > .field-label,
+.booking-dialog-form > .booking-select,
+.booking-dialog-form > .booking-selected-info,
+.booking-dialog-form > .booking-inline-fields,
+.booking-dialog-form > .test-booking-fields,
+.booking-dialog-form > .summary-email-feedback,
+.booking-dialog-form > .booking-action-row {
+  grid-column: 1 / -1;
+}
+
+.booking-dialog .booking-selected-info {
+  min-height: 68px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.booking-dialog .booking-inline-fields,
+.booking-dialog .test-booking-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.booking-dialog .booking-action-row {
+  margin-top: 5px;
+}
+
+.booking-dialog .booking-action-row button {
+  min-height: 44px;
+}
+
 .confirm-dialog {
   width: min(480px, calc(100vw - 30px));
   padding: 22px;
@@ -2165,7 +2380,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 26px;
+  font-size: 28px;
 }
 
 .confirm-symbol {
@@ -2177,12 +2392,12 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border: 3px solid var(--gold);
   border-radius: 50%;
   color: var(--gold-light);
-  font: 700 31px/1 Georgia, serif;
+  font: 700 33px/1 Georgia, serif;
 }
 
 .confirm-dialog h2 {
   margin: 0;
-  font: 700 28px/1.15 Georgia, "Times New Roman", serif;
+  font: 700 30px/1.15 Georgia, "Times New Roman", serif;
 }
 
 .confirm-dialog p {
@@ -2213,7 +2428,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   padding-top: 11px;
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 @media (min-width: 901px) and (max-width: 1550px), (min-width: 901px) and (max-height: 940px) {
@@ -2255,7 +2470,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .phase-action-grid-v6 button {
     min-height: 35px;
-    font-size: 13px;
+    font-size: 15px;
   }
 
   .mission-metrics > div {
@@ -2310,7 +2525,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-brand strong {
-    font-size: 18px;
+    font-size: 20px;
   }
 
   .operator-connection span:last-child {
@@ -2377,7 +2592,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .phase-current {
-    font-size: 25px;
+    font-size: 27px;
   }
 
   .phase-action-grid-v6,
@@ -2390,7 +2605,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .mission-metrics strong {
-    font-size: 24px;
+    font-size: 26px;
   }
 
   .control-technical {
@@ -2433,7 +2648,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     grid-column: 1;
     min-height: 31px;
     padding-inline: 8px;
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .operator-brand {
@@ -2442,7 +2657,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-brand-mark {
-    font-size: 18px;
+    font-size: 20px;
   }
 
   .brand-desktop {
@@ -2451,7 +2666,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .brand-mobile {
     display: block !important;
-    font: 700 15px/1 Inter, "Segoe UI", sans-serif !important;
+    font: 700 17px/1 Inter, "Segoe UI", sans-serif !important;
   }
 
   .operator-connection {
@@ -2472,7 +2687,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-clock strong {
-    font-size: 15px;
+    font-size: 17px;
   }
 
   .operator-tabs {
@@ -2486,7 +2701,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     flex: 1;
     border: 1px solid rgba(220, 205, 184, 0.15);
     border-radius: 4px 4px 0 0;
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .control-workspace {
@@ -2541,11 +2756,11 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   .panel-heading-v6 h1,
   .panel-heading-v6 h2,
   .technical-heading h2 {
-    font-size: 18px;
+    font-size: 20px;
   }
 
   .phase-current {
-    font-size: 26px;
+    font-size: 28px;
   }
 
   .phase-action-grid-v6 {
@@ -2554,7 +2769,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .phase-action-grid-v6 button {
     min-height: 36px;
-    font-size: 13px;
+    font-size: 15px;
   }
 
   .mission-metrics {
@@ -2566,7 +2781,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .mission-metrics strong {
-    font-size: 27px;
+    font-size: 29px;
   }
 
   .booking-details-body {
@@ -2595,7 +2810,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .current-riddle-card-head h2 {
-    font-size: 26px;
+    font-size: 28px;
   }
 
   .current-riddle-body {
@@ -2681,7 +2896,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     content: attr(data-label);
     margin-right: auto;
     color: var(--dim);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -2712,11 +2927,6 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     display: none;
   }
 
-  .riddle-time-editor {
-    right: 0;
-    left: auto;
-  }
-
   .control-technical {
     display: flex;
     flex-direction: column;
@@ -2742,7 +2952,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .locks-grid-v6 {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .node-list-v6 {
@@ -2757,7 +2967,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   .node-row-v6 strong,
   .node-contact,
   .node-reboot-compact {
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .operator-log-panel {
@@ -2817,6 +3027,16 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     padding: 19px 14px 15px;
   }
 
+  .booking-dialog {
+    padding: 19px 14px 15px;
+  }
+
+  .booking-dialog-form,
+  .booking-dialog .test-booking-fields,
+  .booking-dialog .booking-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .confirm-dialog-actions {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2847,7 +3067,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-tab {
-    font-size: 13px;
+    font-size: 15px;
   }
 
   .current-riddles-panel.is-maintenance .current-riddles-grid {
@@ -2864,7 +3084,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .lock-card-v6--pulse,
   .lock-card-v6--toggle {
-    grid-column: span 3;
+    grid-column: span 1;
   }
 
   .diagnostics-log-header {
