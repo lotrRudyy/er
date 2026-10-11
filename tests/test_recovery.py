@@ -1081,6 +1081,100 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertEqual(event["source_stage_delta_s"], -20.0)
         self.assertEqual(event["target_delta_s"], 20.0)
 
+    def test_original_riddle_time_survives_restart_and_can_be_restored(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["wheel"].solve_time_s = 120.0
+            run.riddle_timings["prison"].solve_time_s = 50.0
+            run.riddle_timings["chains"].first_started_monotonic = clock.monotonic() - 60.0
+            run.riddle_timings["chains"].segment_started_monotonic = clock.monotonic() - 60.0
+
+        gm.set_riddle_time("wheel", 90.0, adjustment_side="next")
+        gm.set_riddle_time("wheel", 80.0, adjustment_side="previous")
+        timing = run.riddle_timings["wheel"]
+        self.assertEqual(timing.original_solve_time_s, 120.0)
+        self.assertEqual(timing.original_adjustment_side, "next")
+        self.assertEqual(timing.correction_target_deltas, {"chains": 30.0, "prison": 10.0})
+        dashboard = gm.state.to_game_state_payload()
+        gm._enrich_dashboard_state_payload_locked(dashboard)
+        self.assertEqual(dashboard["run"]["riddle_timings"]["wheel"]["original_solve_time_s"], 120.0)
+
+        restored = self.make_game_master(FakeClock(9000.0, clock.wall + timedelta(hours=1)))
+        restored_timing = restored.state.current_run.riddle_timings["wheel"]
+        self.assertEqual(restored_timing.original_solve_time_s, 120.0)
+        self.assertEqual(restored_timing.original_adjustment_side, "next")
+        self.assertEqual(restored_timing.correction_target_deltas, {"chains": 30.0, "prison": 10.0})
+        restored.handle_game_cmd({
+            "cmd": "restore_riddle_time",
+            "riddle": "wheel",
+            "expected_phase": restored.state.phase,
+            "expected_run_id": restored.state.current_run.run_id,
+        })
+        self.assertEqual(restored_timing.solve_time_s, 120.0)
+        self.assertEqual(restored_timing.original_solve_time_s, 120.0)
+        self.assertEqual(restored_timing.correction_target_deltas, {})
+        self.assertEqual(restored.state.current_run.riddle_timings["prison"].solve_time_s, 50.0)
+        self.assertAlmostEqual(self.live_riddle_seconds(restored, "chains"), 60.0)
+        self.assertEqual(restored.state.current_run.events[-1]["event"], "riddle_time_restored")
+
+    def test_subsecond_original_riddle_time_can_be_restored(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["wheel"].solve_time_s = 0.5
+            run.riddle_timings["chains"].first_started_monotonic = clock.monotonic() - 60.0
+            run.riddle_timings["chains"].segment_started_monotonic = clock.monotonic() - 60.0
+
+        gm.set_riddle_time("wheel", 1.0, adjustment_side="next")
+        self.assertEqual(run.riddle_timings["wheel"].original_solve_time_s, 0.5)
+        gm.restore_riddle_time("wheel")
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 0.5)
+        self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 60.0)
+
+    def test_riddle_time_restore_preserves_later_incoming_corrections(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["wheel"].solve_time_s = 120.0
+            run.riddle_timings["chains"].first_started_monotonic = clock.monotonic() - 60.0
+            run.riddle_timings["chains"].segment_started_monotonic = clock.monotonic() - 60.0
+
+        gm.set_riddle_time("wheel", 90.0, adjustment_side="next")
+        gm.handle_solve("chains", source="manual")
+        with gm._lock:
+            run.riddle_timings["chains"].solve_time_s = 90.0
+        gm.set_riddle_time("chains", 80.0, adjustment_side="previous")
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 100.0)
+        self.assertEqual(run.riddle_timings["wheel"].correction_target_deltas, {})
+
+        gm.restore_riddle_time("wheel")
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 130.0)
+        gm.restore_riddle_time("chains")
+        self.assertEqual(run.riddle_timings["chains"].solve_time_s, 90.0)
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 120.0)
+
     def test_riddle_time_can_transfer_to_previous_adjacent_stage(self) -> None:
         clock = FakeClock(100.0)
         gm = self.make_game_master(clock)
@@ -1292,6 +1386,46 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertGreaterEqual(sum(
             topic == config.TOPIC_DASHBOARD_STATE for topic, _payload, _retain in client.published
         ), 6)
+
+    def test_chains_decides_shared_prison_wheel_and_chains_outcome(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(2.0)
+            gm.handle_solve(riddle, source="manual")
+        run = gm.state.current_run
+        self.assertIsNotNone(run)
+        run.riddle_timings["prison"].hint_count = 2
+        run.riddle_timings["prison"].hints = "first\n---\nsecond"
+        times_before = {
+            riddle: run.riddle_timings[riddle].solve_time_s
+            for riddle in ("prison", "wheel")
+        }
+
+        clock.advance(3.0)
+        gm.set_riddle_outcome("chains", "skipped")
+
+        self.assertEqual(gm.state.phase, 8)
+        self.assertEqual(
+            [run.riddle_timings[riddle].status() for riddle in ("prison", "wheel", "chains")],
+            ["skipped", "skipped", "skipped"],
+        )
+        self.assertEqual(run.riddle_timings["prison"].hint_count, 2)
+        self.assertEqual(run.riddle_timings["prison"].hints, "first\n---\nsecond")
+        self.assertEqual(
+            {riddle: run.riddle_timings[riddle].solve_time_s for riddle in ("prison", "wheel")},
+            times_before,
+        )
+
+        gm.set_riddle_outcome("chains", "solved")
+        self.assertEqual(
+            [run.riddle_timings[riddle].status() for riddle in ("prison", "wheel", "chains")],
+            ["solved", "solved", "solved"],
+        )
+        with self.assertRaisesRegex(ValueError, "controlled by Chains"):
+            gm.set_riddle_outcome("prison", "skipped")
 
     def test_terminal_phase_requires_normal_sissi_solve_and_pending_completion_cannot_be_abandoned(self) -> None:
         clock = FakeClock(100.0)
@@ -2290,7 +2424,7 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
         nearest = mock.Mock(return_value={"id": "nearest", "kind": "booking"})
         namespace.update({
             "normalize_booking_selection": lambda booking: dict(booking),
-            "_booking_is_cancelled": lambda _booking: False,
+            "_booking_is_eligible": lambda _booking, _reference: True,
             "nearest_booking_for_start": nearest,
         })
         reference_time = datetime.now(timezone.utc)

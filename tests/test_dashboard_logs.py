@@ -814,6 +814,34 @@ function scheduleDiagnosticsPoll() {{}}
         self.assertIn("data.command_count", source)
         self.assertIn("keine Rücknahme und keine Gerätebestätigung", source)
 
+    def test_durable_archive_uses_normalized_scope_and_safe_admin_rendering(self) -> None:
+        app_source = APP_PATH.read_text(encoding="utf-8")
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        html = HTML_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(app_source)
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        mqtt_handler = ast.get_source_segment(app_source, functions["_handle_mqtt_message"])
+        operator_handler = ast.get_source_segment(app_source, functions["_archive_operator_outcome"])
+        delete_route = ast.get_source_segment(app_source, functions["api_log_archive_delete"])
+
+        self.assertIn('stored = node_log_buffer.append(entry)', mqtt_handler)
+        self.assertIn('stored.get("node") in LOG_NODE_ID_SET', mqtt_handler)
+        self.assertNotIn('request.get_json', operator_handler)
+        self.assertIn('phase != 1', delete_route)
+        self.assertIn('delete_closed', delete_route)
+        self.assertIn('@app.get("/api/log-archive/segments/<segment_id>/download")', app_source)
+        self.assertIn('"/api/log-archive/delete"', app_source)
+        self.assertIn('id="logArchivePanel"', html)
+        self.assertIn('Node- und Log-Level-Referenz', html)
+
+        render_start = javascript.index('function renderLogArchiveSegments(')
+        render_end = javascript.index('\nasync function loadLogArchive(', render_start)
+        search_start = javascript.index('async function searchLogArchive(')
+        search_end = javascript.index('\nasync function deleteLogArchiveSegment(', search_start)
+        archive_rendering = javascript[render_start:render_end] + javascript[search_start:search_end]
+        self.assertNotIn('innerHTML', archive_rendering)
+        self.assertIn('textContent', archive_rendering)
+
     def test_native_panel_is_closed_by_default_and_html_ids_are_unique(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
         node_declaration = html[html.index("{% set diagnostic_nodes"):html.index("] %}")]

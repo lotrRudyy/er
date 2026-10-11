@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v10" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v12" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
@@ -69,7 +69,7 @@
             <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
               <div class="panel-heading-v6">
                 <h2 id="bookingHeading">Aktuelle Buchung</h2>
-                <div class="booking-heading-actions"><span id="bookingCompactValue" class="booking-state">Keine Buchung</span><button id="bookingEditBtn" class="booking-edit-button" type="button" aria-haspopup="dialog" aria-controls="bookingDialog">Buchung ändern</button></div>
+                <div class="booking-heading-actions"><button id="bookingEditBtn" class="booking-edit-button" type="button" aria-haspopup="dialog" aria-controls="bookingDialog">Bearbeiten</button></div>
               </div>
               <div class="booking-details-body">
                 <div id="bookingCurrentInfo" class="booking-selected-info"></div>
@@ -181,6 +181,35 @@
             {% endfor %}
           </div>
         </section>
+        <section id="logArchivePanel" class="log-archive-section" aria-labelledby="logArchiveHeading">
+          <div class="diagnostics-section-heading"><h2 id="logArchiveHeading">Logarchiv</h2><span id="logArchiveStatus">Wird geladen</span></div>
+          <div class="log-archive-toolbar">
+            <label>Suche<input id="logArchiveSearchInput" type="search" maxlength="256" placeholder="Meldung oder Detail" /></label>
+            <button id="logArchiveSearchBtn" type="button">Suchen</button>
+            <button id="logArchiveRefreshBtn" type="button">Aktualisieren</button>
+          </div>
+          <div class="node-table-wrap">
+            <table class="simple-table log-archive-table">
+              <thead><tr><th>Segment</th><th>Geändert</th><th>Größe</th><th>Status</th><th>Aktionen</th></tr></thead>
+              <tbody id="logArchiveSegmentsBody"></tbody>
+            </table>
+          </div>
+          <div id="logArchiveResults" class="diagnostics-log-list archive-results" role="log" aria-label="Ergebnisse der Archivsuche"></div>
+          <details id="logCapabilityReference" class="log-capability-reference">
+            <summary>Node- und Log-Level-Referenz</summary>
+            <p><strong>Schwellwerte:</strong> DBG zeigt DBG/INF/WRN/ERR, INF zeigt INF/WRN/ERR, WRN zeigt WRN/ERR, ERR zeigt nur ERR. Firmwarestandard ist WRN; die Auswahl ist angefordert, aber nicht vom Gerät bestätigt.</p>
+            <div class="node-table-wrap">
+              <table class="simple-table capability-table">
+                <thead><tr><th>Node</th><th>DBG</th><th>INF</th><th>WRN</th><th>ERR</th><th>Hinweis</th></tr></thead>
+                <tbody>
+                  {% for node, capability in log_capabilities.items() %}
+                  <tr><th>{{ log_node_labels[node] }}</th><td>{{ capability.DBG }}</td><td>{{ capability.INF }}</td><td>{{ capability.WRN }}</td><td>{{ capability.ERR }}</td><td>{{ capability.note }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </section>
       </section>
 
       <section id="maintenanceHintEditor" class="panel-v6 admin-panel hint-editor-panel" aria-labelledby="hintEditorHeading">
@@ -233,6 +262,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v9"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v12"></script>
 </body>
 </html>

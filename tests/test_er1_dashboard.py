@@ -128,6 +128,7 @@ def booking_namespace() -> dict[str, Any]:
         "normalize_hint_language",
         "normalize_booking_selection",
         "_booking_is_cancelled",
+        "_booking_is_eligible",
         "_last_sunday_of_month",
         "_rome_datetime_from_local",
         "_rome_datetime_from_timestamp",
@@ -157,7 +158,15 @@ class BookingRulesTests(unittest.TestCase):
         reference = datetime(2026, 10, 1, 12, 0, tzinfo=timezone(timedelta(hours=2)))
 
         def booking(identifier: str, slot: str) -> dict[str, Any]:
-            return {"id": identifier, "kind": "booking", "date": "2026-10-01", "slot": slot, "players": 2}
+            return {
+                "id": identifier,
+                "kind": "booking",
+                "date": "2026-10-01",
+                "slot": slot,
+                "players": 2,
+                "bookingStatus": "confirmed",
+                "paymentStatus": "onsite_pending",
+            }
 
         self.assertEqual(nearest([booking("minus", "11:30")], reference)["id"], "minus")
         self.assertEqual(nearest([booking("plus", "12:30")], reference)["id"], "plus")
@@ -167,6 +176,33 @@ class BookingRulesTests(unittest.TestCase):
             nearest([booking("far", "14:00"), booking("inside", "12:29")], reference)["id"],
             "inside",
         )
+
+    def test_booking_choices_only_keep_confirmed_unfinished_slots(self) -> None:
+        eligible = booking_namespace()["_booking_is_eligible"]
+        reference = datetime(2026, 10, 1, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+
+        def booking(**updates: Any) -> dict[str, Any]:
+            value = {
+                "id": "booking-1",
+                "kind": "booking",
+                "date": "2026-10-01",
+                "slot": "11:30",
+                "players": 2,
+                "bookingStatus": "confirmed",
+                "paymentStatus": "paid",
+            }
+            value.update(updates)
+            return value
+
+        self.assertTrue(eligible(booking(), reference))
+        self.assertFalse(eligible(booking(slot="11:00"), reference))
+        self.assertFalse(eligible(booking(bookingStatus="pending_approval"), reference))
+        self.assertFalse(eligible(booking(paymentStatus="refunded"), reference))
+        self.assertFalse(eligible(booking(completedAt="2026-10-01T11:59:00+02:00"), reference))
+        self.assertFalse(eligible(booking(deletedAt="2026-10-01T11:59:00+02:00"), reference))
+        self.assertFalse(eligible(booking(slot="invalid"), reference))
+        self.assertFalse(eligible(booking(slot="invalid 12:30 text"), reference))
+        self.assertFalse(eligible(booking(date="2026-10-01junk"), reference))
 
     def test_stale_cache_cannot_feed_automatic_match(self) -> None:
         namespace = extracted("load_bookings_for_start_assignment")
@@ -1350,7 +1386,9 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn(">Speichern</button>", javascript)
         self.assertIn("riddle-time-options", javascript)
         self.assertIn("card.querySelector('.light-bulb-button')", javascript)
-        self.assertIn("fmtEditableTime(seconds)", javascript)
+        self.assertIn("fmtDurationInput(seconds)", javascript)
+        self.assertIn("/api/riddle-time-restore", javascript)
+        self.assertIn("riddle-time-restore", javascript)
         self.assertIn("controlViewActive && gameMode", javascript)
         source = APP_PATH.read_text(encoding="utf-8")
         self.assertIn("_installed_game_master_support_dir", source)
@@ -1363,10 +1401,12 @@ class DashboardSourceContractTests(unittest.TestCase):
         start_start = javascript.index("async function handleStart")
         start_end = javascript.index("async function handlePhaseAction", start_start)
         time_start = javascript.index("async function saveRiddleTime")
-        time_end = javascript.index("async function changeHint", time_start)
+        time_end = javascript.index("async function restoreRiddleTime", time_start)
+        restore_end = javascript.index("function positionRiddleTimeEditor", time_end)
         self.assertIn("confirmAction", javascript[solve_start:solve_end])
         self.assertIn("confirmAction", javascript[start_start:start_end])
         self.assertNotIn("confirmAction", javascript[time_start:time_end])
+        self.assertIn("confirmAction", javascript[time_end:restore_end])
         hint_start = javascript.index("async function changeHint")
         hint_end = javascript.index("function bindRiddleActions", hint_start)
         status_start = javascript.index("async function togglePastOutcome")
@@ -1381,7 +1421,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         guarded = {
             "api_phase", "api_select_booking", "api_solve", "api_lock", "api_light",
             "api_node_reboot", "api_service_restart", "api_set_hint_count", "api_riddle_time",
-            "api_riddle_time_preview", "api_riddle_outcome",
+            "api_riddle_time_restore", "api_riddle_time_preview", "api_riddle_outcome",
+            "api_log_archive_delete",
         }
         for name in guarded:
             segment = ast.get_source_segment(source, functions[name]) or ""
@@ -1438,9 +1479,25 @@ class DashboardSourceContractTests(unittest.TestCase):
         phase_begin = start_end
         phase_end = javascript.index("async function sendSummaryEmail", phase_begin)
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
+        self.assertIn("bookingSaveBusy", javascript[start_begin:start_end])
+        self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261011-dashboard-v9", html)
+        self.assertIn("app.js') }}?v=20261011-dashboard-v12", html)
+
+    def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+        self.assertIn('popover="auto"', javascript)
+        self.assertIn("document.querySelectorAll('.riddle-time-editor:popover-open')", javascript)
+        self.assertNotIn("window.setTimeout(() => {\n      riddleTimeEditing[riddle.id] = false", javascript)
+        self.assertIn("selectDurationSegment(input, 'seconds')", javascript)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", css)
+        self.assertIn("Waage ♎ (7), Wassermann ♒ (13), Skorpion ♏ (10)", javascript)
+        self.assertIn("Zwillinge ♊ (7), Schütze ♐ (10), Löwe ♌ (10), Fische ♓ (13)", javascript)
+        self.assertIn("Seit Spielstart", javascript)
+        self.assertIn("Seit Rätselstart", javascript)
+        self.assertIn("Fällig", javascript)
 
     def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1485,7 +1542,7 @@ class DashboardSourceContractTests(unittest.TestCase):
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v10", html)
+        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v12", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import atexit
 import hashlib
 import logging
 import math
@@ -9,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -28,10 +30,14 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, g, jsonify, make_response, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, g, jsonify, make_response, redirect, render_template, request, send_file, send_from_directory, url_for
 import paho.mqtt.client as mqtt
 
 BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+from log_archive import DashboardArchiveHandler, JsonlLogArchive, MAX_SEARCH_LIMIT, MAX_SEARCH_TEXT_CHARS, QueuedArchiveWriter
+
 LOG = logging.getLogger("er1_dashboard")
 _repo_game_master_support_dir = BASE_DIR.parents[1] / "scripts" / "game_master"
 _installed_game_master_support_dir = BASE_DIR.parent / "scripts" / "game_master"
@@ -370,6 +376,9 @@ START_ASSIGNMENT_PATH = Path(
 ).expanduser()
 OPERATION_LEDGER_PATH = Path(
     os.getenv("ER1_OPERATION_LEDGER_PATH", str(BASE_DIR / "data" / "dashboard_operations.sqlite3"))
+).expanduser()
+LOG_ARCHIVE_PATH = Path(
+    os.getenv("ER1_DASHBOARD_LOG_ARCHIVE_DIR", str(BASE_DIR / "data" / "log_archive"))
 ).expanduser()
 START_ASSIGNMENT_SCHEMA = "er1.dashboard.start_assignment"
 START_ASSIGNMENT_VERSION = 2
@@ -1020,6 +1029,8 @@ def normalize_booking_selection(raw: Any | None) -> dict[str, Any]:
         "language": normalize_hint_language(raw.get("language")),
         "bookingStatus": str(raw.get("bookingStatus") or raw.get("booking_status") or "").strip(),
         "paymentStatus": str(raw.get("paymentStatus") or raw.get("payment_status") or "").strip(),
+        "completedAt": str(raw.get("completedAt") or raw.get("completed_at") or "").strip(),
+        "deletedAt": str(raw.get("deletedAt") or raw.get("deleted_at") or "").strip(),
         "label": label,
     }
 
@@ -1195,6 +1206,66 @@ REBOOT_NODE_IDS = frozenset({
 })
 LOG_LEVELS = ("DBG", "INF", "WRN", "ERR")
 LOG_LEVEL_SET = frozenset(LOG_LEVELS)
+LOG_ARCHIVE_SOURCES = frozenset({"mqtt", "operator", "dashboard"})
+LOG_ARCHIVE_NODE_IDS = LOG_NODE_ID_SET | frozenset({"Dashboard"})
+LOG_NODE_CAPABILITIES = {
+    "lighting": {
+        "DBG": "Befehle und Kanalwerte",
+        "INF": "Allgemeine Lebenszyklusmeldungen",
+        "WRN": "Ungültige Phasen, Befehle, Lichter oder Kanäle",
+        "ERR": "Kritische Controllerfehler",
+        "note": "Laufzeit-Stufe wird unterstützt.",
+    },
+    "maglock": {
+        "DBG": "Schlossmetriken und Befehlsdetails",
+        "INF": "Phasen- und Zustandswechsel",
+        "WRN": "Blockierte oder ungültige Befehle",
+        "ERR": "Unbekannte Schlösser und Controllerfehler",
+        "note": "Zusätzliche Meldungen werden abhängig von der Spielphase unterdrückt.",
+    },
+    "images_piano": {
+        "DBG": "Piano-Fortschritt und Befehle",
+        "INF": "Bilder-/Piano-Lebenszyklus und Lösungen",
+        "WRN": "Nicht unterstützte Piano-Befehle",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "Gemeinsamer Node für Bilder und Piano.",
+    },
+    "chess": {
+        "DBG": "Befehlsdetails",
+        "INF": "RFID-, Tisch-, Zustands- und Lösungsmeldungen",
+        "WRN": "Unbekannte Befehle",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "Laufzeit-Stufe wird unterstützt.",
+    },
+    "knocking": {
+        "DBG": "Detaillierte Piezo-, Fenster-, Audio- und Sequenzdaten",
+        "INF": "Audio- und serieller Betriebsmodus",
+        "WRN": "Ungültige Testbefehle",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "DBG kann ein hohes Datenvolumen erzeugen.",
+    },
+    "candles": {
+        "DBG": "Sekündliche Sensormetriken",
+        "INF": "Kalibrierung, Blas- und Sequenzaktionen",
+        "WRN": "Sättigung und unbekannte Befehle",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "DBG kann ein hohes Datenvolumen erzeugen.",
+    },
+    "star_slider": {
+        "DBG": "Positionsmetriken",
+        "INF": "Persistierter Zustand und Musterergebnisse",
+        "WRN": "Betätigung deaktivierter Tasten",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "Laufzeit-Stufe wird unterstützt.",
+    },
+    "star_sky": {
+        "DBG": "Befehls- und Eingabedetails",
+        "INF": "Reset-, Freigabe- und Lösungseingaben",
+        "WRN": "Unbekannte Befehle",
+        "ERR": "Node- und Laufzeitfehler",
+        "note": "Laufzeit-Stufe wird unterstützt.",
+    },
+}
 LOG_STREAM_ID = uuid.uuid4().hex
 MAX_LOG_PAYLOAD_BYTES = 16 * 1024
 MAX_LOG_MESSAGE_CHARS = 2048
@@ -2460,6 +2531,17 @@ class DashboardStore:
                 "display_time_s": display_seconds,
                 "solve_time_s": _first_seconds(timing.get("solve_time_s")),
                 "live_time_s": _first_seconds(timing.get("live_time_s")),
+                "original_solve_time_s": (
+                    _first_seconds(timing.get("original_solve_time_s"))
+                    if timing.get("original_solve_time_s") not in {None, ""}
+                    else None
+                ),
+                "original_adjustment_side": timing.get("original_adjustment_side"),
+                "restore_time_s": (
+                    _first_seconds(timing.get("restore_time_s"))
+                    if timing.get("restore_time_s") not in {None, ""}
+                    else None
+                ),
                 "skipped": skipped,
                 "not_solved": not_solved,
                 "can_solve": phase_state == "active",
@@ -2670,6 +2752,12 @@ class DashboardStore:
 
 
 
+dashboard_log_archive = JsonlLogArchive(LOG_ARCHIVE_PATH)
+node_log_archive_writer = QueuedArchiveWriter(dashboard_log_archive)
+_dashboard_archive_handler = DashboardArchiveHandler(dashboard_log_archive)
+_dashboard_archive_handler.setFormatter(logging.Formatter())
+LOG.addHandler(_dashboard_archive_handler)
+LOG.setLevel(logging.WARNING)
 store = DashboardStore()
 operation_ledger = OperationLedger(OPERATION_LEDGER_PATH)
 node_log_buffer = NodeLogBuffer()
@@ -3654,7 +3742,13 @@ def _handle_mqtt_message(msg: mqtt.MQTTMessage) -> None:
     if isinstance(topic, str) and topic.endswith("/log") and len(topic.split("/")) == 2:
         entry = parse_node_log(topic, msg.payload)
         if entry is not None:
-            node_log_buffer.append(entry)
+            stored = node_log_buffer.append(entry)
+            if stored.get("node") in LOG_NODE_ID_SET:
+                node_log_archive_writer.append({
+                    "source": "mqtt",
+                    "stream_id": LOG_STREAM_ID,
+                    **stored,
+                })
         return
     data = parse_json_payload(msg.payload)
     if data is None:
@@ -3997,10 +4091,14 @@ def list_bookings_from_local_db(db_path: Path, limit: int = 1000) -> list[dict[s
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if "bookings" not in tables:
             raise RuntimeError(f"Die kopierte Website-Datenbank enthält keine Buchungstabelle: {db_path}")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(bookings)").fetchall()}
+        completed_column = "completed_at" if "completed_at" in columns else "NULL AS completed_at"
+        deleted_column = "deleted_at" if "deleted_at" in columns else "NULL AS deleted_at"
         rows = conn.execute(
-            """
+            f"""
             SELECT id, booking_code, date, slot, players, language, customer_name, customer_email,
-                   payment_method, payment_status, booking_status, total_cents, created_at, updated_at
+                   payment_method, payment_status, booking_status, total_cents, created_at, updated_at,
+                   {completed_column}, {deleted_column}
             FROM bookings
             ORDER BY date DESC, slot DESC, id DESC
             LIMIT ?
@@ -4021,6 +4119,8 @@ def list_bookings_from_local_db(db_path: Path, limit: int = 1000) -> list[dict[s
             "language": row.get("language", "de"),
             "paymentStatus": row.get("payment_status", ""),
             "bookingStatus": row.get("booking_status", ""),
+            "completedAt": row.get("completed_at", ""),
+            "deletedAt": row.get("deleted_at", ""),
             "totalCents": row.get("total_cents", ""),
             "label": _booking_label(row),
         }))
@@ -4036,6 +4136,23 @@ def _booking_is_cancelled(booking: dict[str, Any]) -> bool:
     status = f"{booking.get('bookingStatus', '')} {booking.get('paymentStatus', '')}".lower()
     status = "".join(char for char in unicodedata.normalize("NFD", status) if not unicodedata.combining(char))
     return bool(re.search(r"cancel|annull|storn|refund|ruckerstatt|rueckerstatt|ruckzahl|rimbors|cancellat", status))
+
+
+def _booking_is_eligible(booking: dict[str, Any], reference_time: datetime) -> bool:
+    selected = normalize_booking_selection(booking)
+    if selected.get("kind") != "booking":
+        return False
+    if str(selected.get("bookingStatus") or "").strip().lower() != "confirmed":
+        return False
+    if str(selected.get("paymentStatus") or "").strip().lower() not in {"paid", "onsite_pending", "voucher_redeemed"}:
+        return False
+    if selected.get("completedAt") or selected.get("deletedAt") or _booking_is_cancelled(selected):
+        return False
+    appointment = _booking_start_in_rome(selected)
+    if appointment is None:
+        return False
+    reference = _rome_datetime_from_local(reference_time)
+    return reference < appointment + timedelta(hours=1)
 
 
 def _last_sunday_of_month(year: int, month: int) -> int:
@@ -4085,14 +4202,14 @@ def _parse_start_clicked_at_ms(value: Any, *, now_epoch: float | None = None) ->
 def _booking_start_in_rome(booking: dict[str, Any]) -> datetime | None:
     date_text = str(booking.get("date") or "").strip()
     slot_text = str(booking.get("slot") or "").strip()
-    time_match = re.search(r"(\d{1,2})[:.](\d{2})", slot_text)
+    time_match = re.fullmatch(r"(\d{1,2}):(\d{2})", slot_text)
     if not date_text or not time_match:
         return None
-    date_match = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", date_text)
+    date_match = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", date_text)
     if date_match:
         year, month, day = (int(value) for value in date_match.groups())
     else:
-        date_match = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})", date_text)
+        date_match = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", date_text)
         if not date_match:
             return None
         day, month, year = (int(value) for value in date_match.groups())
@@ -4107,7 +4224,7 @@ def nearest_booking_for_start(bookings: list[dict[str, Any]], reference_time: da
     candidates: list[tuple[float, datetime, str, dict[str, Any]]] = []
     for raw_booking in bookings:
         booking = normalize_booking_selection(raw_booking)
-        if booking.get("kind") != "booking" or _booking_is_cancelled(booking):
+        if not _booking_is_eligible(booking, reference):
             continue
         appointment = _booking_start_in_rome(booking)
         if appointment is None:
@@ -4133,14 +4250,14 @@ def _select_booking_for_start_claim(
     snapshot = claim.get("booking_snapshot")
     if isinstance(snapshot, dict):
         selected = normalize_booking_selection(snapshot)
-        return selected if selected.get("kind") == "booking" else None
+        return selected if _booking_is_eligible(selected, reference_time) else None
 
     booking_id = str(claim.get("booking_id") or "").strip()
     if booking_id:
         for raw_booking in bookings:
             selected = normalize_booking_selection(raw_booking)
             if str(selected.get("id") or "").strip() == booking_id:
-                return None if _booking_is_cancelled(selected) else selected
+                return selected if _booking_is_eligible(selected, reference_time) else None
         return None
 
     return nearest_booking_for_start(bookings, reference_time)
@@ -4930,7 +5047,9 @@ IDEMPOTENT_API_PATHS = frozenset({
     "/api/service-restart",
     "/api/hints",
     "/api/riddle-time",
+    "/api/riddle-time-restore",
     "/api/riddle-outcome",
+    "/api/log-archive/delete",
 })
 # /api/riddle-time-preview is a read-only GET and therefore never reserves a
 # durable mutation receipt.
@@ -4979,6 +5098,34 @@ def _replay_operation_response(record: dict[str, Any]) -> Any:
     response.headers["X-Operation-Id"] = str(record.get("operation_id") or "")
     response.headers["X-Idempotency-Replayed"] = "true"
     return response
+
+
+def _archive_operator_outcome(response: Any, operation_id: str = "") -> None:
+    status = int(getattr(response, "status_code", 500) or 500)
+    level = "INF" if 200 <= status < 400 else ("WRN" if status < 500 else "ERR")
+    payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+    detail: dict[str, Any] = {
+        "method": request.method.upper(),
+        "path": request.path,
+        "http_status": status,
+    }
+    if operation_id:
+        detail["operation_id"] = operation_id
+    if isinstance(payload, dict):
+        for key in ("mqtt_queued", "queued_count", "command_count", "partial", "applied", "device_confirmed", "stale_action", "scope"):
+            value = payload.get(key)
+            if isinstance(value, (bool, int, str)) or (isinstance(value, float) and math.isfinite(value)):
+                detail[key] = value
+        if status >= 400 and isinstance(payload.get("error"), str):
+            detail["error"] = _bounded_log_text(payload["error"], MAX_LOG_MESSAGE_CHARS)
+    dashboard_log_archive.append({
+        "source": "operator",
+        "node": "Dashboard",
+        "lv": level,
+        "msg": f"{request.method.upper()} {request.path} -> HTTP {status}",
+        "d": detail,
+        "d_type": "operator_outcome",
+    })
 
 
 @app.before_request
@@ -5059,6 +5206,10 @@ def _claim_idempotent_dashboard_operation() -> Any | None:
 def _complete_idempotent_dashboard_operation(response: Any) -> Any:
     operation_id = getattr(g, "dashboard_operation_id", "")
     if not operation_id:
+        if request.method.upper() in {"POST", "PUT", "DELETE"} and request.endpoint in {
+            "api_acknowledge_operation", "api_db_update", "delete_game",
+        }:
+            _archive_operator_outcome(response)
         return response
     try:
         operation_ledger.complete(
@@ -5083,6 +5234,7 @@ def _complete_idempotent_dashboard_operation(response: Any) -> Any:
         failure.headers["X-Operation-Id"] = operation_id
         return failure
     response.headers["X-Operation-Id"] = operation_id
+    _archive_operator_outcome(response, operation_id)
     return response
 
 
@@ -5241,12 +5393,24 @@ def api_operation_status(operation_id: str) -> Any:
 
 @app.get("/")
 def index() -> str:
-    return render_template("index.html", initial_view="control")
+    return render_template(
+        "index.html",
+        initial_view="control",
+        diagnostic_nodes=LOG_NODE_LABELS.items(),
+        log_node_labels=LOG_NODE_LABELS,
+        log_capabilities=LOG_NODE_CAPABILITIES,
+    )
 
 
 @app.get("/admin")
 def admin_dashboard() -> str:
-    return render_template("index.html", initial_view="admin")
+    return render_template(
+        "index.html",
+        initial_view="admin",
+        diagnostic_nodes=LOG_NODE_LABELS.items(),
+        log_node_labels=LOG_NODE_LABELS,
+        log_capabilities=LOG_NODE_CAPABILITIES,
+    )
 
 
 
@@ -5428,6 +5592,94 @@ def api_logs() -> Any:
     return response
 
 
+def parse_log_archive_search_query(args: Any) -> dict[str, Any]:
+    allowed_keys = {"segment", "source", "node", "level", "text", "limit"}
+    unknown_keys = sorted(set(args.keys()) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(f"unknown query parameter: {', '.join(unknown_keys)}")
+    text_values = _query_arg_values(args, "text")
+    limit_values = _query_arg_values(args, "limit")
+    if len(text_values) > 1 or len(limit_values) > 1:
+        raise ValueError("text and limit may only be provided once")
+    text = text_values[0].strip() if text_values else ""
+    if len(text) > MAX_SEARCH_TEXT_CHARS:
+        raise ValueError(f"text must not exceed {MAX_SEARCH_TEXT_CHARS} characters")
+    limit_text = limit_values[0] if limit_values else "200"
+    if not re.fullmatch(r"[1-9][0-9]*", limit_text) or int(limit_text) > MAX_SEARCH_LIMIT:
+        raise ValueError(f"limit must be between 1 and {MAX_SEARCH_LIMIT}")
+    segment_ids = _query_arg_values(args, "segment")
+    if segment_ids and (len(segment_ids) > 100 or any(not dashboard_log_archive.valid_segment_id(item) for item in segment_ids)):
+        raise ValueError("invalid segment selection")
+    return {
+        "segment_ids": segment_ids or None,
+        "sources": _parse_log_filter(_query_arg_values(args, "source"), name="source", allowed=LOG_ARCHIVE_SOURCES),
+        "nodes": _parse_log_filter(_query_arg_values(args, "node"), name="node", allowed=LOG_ARCHIVE_NODE_IDS),
+        "levels": _parse_log_filter(_query_arg_values(args, "level"), name="level", allowed=LOG_LEVEL_SET),
+        "text": text,
+        "limit": int(limit_text),
+    }
+
+
+@app.get("/api/log-archive/segments")
+def api_log_archive_segments() -> Any:
+    response = jsonify({"ok": True, **dashboard_log_archive.status(), "writer": node_log_archive_writer.status()})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/log-archive/search")
+def api_log_archive_search() -> Any:
+    try:
+        query = parse_log_archive_search_query(request.args)
+        result = dashboard_log_archive.search(**query)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    response = jsonify({"ok": True, **result})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/log-archive/segments/<segment_id>/download")
+def api_log_archive_download(segment_id: str) -> Any:
+    try:
+        handle = dashboard_log_archive.open_segment(segment_id)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    response = send_file(
+        handle,
+        mimetype="application/x-ndjson",
+        as_attachment=True,
+        download_name=f"er1-dashboard-{segment_id}.jsonl",
+        max_age=0,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.post("/api/log-archive/delete")
+def api_log_archive_delete() -> Any:
+    data = request.get_json(silent=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    if data.get("confirmed") is not True:
+        return jsonify({"ok": False, "error": "Die Löschung wurde nicht ausdrücklich bestätigt."}), 400
+    with store.lock:
+        phase = int(store.game_state.get("phase", 0) or 0)
+        if phase != 1:
+            return jsonify({"ok": False, "error": "Logsegmente können nur in Phase 1 (Wartung) gelöscht werden."}), 409
+        try:
+            deleted = dashboard_log_archive.delete_closed(str(data.get("segment_id") or ""))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except FileNotFoundError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+    return jsonify({"ok": True, "deleted": deleted})
+
+
 @app.post("/api/log-level")
 def api_log_level() -> Any:
     try:
@@ -5543,7 +5795,11 @@ def api_bookings() -> Any:
     ]
     try:
         remote_bookings, local_db, fresh = list_bookings_via_ssh_copy(1000)
-        bookings.extend(booking_match_metadata(item, reference_time) for item in remote_bookings)
+        bookings.extend(
+            booking_match_metadata(item, reference_time)
+            for item in remote_bookings
+            if _booking_is_eligible(item, reference_time)
+        )
         return jsonify({
             "ok": True,
             "bookings": bookings,
@@ -5562,6 +5818,7 @@ def api_bookings() -> Any:
                 bookings.extend(
                     booking_match_metadata(item, reference_time)
                     for item in list_bookings_from_local_db(local_db, 1000)
+                    if _booking_is_eligible(item, reference_time)
                 )
                 return jsonify({
                     "ok": True,
@@ -6023,6 +6280,38 @@ def api_riddle_time() -> Any:
     }):
         return jsonify({"ok": False, "error": "Die Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
     return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "adjustment_side": adjustment_side, "mqtt_queued": True})
+
+
+@app.post("/api/riddle-time-restore")
+def api_riddle_time_restore() -> Any:
+    data = request.get_json(force=True) or {}
+    stale = _stale_action_response(data)
+    if stale is not None:
+        return stale
+    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
+    if not riddle:
+        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
+    if data["expected_phase"] < 3:
+        return jsonify({"ok": False, "error": "Rätselzeiten können erst nach einem gestarteten Spiel wiederhergestellt werden."}), 409
+    snapshot = store.snapshot()
+    current_row = next((row for row in (snapshot.get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
+    if not current_row or current_row.get("original_solve_time_s") in {None, ""}:
+        return jsonify({"ok": False, "error": "Für dieses Rätsel ist keine ursprüngliche Zeit gespeichert."}), 409
+    if str(current_row.get("phase_state") or "pending") not in {"solved", "skipped", "not_solved"}:
+        return jsonify({"ok": False, "error": "Nur die Zeit eines abgeschlossenen Rätsels kann wiederhergestellt werden."}), 409
+    if not mqtt_publish(TOPIC_GAME_CMD, {
+        "cmd": "restore_riddle_time",
+        "riddle": riddle,
+        "expected_phase": data["expected_phase"],
+        "expected_run_id": data["expected_run_id"].strip(),
+    }):
+        return jsonify({"ok": False, "error": "Die ursprüngliche Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
+    return jsonify({
+        "ok": True,
+        "riddle": riddle,
+        "original_solve_time_s": current_row["original_solve_time_s"],
+        "mqtt_queued": True,
+    })
 
 
 def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float, adjustment_side: str) -> dict[str, Any]:
@@ -6735,5 +7024,20 @@ mqtt_client.connect_async(BROKER_HOST, BROKER_PORT, keepalive=30)
 mqtt_client.loop_start()
 
 
+def _flush_log_archive() -> None:
+    node_log_archive_writer.flush(5.0)
+
+
+atexit.register(_flush_log_archive)
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
+    def _shutdown_dashboard(_signum: int, _frame: Any) -> None:
+        _flush_log_archive()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown_dashboard)
+    try:
+        app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
+    finally:
+        _flush_log_archive()

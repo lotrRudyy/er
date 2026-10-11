@@ -70,6 +70,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - `ER1_DASHBOARD_PORT` default: `8080`
 - `ER1_DASHBOARD_CLIENT_ID` optional override; otherwise port 8080 uses `er1_dashboard` and previews use `er1_dashboard_<port>`
 - `ER1_OPERATION_LEDGER_PATH` optional command-receipt database path; defaults to `data/dashboard_operations.sqlite3`
+- `ER1_DASHBOARD_LOG_ARCHIVE_DIR` optional durable JSONL archive directory; defaults to `data/log_archive`
 - `ER1_WEBSITE_API_BASE` website URL used by the live ranking preview and by optional HTTP summary delivery
 - `ER1_WEBSITE_API_TOKEN` shared ranking/summary token, matching `GAME_DASHBOARD_API_TOKEN` or `GAME_SUMMARY_API_TOKEN` on the website
 
@@ -89,6 +90,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - Completed and acknowledged receipts are retained for seven days, abandoned preparations for one day, and unresolved uncertain receipts for 30 days. The ledger is capped at 10,000 records so malformed LAN traffic cannot grow it without bound.
 - A stored command receipt confirms dashboard processing and the response fields describe MQTT queueing. Physical application remains unconfirmed unless the target controller reports matching telemetry; mechanical effects without sensors cannot be proven by software.
 - On its first MQTT connection, the dashboard stores retained `WRN` log-level defaults for all nodes. Manual per-node diagnostic levels remain temporary and non-retained.
+- The Admin log archive stores normalized node logs, operator mutation outcomes, and Dashboard warnings/errors in daily or 25 MiB JSONL segments. Closed segments are retained for 30 days with a 256 MiB total cap; manual deletion is restricted to maintenance phase and never removes the active segment.
 - Automatic booking matching is restricted to an inclusive ±30-minute Europe/Rome window. Cached SSH copies are eligible for automatic matching only while younger than `ER1_BOOKINGS_CACHE_MAX_AGE_S` (default 900 seconds); older copies remain available for warned manual selection.
 - If the website server is unreachable, the locally started game continues without automatic booking assignment. Cached, test, or empty bookings remain available for manual selection. Summary-email failures do not change the completed run and can be retried later.
 - If the ranking API is unreachable or its token is not configured, only the rank display is marked unavailable; game control and state polling continue normally.

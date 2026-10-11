@@ -29,6 +29,7 @@ CHECKPOINT_SCHEMA = "er1.game_master.active_run"
 CHECKPOINT_VERSION = 3
 LEGACY_CHECKPOINT_VERSION = 2
 LEGACY_RESETTABLE_RIDDLES = {"prison", "wheel", "chains", "tangram", "magnet"}
+CHAINS_OUTCOME_GROUP = ("prison", "wheel", "chains")
 GAME_START_DELAY_S = 5.0
 MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024
 CHECKPOINT_SIZE_MARGIN_BYTES = 64 * 1024
@@ -681,6 +682,9 @@ class GameMaster:
                 "hints": hints,
                 "skipped": bool(timing.skipped),
                 "not_solved": bool(timing.not_solved),
+                "original_solve_time_s": timing.original_solve_time_s,
+                "original_adjustment_side": timing.original_adjustment_side,
+                "correction_target_deltas": dict(timing.correction_target_deltas),
                 "status": status,
                 "first_elapsed_s": first_elapsed,
                 "segment_elapsed_s": segment_elapsed,
@@ -1107,6 +1111,28 @@ class GameMaster:
                 raise ValueError(f"checkpoint hints are invalid for {riddle}")
             skipped = self._checked_bool(item.get("skipped"), f"{riddle}.skipped")
             not_solved = self._checked_bool(item.get("not_solved"), f"{riddle}.not_solved")
+            original_solve_time_s = self._checked_seconds(
+                item.get("original_solve_time_s"), f"{riddle}.original_solve_time_s", allow_none=True
+            )
+            original_adjustment_side = item.get("original_adjustment_side")
+            if original_adjustment_side not in {None, "previous", "next"}:
+                raise ValueError(f"checkpoint original adjustment side is invalid for {riddle}")
+            if (original_solve_time_s is None) != (original_adjustment_side is None):
+                raise ValueError(f"checkpoint original time metadata is incomplete for {riddle}")
+            raw_correction_deltas = item.get("correction_target_deltas", {})
+            if not isinstance(raw_correction_deltas, dict) or len(raw_correction_deltas) > len(config.RIDDLES):
+                raise ValueError(f"checkpoint correction targets are invalid for {riddle}")
+            correction_target_deltas: dict[str, float] = {}
+            for target_riddle, raw_delta in raw_correction_deltas.items():
+                if target_riddle not in config.RIDDLES or target_riddle == riddle:
+                    raise ValueError(f"checkpoint correction target is invalid for {riddle}")
+                if isinstance(raw_delta, bool) or not isinstance(raw_delta, (int, float)):
+                    raise ValueError(f"checkpoint correction delta is invalid for {riddle}")
+                delta = float(raw_delta)
+                if not math.isfinite(delta) or abs(delta) > MAX_RECOVERABLE_ELAPSED_S:
+                    raise ValueError(f"checkpoint correction delta is outside the recoverable range for {riddle}")
+                if abs(delta) >= 0.001:
+                    correction_target_deltas[target_riddle] = round(delta, 3)
             status = item.get("status")
             if status not in valid_statuses:
                 raise ValueError(f"checkpoint status is invalid for {riddle}")
@@ -1146,6 +1172,9 @@ class GameMaster:
                 hints=hints,
                 skipped=skipped,
                 not_solved=not_solved,
+                original_solve_time_s=original_solve_time_s,
+                original_adjustment_side=original_adjustment_side,
+                correction_target_deltas=correction_target_deltas,
                 first_started_monotonic=None if first_elapsed is None else now_mono - first_elapsed,
                 segment_started_monotonic=None if segment_elapsed is None else now_mono - segment_elapsed,
             )
@@ -1349,6 +1378,11 @@ class GameMaster:
 
         now_mono = self._monotonic()
         timer_running = bool(payload.get("timer_running"))
+        incoming_correction_deltas = {key: 0.0 for key in run.riddle_timings}
+        for source_timing in run.riddle_timings.values():
+            for target_riddle, delta in source_timing.correction_target_deltas.items():
+                if target_riddle in incoming_correction_deltas:
+                    incoming_correction_deltas[target_riddle] += float(delta)
         riddle_payloads: dict[str, dict[str, Any]] = {}
         for key, timing in run.riddle_timings.items():
             status = timing.status()
@@ -1366,6 +1400,13 @@ class GameMaster:
                 "hints": timing.hints or "",
                 "skipped": bool(timing.skipped),
                 "not_solved": bool(timing.not_solved),
+                "original_solve_time_s": timing.original_solve_time_s,
+                "original_adjustment_side": timing.original_adjustment_side,
+                "restore_time_s": (
+                    round(timing.original_solve_time_s + incoming_correction_deltas[key], 3)
+                    if timing.original_solve_time_s is not None
+                    else None
+                ),
                 "status": status,
                 "solved": status == "solved",
                 "final": status in {"solved", "skipped", "not_solved"},
@@ -1589,6 +1630,9 @@ class GameMaster:
                     "hints": self._truncate_utf8(timing.hints or "", MAX_HINTS_BYTES, keep_tail=True),
                     "skipped": bool(timing.skipped),
                     "not_solved": bool(timing.not_solved),
+                    "original_solve_time_s": timing.original_solve_time_s,
+                    "original_adjustment_side": timing.original_adjustment_side,
+                    "correction_target_deltas": dict(timing.correction_target_deltas),
                     "status": timing.status(),
                 }
                 for node, timing in run.riddle_timings.items()
@@ -1717,6 +1761,20 @@ class GameMaster:
             self.state.last_riddle_solved_at = self._now_iso()
 
         self._record_event(outcome, {"node": node, "source": source})
+
+    def _apply_chains_group_outcome(self, outcome: str) -> None:
+        skipped = outcome == "skipped"
+        with self._lock:
+            run = self.state.current_run
+            if run is None:
+                return
+            for riddle in CHAINS_OUTCOME_GROUP:
+                timing = run.riddle_timings.get(riddle)
+                if timing is None:
+                    continue
+                timing.skipped = skipped
+                timing.not_solved = False
+        self._record_event("chains_group_outcome", {"outcome": outcome, "riddles": list(CHAINS_OUTCOME_GROUP)})
 
     @staticmethod
     def _merge_riddle_state(previous: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1884,6 +1942,10 @@ class GameMaster:
             raw_seconds = payload.get("solve_time_s", payload.get("time_s", payload.get("seconds")))
             adjustment_side = str(payload.get("adjustment_side") or "").strip().lower()
             self.set_riddle_time(riddle, float(raw_seconds), adjustment_side=adjustment_side)
+            return
+        if cmd == "restore_riddle_time":
+            riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
+            self.restore_riddle_time(riddle)
             return
         if cmd in {"set_riddle_outcome", "set_outcome"}:
             riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
@@ -2063,6 +2125,11 @@ class GameMaster:
             if timing is None:
                 raise ValueError(f"Unknown riddle: {riddle}")
             now_mono = self._monotonic()
+            # A direct edit supersedes older indirect adjustments targeting this
+            # riddle; later incoming adjustments remain independently reversible.
+            for other_timing in run.riddle_timings.values():
+                if other_timing is not timing:
+                    other_timing.correction_target_deltas.pop(riddle, None)
             correction = plan_riddle_time_change(
                 riddle,
                 seconds,
@@ -2074,6 +2141,9 @@ class GameMaster:
                 adjustment_side=adjustment_side,
                 max_time_s=MAX_RECOVERABLE_ELAPSED_S,
             )
+            if timing.original_solve_time_s is None:
+                timing.original_solve_time_s = correction["source_previous_s"]
+                timing.original_adjustment_side = correction["adjustment_side"]
             self._set_timing_elapsed_locked(timing, correction["source_new_s"], now_mono)
             target_riddle = correction["target_riddle"]
             if target_riddle is not None:
@@ -2082,6 +2152,14 @@ class GameMaster:
                     correction["target_new_s"],
                     now_mono,
                 )
+                accumulated_delta = round(
+                    timing.correction_target_deltas.get(target_riddle, 0.0) + correction["target_delta_s"],
+                    3,
+                )
+                if abs(accumulated_delta) < 0.001:
+                    timing.correction_target_deltas.pop(target_riddle, None)
+                else:
+                    timing.correction_target_deltas[target_riddle] = accumulated_delta
             run.duration_s = self.db._compute_effective_duration_s(run)
         self._record_event("riddle_time_corrected", {
             "source_riddle": riddle,
@@ -2094,8 +2172,65 @@ class GameMaster:
             "target_previous_s": correction["target_previous_s"],
             "target_new_s": correction["target_new_s"],
             "target_delta_s": correction["target_delta_s"],
+            "original_solve_time_s": timing.original_solve_time_s,
         })
         self._checkpoint_after_mutation("riddle_time_corrected")
+        self.publish_game_state()
+
+    @_serialized_mutation
+    def restore_riddle_time(self, riddle: str) -> None:
+        riddle = self._canonical_riddle_name(riddle)
+        with self._lock:
+            run = self.state.current_run
+            timing = run.riddle_timings.get(riddle) if run is not None else None
+            if timing is None:
+                raise ValueError(f"Unknown riddle: {riddle}")
+            original = timing.original_solve_time_s
+            if original is None or timing.original_adjustment_side not in {"previous", "next"}:
+                raise ValueError(f"No original corrected time is stored for riddle: {riddle}")
+            now_mono = self._monotonic()
+            source_previous_s = self._timing_elapsed_s(timing, now_mono)
+            incoming_delta = round(sum(
+                other_timing.correction_target_deltas.get(riddle, 0.0)
+                for other_timing in run.riddle_timings.values()
+                if other_timing is not timing
+            ), 3)
+            source_new_s = round(original + incoming_delta, 3)
+            if not 0 < source_new_s <= MAX_RECOVERABLE_ELAPSED_S:
+                raise ValueError(f"Original riddle time cannot be restored safely: {riddle}")
+            restored_targets = []
+            for target_riddle, applied_delta in timing.correction_target_deltas.items():
+                target = run.riddle_timings.get(target_riddle)
+                if target is None:
+                    raise ValueError(f"Correction target no longer exists: {target_riddle}")
+                target_previous_s = self._timing_elapsed_s(target, now_mono)
+                target_new_s = round(target_previous_s - applied_delta, 3)
+                if not 0 < target_new_s <= MAX_RECOVERABLE_ELAPSED_S:
+                    raise ValueError(f"Correction target cannot be restored safely: {target_riddle}")
+                restored_targets.append({
+                    "riddle": target_riddle,
+                    "previous_s": target_previous_s,
+                    "new_s": target_new_s,
+                    "reversed_delta_s": round(-applied_delta, 3),
+                })
+            self._set_timing_elapsed_locked(timing, source_new_s, now_mono)
+            for restored_target in restored_targets:
+                self._set_timing_elapsed_locked(
+                    run.riddle_timings[restored_target["riddle"]],
+                    restored_target["new_s"],
+                    now_mono,
+                )
+            timing.correction_target_deltas = {}
+            run.duration_s = self.db._compute_effective_duration_s(run)
+        self._record_event("riddle_time_restored", {
+            "source_riddle": riddle,
+            "source_previous_s": source_previous_s,
+            "source_new_s": source_new_s,
+            "original_solve_time_s": original,
+            "preserved_incoming_delta_s": incoming_delta,
+            "restored_targets": restored_targets,
+        })
+        self._checkpoint_after_mutation("riddle_time_restored")
         self.publish_game_state()
 
     @staticmethod
@@ -2143,11 +2278,15 @@ class GameMaster:
             return
         if status == "pending":
             raise ValueError(f"Cannot set outcome for pending riddle: {riddle}")
+        if riddle in CHAINS_OUTCOME_GROUP and riddle != "chains":
+            raise ValueError(f"{riddle} outcome is controlled by Chains")
 
         with self._lock:
             timing.skipped = outcome == "skipped"
             timing.not_solved = False
             run.duration_s = self.db._compute_effective_duration_s(run)
+        if riddle == "chains":
+            self._apply_chains_group_outcome(outcome)
         self._record_event("riddle_outcome_set", {
             "riddle": riddle,
             "outcome": outcome,
@@ -2206,6 +2345,8 @@ class GameMaster:
 
         event_name = RIDDLE_SOLVE_EVENTS[riddle]
         self._mark_solved(riddle, source, outcome=outcome)
+        if riddle == "chains":
+            self._apply_chains_group_outcome(outcome)
         with self._lock:
             self.state.completed_phase_events.add(event_name)
             completed = set(self.state.completed_phase_events)
