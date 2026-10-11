@@ -76,7 +76,7 @@
             <td>
               <div class="game-actions-cell">
                 <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Öffnen</a>
-                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" data-delete-game>
+                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" data-delete-game data-game-id="{{ row.id }}">
                   <button type="submit" class="danger-button">Löschen</button>
                 </form>
               </div>
@@ -198,6 +198,17 @@
     {% endif %}
   </div>
 
-  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261011-delete-fetch-v2"></script>
+  <dialog id="deleteGameDialog" class="confirm-dialog" aria-labelledby="deleteGameDialogTitle">
+    <button type="button" class="dialog-close" data-delete-cancel aria-label="Abbrechen">×</button>
+    <div class="confirm-symbol" aria-hidden="true">!</div>
+    <h2 id="deleteGameDialogTitle">Spiel löschen?</h2>
+    <p id="deleteGameDialogMessage"></p>
+    <div class="confirm-dialog-actions">
+      <button type="button" data-delete-cancel>Abbrechen</button>
+      <button type="button" id="confirmDeleteGame" class="danger-button">Ja, löschen</button>
+    </div>
+  </dialog>
+
+  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261011-delete-confirm-v3"></script>
 </body>
 </html>

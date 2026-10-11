@@ -1,5 +1,9 @@
 const editorStatus = document.getElementById('editorStatus');
 const detailSectionIds = ['gameSummarySection', 'riddlesSection', 'rawDbSection'];
+const deleteGameDialog = document.getElementById('deleteGameDialog');
+const deleteGameDialogMessage = document.getElementById('deleteGameDialogMessage');
+const confirmDeleteGameButton = document.getElementById('confirmDeleteGame');
+let pendingDeleteForm = null;
 
 function showStatus(message, kind = 'info') {
   if (!editorStatus) return;
@@ -111,39 +115,68 @@ function bindViewerEditors(scope = document) {
   scope.querySelectorAll('form[data-delete-game]').forEach((form) => {
     if (form.dataset.bound === 'true') return;
     form.dataset.bound = 'true';
-    form.addEventListener('submit', async (event) => {
+    form.addEventListener('submit', (event) => {
       event.preventDefault();
       if (form.dataset.busy === 'true') return;
-
-      const button = form.querySelector('button[type="submit"]');
-      form.dataset.busy = 'true';
-      if (button) {
-        button.disabled = true;
-        button.textContent = 'Löscht...';
+      pendingDeleteForm = form;
+      const gameId = form.dataset.gameId || 'dieses Spiel';
+      if (deleteGameDialogMessage) {
+        deleteGameDialogMessage.textContent = `Spiel ${gameId} wirklich löschen und in die Ablage verschieben?`;
       }
-
-      try {
-        const response = await fetch(form.action, {
-          method: 'POST',
-          headers: {
-            Accept: 'text/html',
-            'X-Requested-With': 'fetch',
-          },
-          credentials: 'same-origin',
-        });
-        if (!response.ok) throw new Error(`Löschen fehlgeschlagen (HTTP ${response.status})`);
-        window.location.assign('/games');
-      } catch (error) {
-        form.dataset.busy = 'false';
-        if (button) {
-          button.disabled = false;
-          button.textContent = 'Löschen';
-        }
-        showStatus(error.message || String(error), 'error');
-      }
+      deleteGameDialog?.showModal();
     });
   });
 }
+
+async function deleteGame(form) {
+  const button = form.querySelector('button[type="submit"]');
+  form.dataset.busy = 'true';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Löscht...';
+  }
+
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'X-Requested-With': 'fetch',
+      },
+      credentials: 'same-origin',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `Löschen fehlgeschlagen (HTTP ${response.status})`);
+    }
+    window.location.assign('/games?message=Spiel%20wurde%20gel%C3%B6scht%20und%20in%20die%20Ablage%20verschoben.');
+  } catch (error) {
+    form.dataset.busy = 'false';
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Löschen';
+    }
+    showStatus(error.message || String(error), 'error');
+  }
+}
+
+deleteGameDialog?.querySelectorAll('[data-delete-cancel]').forEach((button) => {
+  button.addEventListener('click', () => {
+    pendingDeleteForm = null;
+    deleteGameDialog.close();
+  });
+});
+
+deleteGameDialog?.addEventListener('cancel', () => {
+  pendingDeleteForm = null;
+});
+
+confirmDeleteGameButton?.addEventListener('click', () => {
+  const form = pendingDeleteForm;
+  pendingDeleteForm = null;
+  deleteGameDialog?.close();
+  if (form) deleteGame(form);
+});
 
 function placeGameDetailsBelowSelectedRow() {
   const selectedRow = document.querySelector('#allGamesSection .selected-game-row');

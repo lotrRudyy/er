@@ -131,16 +131,33 @@ class GameDeletionTests(unittest.TestCase):
         delete_form = html[form_start:form_end]
         self.assertIn('type="submit"', delete_form)
         self.assertIn("data-delete-game", delete_form)
+        self.assertIn("data-game-id=", delete_form)
         self.assertNotIn("confirm(", delete_form)
         self.assertNotIn("onsubmit=", delete_form)
+
+        self.assertIn('id="deleteGameDialog"', html)
+        self.assertIn('id="confirmDeleteGame"', html)
+        self.assertIn("data-delete-cancel", html)
 
         javascript = GAME_VIEWER_JS_PATH.read_text(encoding="utf-8")
         self.assertIn("form[data-delete-game]", javascript)
         self.assertIn("event.preventDefault()", javascript)
+        self.assertIn("deleteGameDialog?.showModal()", javascript)
+        self.assertIn("if (form) deleteGame(form)", javascript)
         self.assertIn("fetch(form.action", javascript)
         self.assertIn("credentials: 'same-origin'", javascript)
-        self.assertIn("window.location.assign('/games')", javascript)
+        self.assertIn("Accept: 'application/json'", javascript)
+        self.assertIn("!response.ok || !data.ok", javascript)
+        self.assertIn("window.location.assign('/games?message=", javascript)
         self.assertNotRegex(html, r"\{%\s*if game\s*%\}\s*<script[^>]+game_viewer\.js")
+
+        app_source = APP_PATH.read_text(encoding="utf-8")
+        route_start = app_source.index('@app.post("/games/delete/<game_id>")')
+        route_end = app_source.index("\n\n@app.", route_start)
+        delete_route = app_source[route_start:route_end]
+        self.assertIn('request.headers.get("X-Requested-With"', delete_route)
+        self.assertIn('jsonify({"ok": True', delete_route)
+        self.assertIn('jsonify({"ok": False', delete_route)
 
     def test_move_game_supports_existing_legacy_removed_database(self) -> None:
         namespace = extracted(

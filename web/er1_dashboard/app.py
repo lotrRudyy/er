@@ -5473,13 +5473,20 @@ def game_viewer() -> str:
 
 @app.post("/games/delete/<game_id>")
 def delete_game(game_id: str) -> Any:
+    fetch_request = request.headers.get("X-Requested-With", "").strip().lower() == "fetch"
     game_id = str(game_id or "").strip()
     if not game_id:
+        if fetch_request:
+            return jsonify({"ok": False, "error": "Spiel-ID fehlt."}), 400
         return redirect(url_for("game_viewer", error="Spiel-ID fehlt."))
     try:
         move_game_to_removed(game_id)
+        if fetch_request:
+            return jsonify({"ok": True, "message": "Spiel wurde gelöscht und in die Ablage verschoben."})
         return redirect(url_for("game_viewer", message=f"Spiel {game_id} wurde nach {REMOVED_GAMES_DIR} verschoben."))
     except Exception as exc:
+        if fetch_request:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         return redirect(url_for("game_viewer", error=str(exc), game_id=game_id))
 
 @app.post("/api/db/update")
