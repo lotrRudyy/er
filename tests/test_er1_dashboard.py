@@ -45,6 +45,7 @@ def extracted(*names: str) -> dict[str, Any]:
     namespace: dict[str, Any] = {
         "Any": Any,
         "Path": Path,
+        "closing": contextlib.closing,
         "datetime": datetime,
         "timedelta": timedelta,
         "timezone": timezone,
@@ -120,6 +121,113 @@ class JsonResponse(dict):
     def __init__(self, payload: dict[str, Any]) -> None:
         super().__init__(payload)
         self.headers: dict[str, str] = {}
+
+
+class GameDeletionTests(unittest.TestCase):
+    def test_delete_form_posts_without_browser_native_confirmation(self) -> None:
+        html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
+        form_start = html.index('<form method="post" action="{{ url_for(\'delete_game\'')
+        form_end = html.index("</form>", form_start)
+        delete_form = html[form_start:form_end]
+        self.assertIn('type="submit"', delete_form)
+        self.assertNotIn("confirm(", delete_form)
+        self.assertNotIn("onsubmit=", delete_form)
+
+    def test_move_game_supports_existing_legacy_removed_database(self) -> None:
+        namespace = extracted(
+            "_table_exists",
+            "_table_columns",
+            "_ensure_missing_columns",
+            "_fallback_value_for_missing_column",
+            "_build_insert_payload_for_dst",
+            "_insert_copied_db_row",
+            "_ensure_table_schema",
+            "move_game_to_removed",
+        )
+        namespace["sqlite3"] = sqlite3
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            current_db = base / "game_master.sqlite3"
+            removed_dir = base / "removed"
+            removed_dir.mkdir()
+            removed_db = removed_dir / "game_master.sqlite3"
+
+            with contextlib.closing(sqlite3.connect(current_db)) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE games (
+                        id TEXT PRIMARY KEY, date TEXT NOT NULL,
+                        started_at TEXT NOT NULL, ended_at TEXT, duration_s REAL,
+                        players_count INTEGER NOT NULL DEFAULT 0,
+                        hint_count INTEGER NOT NULL DEFAULT 0,
+                        leaderboard_code TEXT
+                    );
+                    CREATE TABLE game_riddles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        game_id TEXT NOT NULL, riddle_key TEXT NOT NULL,
+                        solve_time_s REAL NOT NULL DEFAULT 0,
+                        hint_count INTEGER NOT NULL DEFAULT 0,
+                        hints TEXT NOT NULL DEFAULT '', skipped INTEGER NOT NULL DEFAULT 0,
+                        not_solved INTEGER NOT NULL DEFAULT 0,
+                        UNIQUE(game_id, riddle_key)
+                    );
+                    INSERT INTO games VALUES ('target', '2026-10-12', '2026-10-12T10:00:00Z',
+                        '2026-10-12T11:00:00Z', 3600, 4, 1, 'ABC123');
+                    INSERT INTO game_riddles
+                        (game_id, riddle_key, solve_time_s, hint_count, hints, skipped, not_solved)
+                    VALUES ('target', 'images', 42, 1, '[]', 0, 0);
+                    """
+                )
+                conn.commit()
+
+            with contextlib.closing(sqlite3.connect(removed_db)) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE games (
+                        id TEXT PRIMARY KEY, date TEXT NOT NULL,
+                        started_at TEXT NOT NULL, ended_at TEXT, duration_s REAL,
+                        player_names_json TEXT NOT NULL,
+                        hint_count INTEGER NOT NULL DEFAULT 0,
+                        players_count INTEGER NOT NULL DEFAULT 0,
+                        leaderboard_code TEXT
+                    );
+                    CREATE TABLE game_riddles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        game_id TEXT NOT NULL, riddle TEXT NOT NULL,
+                        source TEXT NOT NULL, activated_at TEXT, solved_at TEXT,
+                        solve_time_from_run_start_s REAL,
+                        solve_time_from_activation_s REAL,
+                        solved INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO games VALUES ('old', '2026-01-01', '2026-01-01T10:00:00Z',
+                        '2026-01-01T11:00:00Z', 3600, '[]', 0, 2, NULL);
+                    INSERT INTO game_riddles (game_id, riddle, source, solved)
+                    VALUES ('old', 'images', 'phase', 1);
+                    """
+                )
+                conn.commit()
+
+            namespace.update({
+                "GAME_DB_PATH": current_db,
+                "REMOVED_GAMES_DIR": removed_dir,
+                "REMOVED_GAME_DB_PATH": removed_db,
+            })
+            namespace["move_game_to_removed"]("target")
+
+            with contextlib.closing(sqlite3.connect(current_db)) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM games").fetchone()[0], 0)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM game_riddles").fetchone()[0], 0)
+            with contextlib.closing(sqlite3.connect(removed_db)) as conn:
+                archived = conn.execute(
+                    "SELECT player_names_json, players_count FROM games WHERE id = 'target'"
+                ).fetchone()
+                self.assertEqual(archived, ("[]", 4))
+                copied_riddle = conn.execute(
+                    "SELECT game_id, riddle, source, riddle_key, solve_time_s "
+                    "FROM game_riddles WHERE game_id = 'target'"
+                ).fetchone()
+                self.assertEqual(copied_riddle, ("target", "", "", "images", 42.0))
 
 
 def booking_namespace() -> dict[str, Any]:

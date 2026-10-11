@@ -3481,7 +3481,7 @@ def move_game_to_removed(game_id: str) -> None:
 
     REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(GAME_DB_PATH) as src, sqlite3.connect(REMOVED_GAME_DB_PATH) as dst:
+    with closing(sqlite3.connect(GAME_DB_PATH)) as src, closing(sqlite3.connect(REMOVED_GAME_DB_PATH)) as dst:
         src.row_factory = sqlite3.Row
         dst.row_factory = sqlite3.Row
 
@@ -6762,7 +6762,7 @@ def move_game_to_removed(game_id: str) -> None:
     if not GAME_DB_PATH.exists():
         raise FileNotFoundError(f"Datenbank nicht gefunden: {GAME_DB_PATH}")
     REMOVED_GAMES_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(GAME_DB_PATH) as src, sqlite3.connect(REMOVED_GAME_DB_PATH) as dst:
+    with closing(sqlite3.connect(GAME_DB_PATH)) as src, closing(sqlite3.connect(REMOVED_GAME_DB_PATH)) as dst:
         src.row_factory = sqlite3.Row
         dst.row_factory = sqlite3.Row
         game_row = src.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()

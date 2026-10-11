@@ -76,7 +76,7 @@
             <td>
               <div class="game-actions-cell">
                 <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Öffnen</a>
-                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" onsubmit="return confirm('Spiel {{ row.id }} wirklich in die Ablage für entfernte Spiele verschieben?');">
+                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}">
                   <button type="submit" class="danger-button">Löschen</button>
                 </form>
               </div>

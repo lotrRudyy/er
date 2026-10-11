@@ -4,7 +4,7 @@
 
 Keep ER1 game control fully usable on the local LAN, remove start and time-edit
 race conditions, align booking and riddle behavior with operator expectations,
-and add a bounded maintainable Dashboard log archive.
+and provide reliable game-history and bounded log-archive operations.
 
 ## 2. Functions And Behavior
 
@@ -12,29 +12,41 @@ and add a bounded maintainable Dashboard log archive.
   ranking network work must never block local monitoring or game controls.
 - Confirmed Start keeps the existing five-second countdown. Preparation has no
   running timer.
-- Exactly one riddle-time editor can be open. It survives live snapshots while
-  open, keeps the selected adjustment until Save, and shows Previous above Next.
-- The measured time before the first manual correction and the cumulative
-  correction relationships remain durable. An undo button beside the time gear
-  restores that baseline without discarding later independent corrections.
+- Exactly one compact riddle-time editor can be open. It survives live snapshots,
+  uses a large centered `MM:SS` input, shows the affected previous riddle as
+  `Name: old -> new`, places Save directly beside it, and submits on Enter.
+- Manual riddle-time edits must never change total game time. The time undo
+  feature is removed completely.
 - Time inputs use fixed `MM:SS`. Focus selects minutes; two typed minute digits
   select seconds. The same duration editor is used for hint thresholds.
-- The current-booking card follows the supplied desktop reference layout.
-- The Stars live box always shows the full solution text above Current:
-  `Waage ♎ (7), Wassermann ♒ (13), Skorpion ♏ (10), Zwillinge ♊ (7),`
-  `Schütze ♐ (10), Löwe ♌ (10), Fische ♓ (13)`.
-- Prison and Wheel remain timed progression stages. Chains alone decides the
-  shared outcome: solved Chains marks all three solved; otherwise all three are
-  skipped. Existing individual times and hint counts remain intact.
-- Booking choices contain only confirmed appointments that are still upcoming
-  or whose one-hour slot is currently running in Europe/Rome. Cancelled,
-  deleted, completed, malformed, unconfirmed, refunded, failed, and ended
-  appointments are excluded.
+- Remove the `Phase, Zeit und Buchung` heading and move `Phase X - Name` upward.
+  The booking card uses three compact columns: date/time, name, email on the
+  left; players and language in the middle; a centered icon plus `Buchung
+  ändern` action on the right.
+- Candles live data shows `Lösung: 2413`.
+- Stars live data shows a seven-row Name/Symbol/Star-count table on the left.
+  On the right, solution and current positions use symbols only, correct current
+  positions are green, and comma-separated attempts are manually scrollable
+  without automatic downward scrolling.
+- Prison and Wheel remain timed progression stages but their operator outcome
+  can be changed independently like other riddles. Their outcome does not count
+  toward the authoritative solved-riddle result.
+- Booking choices contain only eligible confirmed appointments on the current
+  Europe/Rome calendar day. Cancelled, deleted, completed, malformed,
+  unconfirmed, refunded, and failed appointments are excluded.
 - Hint thresholds are labeled `Seit Spielstart` and `Seit Raetselstart`, use
   `MM:SS`, and mark a hint due when either configured threshold is reached.
   Hints are not sent automatically.
 - Admin exposes durable Dashboard log history and a maintained node/log-level
   capability reference.
+- The control-page log is searchable inside a bounded, manually scrollable
+  container.
+- Hint templates are editable in Off phase as well as Maintenance. Saving the
+  German text also translates and stores English and Italian versions.
+- Lighting and lock controls follow the supplied reference composition and
+  visual states.
+- Deleting a saved game reliably moves it to the removed-games database without
+  relying on a browser-native confirmation dialog.
 
 ## 3. Scope And Exclusions
 
@@ -53,10 +65,10 @@ implicit in implementation; those require their normal explicit boundaries.
 - Use one native auto popover and bind edit protection to its open lifetime.
 - Keep backend time parsing compatible while presenting a strict integer
   `00:00` through `99:59` editor.
-- Store the first pre-correction value and bounded outgoing adjustment deltas in
-  the authoritative run/checkpoint and restore them through an idempotent Game
-  Master command. A later direct edit supersedes older incoming adjustments.
-- Enforce the three-riddle outcome invariant in Game Master code, not only UI.
+- Keep riddle-time edits server-authoritative while preserving total game time;
+  do not expose a restore/undo mutation.
+- Keep Prison and Wheel outcome controls independent while excluding their
+  outcome from the solved-result calculation.
 - Filter booking eligibility server-side with shared Europe/Rome rules.
 - Store logs as bounded daily/25-MiB JSONL segments in an environment-configured
   directory. Retain 30 days, enforce a 256-MiB aggregate cap, and never delete
@@ -79,11 +91,13 @@ implicit in implementation; those require their normal explicit boundaries.
 
 1. Fix Start gating, popover lifetime/exclusivity, segmented duration input,
    booking card, Stars solution, and cache versions.
-2. Persist and expose original riddle times and add server-authoritative undo.
-3. Enforce Chains group outcomes in Game Master and adapt Dashboard controls.
-4. Add completed-booking filtering and hint due-state calculation/rendering.
-5. Add the JSONL sink, operator/server integration, archive APIs, Admin archive
+2. Add completed-booking filtering and hint due-state calculation/rendering.
+3. Add the JSONL sink, operator/server integration, archive APIs, Admin archive
    UI, retention controls, and node-level capability reference.
+4. Repair game deletion first, with a database backup and focused regression
+   tests before deployment.
+5. In a separate revision, remove time undo and implement the queued control,
+   booking, riddle-live-data, same-day booking, hint, and log UI changes.
 6. Add focused unit/source tests, then run full Python/Node/syntax gates.
 7. Perform visual browser verification only after separate action-specific
    approval.
@@ -94,10 +108,12 @@ implicit in implementation; those require their normal explicit boundaries.
   game on the existing five-second countdown.
 - Local control and `/api/state` remain usable when website/ranking hosts fail.
 - Time and booking interactions match the agreed desktop/mobile behavior.
-- The first measured riddle time survives later edits and restart and can be
-  restored from the adjacent undo control.
-- Prison/Wheel/Chains outcomes cannot diverge in new or corrected runs.
-- Ineligible past bookings never appear in fresh or cached lists.
+- A riddle-time edit never changes total game time, and no undo control or
+  restore endpoint remains.
+- Prison and Wheel can be marked independently without changing the counted
+  solved-riddle result.
+- Only eligible bookings from the current Europe/Rome day appear in fresh or
+  cached lists.
 - Due hints are deterministic and never auto-send.
 - Logs survive restart, remain within age/size bounds, are safely searchable and
   maintainable in Admin, and failures never stop game control.
@@ -108,20 +124,22 @@ implicit in implementation; those require their normal explicit boundaries.
 - Fixed two-digit minute entry, then automatic seconds selection: accepted.
 - JSONL, 30 days, 25-MiB rollover, 256-MiB cap: accepted.
 - Hint editor plus due marking, no automatic sending: accepted.
-- Chains is authoritative for the Prison/Wheel/Chains outcome: required.
-- Original riddle time means the value before the first manual correction; it
-  is not overwritten by later corrections or by restoring it: accepted.
+- Independent Prison and Wheel operator status, excluded from counted results:
+  accepted; this supersedes the Chains group-outcome decision.
+- Remove time undo and guarantee invariant total game time during every manual
+  riddle-time edit: accepted; this supersedes original-time restoration.
+- Automatic German-to-English/Italian hint translation is required. The
+  translation mechanism and failure behavior remain an implementation decision
+  for that later revision.
 
 ## 9. Ideas Parking Lot
 
-- Accepted, deferred: align the control-room visuals with the supplied reference
-  screenshots in a separate change. Preserve the compact booking hierarchy
-  (date/time and players; name and language; email; outlined edit action), use
-  larger dark lighting scene tiles with clear active orange/purple states,
-  separate slider labels/value percentages/actions, and render lock controls as
-  larger neutral/red/green state cards with Room 2 closed and Room 3 open styling.
-  The supplied full-dashboard reference is the composition target for spacing,
-  typography, panel density, tables, current-riddle/tip area, nodes, and log.
+- Accepted, queued after game deletion: implement the compact phase/booking
+  hierarchy, larger time editor, Candles solution, symbol-based Stars table and
+  attempt list, same-day bookings, independent Prison/Wheel controls, reference
+  lighting/lock cards, Off-phase hint editing with DE-to-EN/IT translation, and
+  searchable scrollable control logs. The supplied screenshots are the visual
+  target for spacing, typography, panel density, state colors, and control sizes.
 - Proposed: authenticate Admin actions and record trustworthy operator identity.
 - Proposed: firmware acknowledgment of active log level.
 - Proposed: compressed closed log segments.
@@ -129,7 +147,7 @@ implicit in implementation; those require their normal explicit boundaries.
 
 ## 10. Current Status And Next Step
 
-Implementation is complete locally. The full automated gate passes with 146
-Python tests and 7 Node tests, plus Python/JavaScript syntax and whitespace
-checks. Visual browser verification, commit, push, and deployment remain pending
-their separate explicit approvals.
+Commit `2ec80dbb` and the isolated saved-game deletion repair are deployed. The
+repair has a fresh production backup and passes the full 148-test Python suite.
+All other newly accepted behavior and visual changes above remain queued for a
+separate revision.
