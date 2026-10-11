@@ -107,6 +107,42 @@ function bindViewerEditors(scope = document) {
       if (row) saveRow(row);
     });
   });
+
+  scope.querySelectorAll('form[data-delete-game]').forEach((form) => {
+    if (form.dataset.bound === 'true') return;
+    form.dataset.bound = 'true';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (form.dataset.busy === 'true') return;
+
+      const button = form.querySelector('button[type="submit"]');
+      form.dataset.busy = 'true';
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Löscht...';
+      }
+
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: {
+            Accept: 'text/html',
+            'X-Requested-With': 'fetch',
+          },
+          credentials: 'same-origin',
+        });
+        if (!response.ok) throw new Error(`Löschen fehlgeschlagen (HTTP ${response.status})`);
+        window.location.assign('/games');
+      } catch (error) {
+        form.dataset.busy = 'false';
+        if (button) {
+          button.disabled = false;
+          button.textContent = 'Löschen';
+        }
+        showStatus(error.message || String(error), 'error');
+      }
+    });
+  });
 }
 
 function placeGameDetailsBelowSelectedRow() {

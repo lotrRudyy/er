@@ -130,8 +130,17 @@ class GameDeletionTests(unittest.TestCase):
         form_end = html.index("</form>", form_start)
         delete_form = html[form_start:form_end]
         self.assertIn('type="submit"', delete_form)
+        self.assertIn("data-delete-game", delete_form)
         self.assertNotIn("confirm(", delete_form)
         self.assertNotIn("onsubmit=", delete_form)
+
+        javascript = GAME_VIEWER_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn("form[data-delete-game]", javascript)
+        self.assertIn("event.preventDefault()", javascript)
+        self.assertIn("fetch(form.action", javascript)
+        self.assertIn("credentials: 'same-origin'", javascript)
+        self.assertIn("window.location.assign('/games')", javascript)
+        self.assertNotRegex(html, r"\{%\s*if game\s*%\}\s*<script[^>]+game_viewer\.js")
 
     def test_move_game_supports_existing_legacy_removed_database(self) -> None:
         namespace = extracted(

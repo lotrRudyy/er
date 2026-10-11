@@ -76,7 +76,7 @@
             <td>
               <div class="game-actions-cell">
                 <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Öffnen</a>
-                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}">
+                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" data-delete-game>
                   <button type="submit" class="danger-button">Löschen</button>
                 </form>
               </div>
@@ -198,8 +198,6 @@
     {% endif %}
   </div>
 
-  {% if game %}
-  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261003-inline-editor"></script>
-  {% endif %}
+  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261011-delete-fetch-v2"></script>
 </body>
 </html>
