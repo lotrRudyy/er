@@ -5914,6 +5914,9 @@ def api_riddle_time() -> Any:
     riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
     if not riddle:
         return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
+    adjustment_side = str(data.get("adjustment_side") or "").strip().lower()
+    if adjustment_side not in {"previous", "next"}:
+        return jsonify({"ok": False, "error": "Bitte vorheriges oder nächstes Rätsel für den Zeitausgleich auswählen."}), 400
     raw_value = data.get("time_text", data.get("time", data.get("solve_time_s", data.get("seconds", 0))))
     try:
         seconds = parse_mmss_input(raw_value)
@@ -5927,21 +5930,31 @@ def api_riddle_time() -> Any:
             "ok": False,
             "error": "Rätselzeiten können erst während oder nach einem gestarteten Spiel geändert werden.",
         }), 409
-    current_row = next((row for row in (store.snapshot().get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
-    if current_row and str(current_row.get("phase_state") or "pending") == "pending":
-        return jsonify({"ok": False, "error": "Die Zeit eines noch nicht erreichten Rätsels kann nicht geändert werden."}), 400
+    snapshot = store.snapshot()
+    current_row = next((row for row in (snapshot.get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
+    if current_row:
+        phase_state = str(current_row.get("phase_state") or "pending")
+        if phase_state == "pending":
+            return jsonify({"ok": False, "error": "Die Zeit eines noch nicht erreichten Rätsels kann nicht geändert werden."}), 400
+        if phase_state not in {"solved", "skipped", "not_solved"}:
+            return jsonify({"ok": False, "error": "Die Zeit kann erst nach Abschluss des Rätsels korrigiert werden."}), 400
+    try:
+        build_riddle_time_preview(snapshot, riddle, seconds, adjustment_side)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     if not mqtt_publish(TOPIC_GAME_CMD, {
         "cmd": "set_riddle_time",
         "riddle": riddle,
         "solve_time_s": round(seconds, 3),
+        "adjustment_side": adjustment_side,
         "expected_phase": data["expected_phase"],
         "expected_run_id": data["expected_run_id"].strip(),
     }):
         return jsonify({"ok": False, "error": "Die Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
-    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "mqtt_queued": True})
+    return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "adjustment_side": adjustment_side, "mqtt_queued": True})
 
 
-def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float) -> dict[str, Any]:
+def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float, adjustment_side: str) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         raise ValueError("Der aktuelle Dashboard-Zustand ist ungültig.")
     raw_rows = snapshot.get("riddles") if isinstance(snapshot.get("riddles"), list) else []
@@ -5965,6 +5978,7 @@ def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float) -
         solve_time_s,
         times,
         statuses,
+        adjustment_side=adjustment_side,
         max_time_s=MAX_RIDDLE_TIME_PREVIEW_S,
     )
 
@@ -5992,6 +6006,7 @@ def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float) -
     return {
         "source": source,
         "receiving": receiving,
+        "adjustment_side": correction["adjustment_side"],
         "source_stage_delta_s": correction["source_stage_delta_s"],
     }
 
@@ -6002,6 +6017,7 @@ def api_riddle_time_preview() -> Any:
         data = {
             "riddle": request.args.get("riddle", ""),
             "time_text": request.args.get("time_text", ""),
+            "adjustment_side": request.args.get("adjustment_side", ""),
             "expected_phase": int(request.args.get("expected_phase", "")),
             "expected_run_id": request.args.get("expected_run_id", ""),
         }
@@ -6022,7 +6038,7 @@ def api_riddle_time_preview() -> Any:
     try:
         seconds = parse_mmss_input(raw_value)
         seconds = float(seconds) if seconds is not None else 0.0
-        preview = build_riddle_time_preview(store.snapshot(), riddle, seconds)
+        preview = build_riddle_time_preview(store.snapshot(), riddle, seconds, data["adjustment_side"])
     except (TypeError, ValueError) as exc:
         return _no_store_json({"ok": False, "error": str(exc)}, 400)
     return _no_store_json({"ok": True, **preview})

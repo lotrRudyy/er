@@ -5,12 +5,12 @@ Single-page Flask dashboard for ER1.
 ## Features
 - Game mode buttons for the 4 current modes
 - Timer that counts up from the current run start
-- Booking selector that pulls customer email and player count from the website
+- Booking selector that pulls customer email, player count, and language from the website and remains available during a live game
 - Password-based SSH/SFTP booking sync via Paramiko, no local ssh/scp binary required
 - Test booking with editable email/player count
 - Lock controls that honor the retained pulse cooldown and boot-guard state
 - Light group controls
-- Immediate solve, confirmed skip, and minimum-one-second riddle time correction controls
+- Immediate solve, confirmed skip, and minimum-one-second riddle time corrections with a previewed transfer to the adjacent previous or next stage
 - Maintenance-only hint-template editor backed by atomic local persistence
 - Whitelisted physical-node restart controls using `<node>/sys/cmd` with the plain `REBOOT` payload
 - Confirmed manual bulk restart in phase 0; individual physical nodes remain restartable in other phases except for the maglock controller. The Game Master also schedules the same command every 14 days at 04:00 Europe/Rome and waits for phase 0 if necessary

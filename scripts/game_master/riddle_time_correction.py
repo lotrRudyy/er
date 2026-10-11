@@ -26,6 +26,7 @@ def plan_riddle_time_change(
     times_by_riddle: Mapping[str, Any],
     statuses_by_riddle: Mapping[str, Any],
     *,
+    adjustment_side: str,
     max_time_s: float,
 ) -> dict[str, Any]:
     """Plan a correction without mutating timing state."""
@@ -36,6 +37,9 @@ def plan_riddle_time_change(
         source_stage_index = next(index for index, stage in enumerate(RIDDLE_STAGES) if riddle in stage)
     except StopIteration as exc:
         raise ValueError(f"Unknown riddle: {riddle}") from exc
+    adjustment_side = str(adjustment_side or "").strip().lower()
+    if adjustment_side not in {"previous", "next"}:
+        raise ValueError("adjustment_side must be previous or next")
 
     raw_seconds = float(solve_time_s)
     if not math.isfinite(raw_seconds) or not 1.0 <= raw_seconds <= max_time_s:
@@ -60,6 +64,8 @@ def plan_riddle_time_change(
     source_status = statuses[riddle]
     if source_status == "pending":
         raise ValueError(f"Cannot set time for pending riddle: {riddle}")
+    if source_status not in FINAL_RIDDLE_STATUSES:
+        raise ValueError(f"Cannot set time for active riddle: {riddle}")
 
     source_previous_s = times[riddle]
     source_stage = RIDDLE_STAGES[source_stage_index]
@@ -72,34 +78,37 @@ def plan_riddle_time_change(
     target_riddle: str | None = None
     target_previous_s: float | None = None
     target_new_s: float | None = None
-    if source_status in FINAL_RIDDLE_STATUSES and abs(stage_delta_s) >= 0.0005:
-        for target_stage in RIDDLE_STAGES[source_stage_index + 1:]:
-            reached = [key for key in target_stage if statuses[key] != "pending"]
-            if not reached:
-                continue
-            target_riddle = max(reached, key=lambda key: times[key])
-            target_previous_s = times[target_riddle]
-            target_stage_previous_s = max(times[key] for key in reached)
-            desired_stage_s = round(target_stage_previous_s - stage_delta_s, 3)
-            if desired_stage_s < 1.0:
-                raise ValueError(
-                    f"Time correction would reduce receiving riddle {target_riddle} below 1 second"
-                )
-            sibling_floor_s = max(
-                (times[key] for key in reached if key != target_riddle),
-                default=0.0,
+    if abs(stage_delta_s) >= 0.0005:
+        target_stage_index = source_stage_index + (-1 if adjustment_side == "previous" else 1)
+        if not 0 <= target_stage_index < len(RIDDLE_STAGES):
+            raise ValueError(f"The {adjustment_side} riddle stage does not exist")
+        target_stage = RIDDLE_STAGES[target_stage_index]
+        reached = [key for key in target_stage if statuses[key] != "pending"]
+        if not reached:
+            raise ValueError(f"The {adjustment_side} riddle stage has not been reached")
+        target_riddle = max(reached, key=lambda key: times[key])
+        target_previous_s = times[target_riddle]
+        target_stage_previous_s = max(times[key] for key in reached)
+        desired_stage_s = round(target_stage_previous_s - stage_delta_s, 3)
+        if desired_stage_s < 1.0:
+            raise ValueError(
+                f"Time correction would reduce receiving riddle {target_riddle} below 1 second"
             )
-            if desired_stage_s < sibling_floor_s:
-                raise ValueError(
-                    f"Time correction cannot reduce parallel receiving stage below {sibling_floor_s:.3f} seconds"
-                )
-            if desired_stage_s > max_time_s:
-                raise ValueError("receiving riddle time exceeds the recoverable range")
-            target_new_s = desired_stage_s
-            break
+        sibling_floor_s = max(
+            (times[key] for key in reached if key != target_riddle),
+            default=0.0,
+        )
+        if desired_stage_s < sibling_floor_s:
+            raise ValueError(
+                f"Time correction cannot reduce parallel receiving stage below {sibling_floor_s:.3f} seconds"
+            )
+        if desired_stage_s > max_time_s:
+            raise ValueError("receiving riddle time exceeds the recoverable range")
+        target_new_s = desired_stage_s
 
     return {
         "source_riddle": riddle,
+        "adjustment_side": adjustment_side,
         "source_previous_s": source_previous_s,
         "source_new_s": seconds,
         "source_delta_s": round(seconds - source_previous_s, 3),

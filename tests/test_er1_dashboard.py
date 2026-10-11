@@ -554,13 +554,14 @@ class DashboardMutationTests(unittest.TestCase):
             "jsonify": JsonResponse,
             "_stale_action_response": lambda _data: None,
             "_canonical_riddle_name": lambda value: str(value),
-            "store": types.SimpleNamespace(snapshot=lambda: {"riddles": [{"id": "images", "phase_state": "active"}]}),
+            "store": types.SimpleNamespace(snapshot=lambda: {"riddles": [{"id": "images", "phase_state": "solved"}]}),
+            "build_riddle_time_preview": lambda *_args: {},
             "TOPIC_GAME_CMD": "game/cmd",
             "mqtt_publish": lambda topic, payload: published.append((topic, payload)) or True,
         })
         for value in ("0", "-1", "00:00"):
             namespace["request"] = types.SimpleNamespace(
-                get_json=lambda force, value=value: {"riddle": "images", "time_text": value}
+                get_json=lambda force, value=value: {"riddle": "images", "time_text": value, "adjustment_side": "next"}
             )
             response, status = namespace["api_riddle_time"]()
             self.assertEqual(status, 400)
@@ -571,6 +572,7 @@ class DashboardMutationTests(unittest.TestCase):
             get_json=lambda force: {
                 "riddle": "images",
                 "time_text": "1",
+                "adjustment_side": "next",
                 "expected_phase": 10,
                 "expected_run_id": "run-10",
             }
@@ -578,6 +580,7 @@ class DashboardMutationTests(unittest.TestCase):
         response = namespace["api_riddle_time"]()
         self.assertEqual(response["solve_time_s"], 1.0)
         self.assertEqual(published[-1][1]["solve_time_s"], 1.0)
+        self.assertEqual(published[-1][1]["adjustment_side"], "next")
         self.assertEqual(published[-1][1]["expected_phase"], 10)
         self.assertEqual(published[-1][1]["expected_run_id"], "run-10")
 
@@ -738,6 +741,7 @@ class DashboardMutationTests(unittest.TestCase):
             "request": types.SimpleNamespace(get_json=lambda force: {
                 "riddle": "images",
                 "time_text": "12",
+                "adjustment_side": "next",
                 **guard,
             }),
             "jsonify": JsonResponse,
@@ -1071,34 +1075,41 @@ class DashboardPreviewTests(unittest.TestCase):
         rows["magnet"].update({"label": "Magnet", "display_time_s": 100, "phase_state": "solved"})
         rows["chess"].update({"label": "Schach", "display_time_s": 60, "phase_state": "active"})
 
-        result = preview(snapshot, "tangram", 90)
+        result = preview(snapshot, "tangram", 90, "next")
         self.assertEqual(result, {
             "source": {"riddle_id": "tangram", "label": "Tangram", "old_time_s": 120.0, "new_time_s": 90.0},
             "receiving": {"riddle_id": "chess", "label": "Schach", "old_time_s": 60.0, "new_time_s": 80.0},
+            "adjustment_side": "next",
             "source_stage_delta_s": -20.0,
         })
 
-        unchanged_stage = preview(snapshot, "magnet", 90)
+        unchanged_stage = preview(snapshot, "magnet", 90, "next")
         self.assertEqual(unchanged_stage["source"]["new_time_s"], 90.0)
         self.assertEqual(unchanged_stage["source_stage_delta_s"], 0.0)
         self.assertIsNone(unchanged_stage["receiving"])
 
-    def test_riddle_time_preview_uses_next_reached_stage_and_enforces_parallel_floor(self) -> None:
+    def test_riddle_time_preview_uses_selected_adjacent_stage_and_enforces_parallel_floor(self) -> None:
         preview = self.riddle_preview_namespace()["build_riddle_time_preview"]
         snapshot = self.snapshot()
         rows = {row["id"]: row for row in snapshot["riddles"]}
         rows["wheel"].update({"display_time_s": 100, "phase_state": "solved"})
-        rows["chess"].update({"label": "Schach", "display_time_s": 40, "phase_state": "active"})
-        result = preview(snapshot, "wheel", 90)
+        rows["chains"].update({"label": "Ketten", "display_time_s": 40, "phase_state": "active"})
+        result = preview(snapshot, "wheel", 90, "next")
         self.assertEqual(result["receiving"], {
-            "riddle_id": "chess", "label": "Schach", "old_time_s": 40.0, "new_time_s": 50.0,
+            "riddle_id": "chains", "label": "Ketten", "old_time_s": 40.0, "new_time_s": 50.0,
+        })
+
+        rows["prison"].update({"label": "Gefängnis", "display_time_s": 30, "phase_state": "solved"})
+        previous = preview(snapshot, "wheel", 80, "previous")
+        self.assertEqual(previous["receiving"], {
+            "riddle_id": "prison", "label": "Gefängnis", "old_time_s": 30.0, "new_time_s": 50.0,
         })
 
         rows["chains"].update({"display_time_s": 100, "phase_state": "solved"})
         rows["tangram"].update({"display_time_s": 80, "phase_state": "active"})
         rows["magnet"].update({"display_time_s": 60, "phase_state": "active"})
         with self.assertRaisesRegex(ValueError, "parallel receiving stage below 60.000"):
-            preview(snapshot, "chains", 130)
+            preview(snapshot, "chains", 130, "next")
 
     def test_riddle_time_preview_route_is_guarded_read_only_and_not_receipted(self) -> None:
         namespace = extracted("_no_store_json", "api_riddle_time_preview")
@@ -1116,15 +1127,17 @@ class DashboardPreviewTests(unittest.TestCase):
             "request": types.SimpleNamespace(args={
                 "riddle": "chess",
                 "time_text": "12.5",
+                "adjustment_side": "previous",
                 "expected_phase": "9",
                 "expected_run_id": "run-live",
             }),
             "_stale_action_response": lambda _data: None,
             "_canonical_riddle_name": lambda value: str(value or ""),
             "parse_mmss_input": lambda value: float(value),
-            "build_riddle_time_preview": lambda value, riddle, seconds: {
+            "build_riddle_time_preview": lambda value, riddle, seconds, adjustment_side: {
                 "source": {"riddle_id": riddle, "old_time_s": 10, "new_time_s": seconds},
                 "receiving": None,
+                "adjustment_side": adjustment_side,
                 "source_stage_delta_s": 2.5,
             } if value == {"snapshot": True} else None,
         })
@@ -1198,10 +1211,10 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("event.key === 'Enter'", javascript)
         self.assertIn("event.key === 'Escape'", javascript)
         self.assertNotIn("bookingConfirmDialog", javascript + html)
-        self.assertIn(">Gelöst</button>", javascript)
-        self.assertIn(">Überspringen</button>", javascript)
+        self.assertIn(" Gelöst</button>", javascript)
+        self.assertIn(" Überspringen</button>", javascript)
         self.assertIn("/api/riddle-time-preview", javascript)
-        self.assertIn(">OK</button>", javascript)
+        self.assertIn(">Vorschau</button>", javascript)
         self.assertIn("card.querySelector('.light-bulb-button')", javascript)
         self.assertIn("fmtEditableTime(seconds)", javascript)
         self.assertIn("controlViewActive && gameMode", javascript)
@@ -1220,6 +1233,12 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("confirmAction", javascript[solve_start:solve_end])
         self.assertIn("confirmAction", javascript[start_start:start_end])
         self.assertIn("confirmAction", javascript[time_start:time_end])
+        hint_start = javascript.index("async function changeHint")
+        hint_end = javascript.index("function bindRiddleActions", hint_start)
+        status_start = javascript.index("async function togglePastOutcome")
+        status_end = javascript.index("function buildCurrentRiddleCard", status_start)
+        self.assertNotIn("confirmAction", javascript[hint_start:hint_end])
+        self.assertNotIn("confirmAction", javascript[status_start:status_end])
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1286,7 +1305,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261011-dashboard-v7", html)
+        self.assertIn("app.js') }}?v=20261011-dashboard-v8", html)
 
     def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1321,7 +1340,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         actions_end = javascript.index("async function solveRiddle", actions_start)
         actions_source = javascript[actions_start:actions_end]
         self.assertIn("riddleMutationsAvailable()", actions_source)
-        self.assertIn(">Gelöst</button>", actions_source)
+        self.assertIn(" Gelöst</button>", actions_source)
         self.assertIn("canSkip ?", actions_source)
 
     def test_control_room_layout_contract_is_present(self) -> None:
@@ -1331,7 +1350,7 @@ class DashboardSourceContractTests(unittest.TestCase):
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v8", html)
+        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v9", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -1374,7 +1393,11 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("[hidden]", css)
         self.assertIn(".dashboard-preparation-mode .booking-card", css)
         self.assertIn(".dashboard-preparation-mode .mission-metrics", css)
-        self.assertIn("body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .field-label", css)
+        self.assertIn("body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails:not(.is-editing) .field-label", css)
+        self.assertIn('id="bookingEditBtn"', html)
+        self.assertIn('id="startAssignmentClose"', html)
+        self.assertIn('id="diagnosticsMqttStatus"', html)
+        self.assertNotIn('class="hint-template-heading"', javascript)
         self.assertNotIn(".dashboard-preparation-mode .control-workspace", css)
         self.assertIn("grid-template-columns: minmax(45px, 1fr) 72px;", css)
         self.assertIn('font: 17px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)

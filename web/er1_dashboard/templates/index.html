@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v8" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v9" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
@@ -36,9 +36,11 @@
       <div class="operator-clock"><span id="operatorDate"></span><strong id="operatorTime"></strong></div>
     </header>
 
-    <div id="globalFeedback" class="global-feedback global-feedback-v6" aria-live="polite"></div>
-    <div id="startAssignmentStatus" class="start-assignment-status hidden" aria-live="polite"></div>
-    <div id="summaryEmailFeedback" class="summary-email-feedback header-feedback"></div>
+    <div class="feedback-stack">
+      <div id="globalFeedback" class="global-feedback global-feedback-v6" aria-live="polite"><span id="globalFeedbackMessage"></span><button id="globalFeedbackClose" class="feedback-close" type="button" aria-label="Meldung schließen">&#215;</button></div>
+      <div id="startAssignmentStatus" class="start-assignment-status hidden" aria-live="polite"><span id="startAssignmentMessage"></span><button id="startAssignmentClose" class="feedback-close" type="button" aria-label="Zuordnungsmeldung schließen">&#215;</button></div>
+      <div id="summaryEmailFeedback" class="summary-email-feedback header-feedback"></div>
+    </div>
 
     {% if initial_view|default('control') == 'control' %}
     <main id="controlView" class="control-workspace">
@@ -46,7 +48,7 @@
         <div class="mission-grid">
           <div class="mission-rail">
             <section class="panel-v6 phase-overview" aria-labelledby="phaseHeading">
-              <div class="panel-heading-v6"><h1 id="phaseHeading">Phase, Zeit und Buchung</h1></div>
+              <div class="panel-heading-v6"><h1 id="phaseHeading"><span class="heading-icon" aria-hidden="true">&#9881;</span> Phase, Zeit und Buchung</h1></div>
               <div id="phaseValue" class="phase-current">Phase 0 · Aus</div>
               <div class="mission-metrics">
                 <div><span>Gesamtspielzeit</span><strong id="timerValue">00:00</strong></div>
@@ -66,8 +68,8 @@
 
             <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
               <div class="panel-heading-v6">
-                <h2 id="bookingHeading">Buchung</h2>
-                <span id="bookingCompactValue" class="booking-state">Keine Buchung</span>
+                <h2 id="bookingHeading">Aktuelle Buchung</h2>
+                <div class="booking-heading-actions"><span id="bookingCompactValue" class="booking-state">Keine Buchung</span><button id="bookingEditBtn" class="booking-edit-button hidden" type="button">Buchung ändern</button></div>
               </div>
               <div class="booking-details-body">
                 <label class="field-label" for="bookingSelect">Buchung auswählen</label>
@@ -97,7 +99,7 @@
 
         <section id="allRiddlesPanel" class="panel-v6 all-riddles-panel" aria-labelledby="allRiddlesHeading">
           <div class="panel-heading-v6 table-heading-v6">
-            <h2 id="allRiddlesHeading">Alle Rätsel</h2>
+            <h2 id="allRiddlesHeading"><span class="heading-icon" aria-hidden="true">&#9776;</span> Alle Rätsel</h2>
             <span id="riddleProgressValue" class="table-progress">0 abgeschlossen / 12</span>
           </div>
           <div class="table-scroll-wrap">
@@ -111,7 +113,7 @@
 
       <aside class="control-technical" aria-label="Raumsteuerung">
         <section class="panel-v6 technical-panel lights-panel-v6">
-          <div class="technical-heading"><span aria-hidden="true">&#9728;</span><h2>Lichtsteuerung</h2></div>
+          <div class="technical-heading"><span aria-hidden="true">&#128161;</span><h2>Lichtsteuerung</h2></div>
           <div id="lightsGrid" class="lights-grid-v6"></div>
         </section>
 
@@ -121,13 +123,13 @@
         </section>
 
         <section class="panel-v6 technical-panel nodes-panel-v6">
-          <div class="technical-heading"><span aria-hidden="true">&#9673;</span><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
+          <div class="technical-heading"><span aria-hidden="true">&#9881;</span><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
           <div id="nodeStatusBar" class="node-list-v6"></div>
         </section>
 
         <section class="panel-v6 technical-panel operator-log-panel">
           <div class="operator-log-toolbar">
-            <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2></div>
+            <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2><span id="diagnosticsMqttStatus" class="mqtt-log-status is-pending"><span aria-hidden="true"></span> MQTT wird verbunden</span></div>
             <div class="operator-log-filters" role="group" aria-label="Log filtern">
               <button type="button" class="is-active" data-log-view="all">Alle</button>
               <button type="button" data-log-view="commands">Befehle</button>
@@ -220,6 +222,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v7"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v8"></script>
 </body>
 </html>

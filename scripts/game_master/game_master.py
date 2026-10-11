@@ -1882,7 +1882,8 @@ class GameMaster:
         if cmd in {"set_riddle_time", "set_solve_time"}:
             riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
             raw_seconds = payload.get("solve_time_s", payload.get("time_s", payload.get("seconds")))
-            self.set_riddle_time(riddle, float(raw_seconds))
+            adjustment_side = str(payload.get("adjustment_side") or "").strip().lower()
+            self.set_riddle_time(riddle, float(raw_seconds), adjustment_side=adjustment_side)
             return
         if cmd in {"set_riddle_outcome", "set_outcome"}:
             riddle = self._canonical_riddle_name(str(payload.get("riddle", payload.get("node", ""))).strip())
@@ -2044,7 +2045,7 @@ class GameMaster:
         self.publish_game_state()
 
     @_serialized_mutation
-    def set_riddle_time(self, riddle: str, solve_time_s: float) -> None:
+    def set_riddle_time(self, riddle: str, solve_time_s: float, *, adjustment_side: str) -> None:
         riddle = self._canonical_riddle_name(riddle)
         if not riddle:
             raise ValueError("set_riddle_time requires riddle")
@@ -2070,6 +2071,7 @@ class GameMaster:
                     for key, item in run.riddle_timings.items()
                 },
                 {key: item.status() for key, item in run.riddle_timings.items()},
+                adjustment_side=adjustment_side,
                 max_time_s=MAX_RECOVERABLE_ELAPSED_S,
             )
             self._set_timing_elapsed_locked(timing, correction["source_new_s"], now_mono)
@@ -2083,6 +2085,7 @@ class GameMaster:
             run.duration_s = self.db._compute_effective_duration_s(run)
         self._record_event("riddle_time_corrected", {
             "source_riddle": riddle,
+            "adjustment_side": correction["adjustment_side"],
             "source_previous_s": correction["source_previous_s"],
             "source_new_s": correction["source_new_s"],
             "source_delta_s": correction["source_delta_s"],

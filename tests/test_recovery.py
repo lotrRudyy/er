@@ -1006,19 +1006,19 @@ class RecoveryTestCase(unittest.TestCase):
 
         before = gm.state.to_game_state_payload()
         gm._enrich_dashboard_state_payload_locked(before)
-        gm.set_riddle_time("wheel", 90.0)
+        gm.set_riddle_time("wheel", 90.0, adjustment_side="next")
         self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 90.0)
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 90.0)
         after = gm.state.to_game_state_payload()
         gm._enrich_dashboard_state_payload_locked(after)
         self.assertAlmostEqual(after["run"]["live_duration_s"], before["run"]["live_duration_s"])
 
-        gm.set_riddle_time("wheel", 120.0)
+        gm.set_riddle_time("wheel", 120.0, adjustment_side="next")
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 60.0)
-        gm.set_riddle_time("wheel", 150.0)
+        gm.set_riddle_time("wheel", 150.0, adjustment_side="next")
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
         with self.assertRaisesRegex(ValueError, "below 1 second"):
-            gm.set_riddle_time("wheel", 180.0)
+            gm.set_riddle_time("wheel", 180.0, adjustment_side="next")
         run = gm.state.current_run
         self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 150.0)
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
@@ -1026,7 +1026,7 @@ class RecoveryTestCase(unittest.TestCase):
         for invalid in (0, -1, 0.999):
             with self.subTest(seconds=invalid):
                 with self.assertRaisesRegex(ValueError, "at least 1 second|between 1 second"):
-                    gm.set_riddle_time("chains", invalid)
+                    gm.set_riddle_time("chains", invalid, adjustment_side="next")
         event = run.events[-1]
         self.assertEqual(event["event"], "riddle_time_corrected")
         self.assertEqual(event["source_riddle"], "wheel")
@@ -1038,7 +1038,7 @@ class RecoveryTestCase(unittest.TestCase):
         with mock.patch("game_master._atomic_write_json", side_effect=OSError("disk unavailable")):
             with self.assertLogs("game_master", level="ERROR"):
                 with self.assertRaises(CheckpointPersistenceError):
-                    gm.set_riddle_time("wheel", 120.0)
+                    gm.set_riddle_time("wheel", 120.0, adjustment_side="next")
         self.assertEqual(self.checkpoint.read_bytes(), checkpoint_before)
         self.assertEqual(gm.state.current_run.riddle_timings["wheel"].solve_time_s, 150.0)
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chains"), 30.0)
@@ -1068,7 +1068,7 @@ class RecoveryTestCase(unittest.TestCase):
 
         before = gm.state.to_game_state_payload()
         gm._enrich_dashboard_state_payload_locked(before)
-        gm.set_riddle_time("tangram", 90.0)
+        gm.set_riddle_time("tangram", 90.0, adjustment_side="next")
         self.assertEqual(run.riddle_timings["tangram"].solve_time_s, 90.0)
         self.assertEqual(run.riddle_timings["magnet"].solve_time_s, 100.0)
         self.assertAlmostEqual(self.live_riddle_seconds(gm, "chess"), 80.0)
@@ -1080,6 +1080,37 @@ class RecoveryTestCase(unittest.TestCase):
         self.assertEqual(event["source_delta_s"], -30.0)
         self.assertEqual(event["source_stage_delta_s"], -20.0)
         self.assertEqual(event["target_delta_s"], 20.0)
+
+    def test_riddle_time_can_transfer_to_previous_adjacent_stage(self) -> None:
+        clock = FakeClock(100.0)
+        gm = self.make_game_master(clock)
+        gm._enter_phase(2, "admin_prepare")
+        gm._enter_phase(3, "admin_start")
+        clock.advance(5.0)
+        for riddle in ("images", "piano", "prison", "wheel"):
+            clock.advance(1.0)
+            gm.handle_solve(riddle, source="manual")
+        run = gm.state.current_run
+        with gm._lock:
+            run.riddle_timings["prison"].solve_time_s = 50.0
+            run.riddle_timings["wheel"].solve_time_s = 100.0
+        before = gm.db._compute_effective_duration_s(run)
+
+        gm.handle_game_cmd({
+            "cmd": "set_riddle_time",
+            "riddle": "wheel",
+            "solve_time_s": 80.0,
+            "adjustment_side": "previous",
+            "expected_phase": gm.state.phase,
+            "expected_run_id": run.run_id,
+        })
+
+        self.assertEqual(run.riddle_timings["wheel"].solve_time_s, 80.0)
+        self.assertEqual(run.riddle_timings["prison"].solve_time_s, 70.0)
+        self.assertEqual(gm.db._compute_effective_duration_s(run), before)
+        event = run.events[-1]
+        self.assertEqual(event["adjustment_side"], "previous")
+        self.assertEqual(event["target_riddle"], "prison")
 
     def test_skip_and_solve_toggle_preserves_time_without_rewinding(self) -> None:
         clock = FakeClock(100.0)
