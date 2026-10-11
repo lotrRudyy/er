@@ -1114,6 +1114,7 @@ async function saveSelectedBooking(booking, { expectedRunId = '', languageOnly =
     snapshotGeneration += 1;
     queuedSnapshot = null;
     state.booking = normalizeBooking(result.booking || normalized);
+    if (result.start_assignment) state.start_assignment = result.start_assignment;
     state.game.players_count = state.booking.players;
     const savedKey = bookingKey(state.booking);
     bookingOptions = bookingOptions.map((item) => bookingKey(item) === savedKey ? state.booking : item);
@@ -2137,7 +2138,7 @@ function buildMaintenanceRiddleCard(riddle) {
   card.className = 'maintenance-riddle-card';
   card.dataset.riddleId = riddle.id;
   card.innerHTML = `
-    <div class="maintenance-riddle-head"><span class="eyebrow">Wartungsprüfung</span><h2>${escapeHtml(riddle.label)}</h2></div>
+    <div class="maintenance-riddle-head"><h2>${escapeHtml(riddle.label)}</h2></div>
     <div class="maintenance-riddle-info">${renderRiddleInfo(riddle)}</div>
     <button class="solve-btn ${riddle.can_solve ? 'active' : 'inactive'}" type="button" ${riddle.can_solve ? '' : 'disabled'}>Gelöst-Signal testen</button>
   `;
@@ -2166,7 +2167,6 @@ function renderCurrentRiddles() {
     preparation.className = 'current-riddle-card preparation-card';
     preparation.innerHTML = `
       <div>
-        <span class="eyebrow">Vorbereitung</span>
         <h2>Raum und Buchung prüfen</h2>
         <p>Die passende Buchung wurde vorausgewählt, sofern sie im Zeitfenster liegt. Bestätige Buchung, Spieleranzahl und Tipp-Sprache vor dem Start.</p>
       </div>
@@ -2178,7 +2178,7 @@ function renderCurrentRiddles() {
     riddle.phase_state === 'active'
   )) : [];
   if (!current.length) {
-    wrap.innerHTML = '<div class="current-riddle-empty"><span class="eyebrow">Aktuelles Rätsel</span><h2>Noch kein Rätsel aktiv</h2><p>Wechsle in die Vorbereitung, ordne die Buchung zu und starte anschließend das Spiel.</p></div>';
+    wrap.innerHTML = '<div class="current-riddle-empty"><h2>Noch kein Rätsel aktiv</h2><p>Wechsle in die Vorbereitung, ordne die Buchung zu und starte anschließend das Spiel.</p></div>';
     return;
   }
   for (const riddle of current) wrap.appendChild(buildCurrentRiddleCard(riddle));

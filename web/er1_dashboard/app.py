@@ -1886,7 +1886,7 @@ class DashboardStore:
                     phase = int(self.game_state.get("phase", 0) or 0)
                 except Exception:
                     phase = 0
-                if current_run_id != expected_run_id or not 3 <= phase <= 13:
+                if current_run_id != expected_run_id or not 2 <= phase <= 13:
                     raise ValueError("Die Buchungszuordnung gehört nicht mehr zum aktiven Spiel.")
             current = dict(self.game_state)
             current["booking"] = normalized
@@ -5569,6 +5569,7 @@ def api_select_booking() -> Any:
         "players_count": players_count,
         "mqtt_queued": True,
         "applied": False,
+        "start_assignment": store.get_start_assignment(),
     })
 
 

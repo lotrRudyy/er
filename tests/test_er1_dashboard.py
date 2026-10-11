@@ -520,6 +520,33 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertTrue(namespace["api_select_booking"]()["ok"])
         self.assertEqual(expected_run_ids, ["prepared-run", "prepared-run"])
 
+    def test_prepared_run_accepts_scoped_booking_selection(self) -> None:
+        set_selected_booking, namespace = extracted_method("DashboardStore", "set_selected_booking")
+        persisted: list[dict[str, Any]] = []
+        namespace.update({
+            "normalize_booking_selection": lambda booking: dict(booking),
+            "save_selected_booking": lambda booking: persisted.append(dict(booking)) or True,
+        })
+        store = types.SimpleNamespace(
+            lock=threading.RLock(),
+            game_state={"phase": 2, "run": {"run_id": "prepared-run"}},
+            selected_booking={},
+            local_players_count_override=None,
+            persistence_degraded=False,
+        )
+
+        selected = set_selected_booking(
+            store,
+            {"id": "booking-1", "players": 4, "bookingCode": "BOOK-1", "customerEmail": "team@example.invalid"},
+            expected_run_id="prepared-run",
+            require_durable=True,
+        )
+
+        self.assertEqual(selected["id"], "booking-1")
+        self.assertEqual(store.game_state["run"]["booking"], selected)
+        self.assertEqual(store.game_state["players_count"], 4)
+        self.assertEqual(persisted, [selected])
+
     def test_riddle_time_rejects_zero_and_negative_before_mqtt(self) -> None:
         namespace = extracted("parse_mmss_input", "api_riddle_time")
         published: list[tuple[str, Any]] = []
@@ -1259,7 +1286,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261011-dashboard-v6", html)
+        self.assertIn("app.js') }}?v=20261011-dashboard-v7", html)
 
     def test_dashboard_mutations_use_durable_operation_receipts(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1304,6 +1331,7 @@ class DashboardSourceContractTests(unittest.TestCase):
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
+        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v8", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -1313,6 +1341,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         for action in ("standby", "maintenance", "prepare"):
             self.assertIn(f'data-phase-action="{action}"', html)
         self.assertIn('id="startGameBtn"', html)
+        self.assertNotIn('class="eyebrow"', html)
+        self.assertIn('class="operator-log-toolbar"', html)
         phase_actions = html[html.index('class="phase-action-grid-v6"'):html.index('class="previous-phase"')]
         self.assertIn('id="startGameBtn"', phase_actions)
         for panel_id in ("bookingDetails", "allRiddlesPanel", "diagnosticsDetails", "maintenanceHintEditor"):
@@ -1347,6 +1377,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .field-label", css)
         self.assertNotIn(".dashboard-preparation-mode .control-workspace", css)
         self.assertIn("grid-template-columns: minmax(45px, 1fr) 72px;", css)
+        self.assertIn('font: 17px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]

@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v7" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v8" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   {% set diagnostic_nodes = [
@@ -46,7 +46,7 @@
         <div class="mission-grid">
           <div class="mission-rail">
             <section class="panel-v6 phase-overview" aria-labelledby="phaseHeading">
-              <div class="panel-heading-v6"><div><span class="eyebrow">Spielstatus</span><h1 id="phaseHeading">Phase, Zeit und Buchung</h1></div></div>
+              <div class="panel-heading-v6"><h1 id="phaseHeading">Phase, Zeit und Buchung</h1></div>
               <div id="phaseValue" class="phase-current">Phase 0 · Aus</div>
               <div class="mission-metrics">
                 <div><span>Gesamtspielzeit</span><strong id="timerValue">00:00</strong></div>
@@ -66,7 +66,7 @@
 
             <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
               <div class="panel-heading-v6">
-                <div><span class="eyebrow">Zuordnung</span><h2 id="bookingHeading">Buchung</h2></div>
+                <h2 id="bookingHeading">Buchung</h2>
                 <span id="bookingCompactValue" class="booking-state">Keine Buchung</span>
               </div>
               <div class="booking-details-body">
@@ -97,7 +97,7 @@
 
         <section id="allRiddlesPanel" class="panel-v6 all-riddles-panel" aria-labelledby="allRiddlesHeading">
           <div class="panel-heading-v6 table-heading-v6">
-            <div><span class="eyebrow">Spielverlauf</span><h2 id="allRiddlesHeading">Alle Rätsel</h2></div>
+            <h2 id="allRiddlesHeading">Alle Rätsel</h2>
             <span id="riddleProgressValue" class="table-progress">0 abgeschlossen / 12</span>
           </div>
           <div class="table-scroll-wrap">
@@ -126,12 +126,15 @@
         </section>
 
         <section class="panel-v6 technical-panel operator-log-panel">
-          <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2><span id="diagnosticsCount" class="technical-summary">0 Einträge</span></div>
-          <div class="operator-log-filters" role="group" aria-label="Log filtern">
-            <button type="button" class="is-active" data-log-view="all">Alle</button>
-            <button type="button" data-log-view="commands">Befehle</button>
-            <button type="button" data-log-view="system">System</button>
-            <button type="button" data-log-view="errors">Fehler</button>
+          <div class="operator-log-toolbar">
+            <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2></div>
+            <div class="operator-log-filters" role="group" aria-label="Log filtern">
+              <button type="button" class="is-active" data-log-view="all">Alle</button>
+              <button type="button" data-log-view="commands">Befehle</button>
+              <button type="button" data-log-view="system">System</button>
+              <button type="button" data-log-view="errors">Fehler</button>
+            </div>
+            <span id="diagnosticsCount" class="technical-summary">0 Einträge</span>
           </div>
           <div id="diagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
           <div id="diagnosticsLogList" class="diagnostics-log-list operator-log-list" role="log" aria-label="Dashboard-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
@@ -142,7 +145,7 @@
     <main id="adminView" class="admin-workspace">
       <section id="diagnosticsDetails" class="panel-v6 admin-panel" aria-labelledby="nodeAdminHeading">
         <div class="panel-heading-v6">
-          <div><span class="eyebrow">Administration</span><h1 id="nodeAdminHeading">Node-Diagnose</h1></div>
+          <h1 id="nodeAdminHeading">Node-Diagnose</h1>
           <button id="rebootAllNodesBtn" class="secondary-button" type="button">Alle Nodes neu starten</button>
         </div>
         <div class="node-table-wrap">
@@ -193,7 +196,7 @@
       </section>
 
       <section id="maintenanceHintEditor" class="panel-v6 admin-panel hint-editor-panel" aria-labelledby="hintEditorHeading">
-        <div class="panel-heading-v6"><div><span class="eyebrow">Administration</span><h2 id="hintEditorHeading">Tipp-Editor</h2></div><span id="hintEditorCompactStatus" class="technical-summary">Außerhalb der Wartung schreibgeschützt</span></div>
+        <div class="panel-heading-v6"><h2 id="hintEditorHeading">Tipp-Editor</h2><span id="hintEditorCompactStatus" class="technical-summary">Außerhalb der Wartung schreibgeschützt</span></div>
         <div class="hint-editor-body">
           <div class="hint-editor-toolbar">
             <label>Sprache<select id="hintEditorLanguage" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
@@ -217,6 +220,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v6"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v7"></script>
 </body>
 </html>

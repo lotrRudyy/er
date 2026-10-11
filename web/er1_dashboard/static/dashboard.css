@@ -41,7 +41,7 @@ body.dashboard-v6 {
   background:
     radial-gradient(circle at 50% -20%, rgba(133, 82, 19, 0.12), transparent 42rem),
     linear-gradient(145deg, #070605, #0c0a08 55%, #060504);
-  font: 13px/1.35 Inter, "Segoe UI", Arial, sans-serif;
+  font: 17px/1.35 Inter, "Segoe UI", Arial, sans-serif;
 }
 
 body.dashboard-v6[data-initial-view="control"] {
@@ -152,12 +152,12 @@ textarea {
   border-color: var(--line-soft);
   background: #11100e;
   color: #e3ddd4;
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .operator-menu span {
   color: var(--gold-light);
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .operator-brand {
@@ -172,13 +172,13 @@ textarea {
 
 .operator-brand-mark {
   color: #ffd11f;
-  font-size: 19px;
+  font-size: 23px;
   filter: drop-shadow(0 0 6px rgba(255, 209, 31, 0.25));
 }
 
 .operator-brand strong {
   overflow: hidden;
-  font: 600 16px/1 Georgia, "Times New Roman", serif;
+  font: 600 20px/1 Georgia, "Times New Roman", serif;
   text-overflow: ellipsis;
 }
 
@@ -192,7 +192,7 @@ textarea {
   align-items: center;
   gap: 7px;
   color: #42e891;
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -229,7 +229,7 @@ textarea {
   border-right: 1px solid rgba(220, 205, 184, 0.1);
   color: #ddd6cd;
   text-decoration: none;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -256,14 +256,14 @@ textarea {
   align-items: baseline;
   gap: 18px;
   color: #bbb3a8;
-  font-size: 12px;
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .operator-clock strong {
   color: #f5eee5;
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .panel-v6 {
@@ -360,29 +360,19 @@ textarea {
 }
 
 .panel-heading-v6 h1 {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .panel-heading-v6 h2,
 .technical-heading h2 {
-  font-size: 14px;
-}
-
-.eyebrow {
-  display: block;
-  margin-bottom: 2px;
-  color: #b78c50;
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 18px;
 }
 
 .phase-current {
   order: 2;
   margin-top: 6px;
   color: #dce5fa;
-  font: 700 clamp(22px, 1.8vw, 30px)/1 Georgia, "Times New Roman", serif;
+  font: 700 clamp(26px, calc(1.8vw + 4px), 34px)/1 Georgia, "Times New Roman", serif;
 }
 
 .phase-overview .panel-heading-v6 {
@@ -393,7 +383,7 @@ textarea {
   order: 3;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .phase-action-grid-v6 {
@@ -409,7 +399,7 @@ textarea {
   min-height: 40px;
   padding-inline: 4px;
   overflow: hidden;
-  font-size: 10px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -461,7 +451,7 @@ textarea {
   display: block;
   overflow: hidden;
   color: #c3b9ad;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -471,7 +461,7 @@ textarea {
   display: block;
   margin-top: 3px;
   color: #fff8ed;
-  font-size: clamp(22px, 2vw, 32px);
+  font-size: clamp(26px, calc(2vw + 4px), 36px);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -490,7 +480,7 @@ textarea {
   order: 6;
   min-height: 0;
   color: #ff8c8f;
-  font-size: 9px;
+  font-size: 13px;
   text-align: right;
 }
 
@@ -503,12 +493,12 @@ textarea {
   padding-top: 6px;
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .prepare-countdown strong {
   color: var(--gold-light);
-  font-size: 18px;
+  font-size: 22px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -518,7 +508,7 @@ textarea {
   max-width: 58%;
   overflow: hidden;
   color: #cbaa75;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -548,7 +538,7 @@ textarea {
   display: grid;
   gap: 3px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -562,7 +552,7 @@ textarea {
   min-height: 16px;
   overflow-wrap: anywhere;
   color: #c8beb1;
-  font-size: 9px;
+  font-size: 13px;
   line-height: 1.35;
 }
 
@@ -580,7 +570,7 @@ textarea {
 .secondary-button,
 .summary-email-btn {
   min-height: 32px;
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .summary-email-btn {
@@ -594,7 +584,7 @@ textarea {
   border: 1px solid var(--line-soft);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.025);
-  font-size: 9px;
+  font-size: 13px;
 }
 
 body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .field-label,
@@ -647,13 +637,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .current-riddle-card-head h2 {
   margin: 0;
   color: #dce5fa;
-  font: 700 clamp(22px, 2vw, 31px)/1 Georgia, "Times New Roman", serif;
+  font: 700 clamp(26px, calc(2vw + 4px), 35px)/1 Georgia, "Times New Roman", serif;
 }
 
 .current-riddle-card-head h2 span {
   margin-right: 14px;
   color: #f3ede5;
-  font: 700 14px/1 Georgia, "Times New Roman", serif;
+  font: 700 18px/1 Georgia, "Times New Roman", serif;
 }
 
 .current-riddle-body {
@@ -684,7 +674,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .current-time-block span {
   display: block;
   color: #8eb6a9;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -693,14 +683,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   display: block;
   margin-top: 2px;
   color: #00e6a1;
-  font: 700 clamp(25px, 2.6vw, 43px)/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 700 clamp(29px, calc(2.6vw + 4px), 47px)/1 ui-monospace, SFMono-Regular, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 .current-fact-content,
 .maintenance-riddle-info {
   color: #00e6a1;
-  font: 500 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 500 16px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .hint-panel {
@@ -722,14 +712,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   justify-content: space-between;
   padding-bottom: 6px;
   color: var(--gold-light);
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .hint-template-heading span {
   color: var(--dim);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .hint-template-list {
@@ -754,7 +744,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .hint-template-list p {
   margin: 6px 0 0;
   color: #e2dbd2;
-  font-size: 10px;
+  font-size: 14px;
   line-height: 1.4;
 }
 
@@ -769,7 +759,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 4px;
   color: #d0c4b5;
   background: rgba(255, 255, 255, 0.055);
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -838,13 +828,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .current-hint-control strong {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .current-hint-control small {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 7px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -861,7 +851,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .preparation-card h2 {
   margin: 5px 0 8px;
   color: #e2e9f8;
-  font: 700 clamp(24px, 2.5vw, 40px)/1.05 Georgia, "Times New Roman", serif;
+  font: 700 clamp(28px, calc(2.5vw + 4px), 44px)/1.05 Georgia, "Times New Roman", serif;
 }
 
 .current-riddle-empty p,
@@ -897,7 +887,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .maintenance-riddle-head h2 {
   margin: 0;
   overflow: hidden;
-  font: 700 14px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 18px/1.1 Georgia, "Times New Roman", serif;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -905,13 +895,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .maintenance-riddle-info {
   max-height: 44px;
   overflow: auto;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .maintenance-riddle-card .solve-btn {
   min-height: 28px;
   padding: 3px 6px;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .images-buttons,
@@ -931,7 +921,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 999px;
   color: #d6cfc6;
   background: rgba(255, 255, 255, 0.04);
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .pill-true,
@@ -955,7 +945,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .chess-expected {
   display: block;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .knocking-telemetry {
@@ -982,7 +972,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 50%;
   color: #bcb4aa;
   background: #282521;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .knocking-dot-good {
@@ -998,7 +988,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .knocking-error {
   color: #ff9599;
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .all-riddles-panel {
@@ -1027,14 +1017,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .riddles-table-v6 {
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .riddles-table-v6 th,
 .simple-table th {
   color: #b7ada2;
   background: rgba(255, 255, 255, 0.035);
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.06em;
   text-align: left;
   text-transform: uppercase;
@@ -1099,7 +1089,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   align-items: center;
   gap: 5px;
   color: #aaa198;
-  font-size: 9px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -1134,7 +1124,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   min-height: 23px;
   padding: 2px 7px;
   border-radius: 999px;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .status-correction--solved {
@@ -1167,7 +1157,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   width: 21px;
   min-height: 21px;
   padding: 0;
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .riddle-time-edit {
@@ -1225,7 +1215,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .technical-heading > span:first-child {
   color: var(--gold-light);
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .technical-heading .technical-summary {
@@ -1252,7 +1242,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   display: grid;
   grid-column: 1 / -1;
   grid-row: 2;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .lights-grid-v6 {
@@ -1282,7 +1272,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .light-toggle-icon {
   grid-row: 1 / 3;
   color: #8a8077;
-  font-size: 17px;
+  font-size: 21px;
 }
 
 .light-toggle-button strong,
@@ -1294,13 +1284,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .light-toggle-button strong {
   align-self: end;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .light-toggle-button small {
   align-self: start;
   color: var(--muted);
-  font-size: 7px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1362,14 +1352,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .light-dimmer-head strong {
   overflow: hidden;
-  font-size: 9px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dim-value {
   color: var(--gold-light);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1398,7 +1388,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   padding: 3px 6px;
   border-color: rgba(240, 170, 36, 0.48);
   color: var(--gold-light);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .locks-grid-v6 {
@@ -1427,7 +1417,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .lock-icon {
   color: #bcb2a7;
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .lock-button-v6 strong,
@@ -1437,13 +1427,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .lock-button-v6 strong {
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .lock-button-v6 small {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 7px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1490,12 +1480,12 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 }
 
 .node-row-v6 strong {
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .node-contact {
   color: var(--muted);
-  font-size: 7px;
+  font-size: 11px;
 }
 
 .node-dot {
@@ -1514,20 +1504,40 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .node-reboot-compact {
   min-height: 21px;
   padding: 2px 5px;
-  font-size: 7px;
+  font-size: 11px;
 }
 
-.operator-log-filters {
-  display: flex;
-  gap: 5px;
+.operator-log-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 5px;
 }
 
+.operator-log-toolbar .technical-heading {
+  margin: 0;
+}
+
+.operator-log-toolbar .technical-heading h2,
+.operator-log-toolbar .technical-summary {
+  font-weight: 600;
+}
+
+.operator-log-filters {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
 .operator-log-filters button {
-  min-width: 72px;
+  min-width: 0;
   min-height: 27px;
-  padding: 3px 8px;
-  font-size: 8px;
+  padding: 3px 4px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .operator-log-filters button.is-active {
@@ -1541,7 +1551,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   margin-bottom: 3px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1569,7 +1579,9 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-log-entry {
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(245px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   padding: 4px 6px;
   border-bottom: 1px solid rgba(220, 205, 184, 0.07);
 }
@@ -1587,7 +1599,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 .diagnostics-log-sequence {
   overflow: hidden;
   color: #8e877f;
-  font-size: 8px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1601,8 +1613,8 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border-radius: 3px;
   color: #bbb4ab;
   background: #282622;
-  font-size: 7px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .diagnostics-log-level--inf {
@@ -1619,13 +1631,15 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-log-message {
   color: #d4cdc4;
-  font-size: 9px;
+  font-size: 13px;
+  font-weight: 400;
   line-height: 1.25;
 }
 
 .diagnostics-log-detail {
+  grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .diagnostics-log-detail pre {
@@ -1774,13 +1788,13 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .service-restart-section h2 {
   margin: 0;
-  font: 700 16px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
 }
 
 .service-restart-section p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .service-restart-actions {
@@ -1827,7 +1841,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-check-grid label {
   color: #d0c8be;
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .diagnostics-check-grid input {
@@ -1861,14 +1875,14 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 .diagnostics-section-heading h2 {
   margin: 0;
-  font: 700 16px/1.1 Georgia, "Times New Roman", serif;
+  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
 }
 
 .diagnostics-section-heading span,
 .diagnostics-level-status,
 .hint-editor-status {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
 }
 
 .diagnostics-level-grid {
@@ -1969,7 +1983,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 22px;
+  font-size: 26px;
 }
 
 .confirm-symbol {
@@ -1981,12 +1995,12 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   border: 3px solid var(--gold);
   border-radius: 50%;
   color: var(--gold-light);
-  font: 700 27px/1 Georgia, serif;
+  font: 700 31px/1 Georgia, serif;
 }
 
 .confirm-dialog h2 {
   margin: 0;
-  font: 700 24px/1.15 Georgia, "Times New Roman", serif;
+  font: 700 28px/1.15 Georgia, "Times New Roman", serif;
 }
 
 .confirm-dialog p {
@@ -2017,7 +2031,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   padding-top: 11px;
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
 }
 
 @media (min-width: 901px) and (max-width: 1550px), (min-width: 901px) and (max-height: 940px) {
@@ -2059,7 +2073,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .phase-action-grid-v6 button {
     min-height: 35px;
-    font-size: 9px;
+    font-size: 13px;
   }
 
   .mission-metrics > div {
@@ -2114,7 +2128,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-brand strong {
-    font-size: 14px;
+    font-size: 18px;
   }
 
   .operator-connection span:last-child {
@@ -2153,6 +2167,11 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     grid-column: 2;
     grid-row: 2;
   }
+
+  .diagnostics-log-entry {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }
 
 @media (min-width: 901px) and (max-height: 800px) {
@@ -2161,7 +2180,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .phase-current {
-    font-size: 21px;
+    font-size: 25px;
   }
 
   .phase-action-grid-v6,
@@ -2174,7 +2193,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .mission-metrics strong {
-    font-size: 20px;
+    font-size: 24px;
   }
 
   .control-technical {
@@ -2184,7 +2203,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
 @media (max-width: 900px) {
   :root {
-    --header-height: 92px;
+    --header-height: 104px;
     --gap: 8px;
   }
 
@@ -2202,7 +2221,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     min-height: var(--header-height);
     height: auto;
     grid-template-columns: auto minmax(0, 1fr) auto auto;
-    grid-template-rows: 37px 45px;
+    grid-template-rows: 43px 51px;
     gap: 4px 7px;
     position: sticky;
     top: 0;
@@ -2217,7 +2236,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     grid-column: 1;
     min-height: 31px;
     padding-inline: 8px;
-    font-size: 10px;
+    font-size: 14px;
   }
 
   .operator-brand {
@@ -2226,7 +2245,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-brand-mark {
-    font-size: 14px;
+    font-size: 18px;
   }
 
   .brand-desktop {
@@ -2235,7 +2254,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .brand-mobile {
     display: block !important;
-    font: 700 11px/1 Inter, "Segoe UI", sans-serif !important;
+    font: 700 15px/1 Inter, "Segoe UI", sans-serif !important;
   }
 
   .operator-connection {
@@ -2256,7 +2275,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-clock strong {
-    font-size: 11px;
+    font-size: 15px;
   }
 
   .operator-tabs {
@@ -2270,7 +2289,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     flex: 1;
     border: 1px solid rgba(220, 205, 184, 0.15);
     border-radius: 4px 4px 0 0;
-    font-size: 10px;
+    font-size: 14px;
   }
 
   .control-workspace {
@@ -2325,11 +2344,11 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   .panel-heading-v6 h1,
   .panel-heading-v6 h2,
   .technical-heading h2 {
-    font-size: 14px;
+    font-size: 18px;
   }
 
   .phase-current {
-    font-size: 22px;
+    font-size: 26px;
   }
 
   .phase-action-grid-v6 {
@@ -2338,7 +2357,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
 
   .phase-action-grid-v6 button {
     min-height: 36px;
-    font-size: 9px;
+    font-size: 13px;
   }
 
   .mission-metrics {
@@ -2350,7 +2369,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .mission-metrics strong {
-    font-size: 23px;
+    font-size: 27px;
   }
 
   .booking-details-body {
@@ -2375,7 +2394,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .current-riddle-card-head h2 {
-    font-size: 22px;
+    font-size: 26px;
   }
 
   .current-riddle-body {
@@ -2457,7 +2476,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
     content: attr(data-label);
     margin-right: auto;
     color: var(--dim);
-    font-size: 7px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -2533,11 +2552,25 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   .node-row-v6 strong,
   .node-contact,
   .node-reboot-compact {
-    font-size: 8px;
+    font-size: 12px;
   }
 
   .operator-log-panel {
     min-height: 350px;
+  }
+
+  .operator-log-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .operator-log-toolbar > .technical-summary {
+    display: none;
+  }
+
+  .diagnostics-log-entry {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 
   .operator-log-list {
@@ -2596,7 +2629,7 @@ body.dashboard-v6:not(.dashboard-preparation-mode) #bookingDetails .booking-sele
   }
 
   .operator-tab {
-    font-size: 9px;
+    font-size: 13px;
   }
 
   .current-riddles-panel.is-maintenance .current-riddles-grid {
