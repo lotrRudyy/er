@@ -7,9 +7,27 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261011-dashboard-v12" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261012-dashboard-v15" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.25"></circle><path d="M12.25 12H22m-3 0v3m-3-3v2"></path></symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"></path><circle cx="4" cy="6" r="1"></circle><circle cx="4" cy="12" r="1"></circle><circle cx="4" cy="18" r="1"></circle></symbol>
+    <symbol id="icon-bulb" viewBox="0 0 24 24"><path d="M8.5 15.5c-1.5-1.1-2.5-2.9-2.5-5a6 6 0 1 1 12 0c0 2.1-1 3.9-2.5 5l-.8 1.5H9.3l-.8-1.5Z"></path><path d="M9.5 20h5M10 17v3m4-3v3"></path></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v3"></path></symbol>
+    <symbol id="icon-door" viewBox="0 0 24 24"><path d="M4 21h16M6 21V4l11-2v19M9 12h.01"></path></symbol>
+    <symbol id="icon-nodes" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"></circle><circle cx="6" cy="18" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><path d="m10.7 7.2-3.4 8.6m6-8.6 3.4 8.6M8.5 18h7"></path></symbol>
+    <symbol id="icon-log" viewBox="0 0 24 24"><path d="M5 5h14M5 10h14M5 15h9M5 20h11"></path></symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M8 3v4m8-4v4M3 10h18"></path></symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 6a3 3 0 0 1 0 6m1.5 2.5a5.5 5.5 0 0 1 4 5.5"></path></symbol>
+    <symbol id="icon-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m4 7 8 6 8-6"></path></symbol>
+    <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18"></path></symbol>
+    <symbol id="icon-puzzle" viewBox="0 0 24 24"><path d="M4 4h6a2.5 2.5 0 1 0 4 0h6v6a2.5 2.5 0 1 1 0 4v6h-6a2.5 2.5 0 1 0-4 0H4v-6a2.5 2.5 0 1 1 0-4V4Z"></path></symbol>
+    <symbol id="icon-flame" viewBox="0 0 24 24"><path d="M12.5 2.5c1 4-2.4 5.1-1.2 8.1 1.4-1 2.4-2.1 2.8-3.4 3.1 2.4 5 5.1 4.4 8.4-.6 3.5-3.3 5.9-6.7 5.9-3.7 0-6.5-2.8-6.3-6.5.2-3.1 2.1-5.5 4.4-7.8.1 2 .5 3.1 1.1 3.9.3-3.2-.3-5.4 1.5-8.6Z"></path></symbol>
+    <symbol id="icon-stars" viewBox="0 0 24 24"><path d="m12 2 1.4 4.2 4.1 1.4-4.1 1.4-1.4 4.2L10.6 9 6.5 7.6l4.1-1.4L12 2Z"></path><path d="m18.5 13 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM6 13l.7 1.8 1.8.7-1.8.7L6 18l-.7-1.8-1.8-.7 1.8-.7L6 13Z"></path></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M18.2 9A7 7 0 0 0 6.1 6.5L4 9m2 6a7 7 0 0 0 11.9 2.5L20 15"></path></symbol>
+  </svg>
   {% set diagnostic_nodes = [
     ('lighting', 'Lichtsteuerung'),
     ('maglock', 'Schlosssteuerung'),
@@ -24,11 +42,11 @@
   <div class="dashboard-page-v6">
     <header class="operator-header">
       <div class="operator-leading">
-        <button class="operator-menu" type="button" aria-label="Menü"><span aria-hidden="true">&#9776;</span> Menü</button>
-        <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung"><span class="operator-brand-mark" aria-hidden="true">&#128273;</span><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
+        <button id="operatorMenuButton" class="operator-menu" type="button" aria-label="Navigation öffnen" aria-controls="operatorTabs" aria-expanded="false"><span aria-hidden="true">&#9776;</span> Menü</button>
+        <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung"><svg class="operator-brand-mark ui-icon" aria-hidden="true"><use href="#icon-key"></use></svg><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
         <div class="operator-connection" aria-live="polite"><span class="connection-dot"></span><span id="connectionLabel">Verbinde...</span></div>
       </div>
-      <nav class="operator-tabs" aria-label="Dashboard-Bereiche">
+      <nav id="operatorTabs" class="operator-tabs" aria-label="Dashboard-Bereiche">
         <a class="operator-tab{% if initial_view|default('control') == 'control' %} is-active{% endif %}" href="{{ url_for('index') }}"{% if initial_view|default('control') == 'control' %} aria-current="page"{% endif %}>Spielkontrolle</a>
         <a class="operator-tab" href="{{ url_for('game_viewer') }}">Alle Spiele</a>
         <a class="operator-tab{% if initial_view|default('control') == 'admin' %} is-active{% endif %}" href="{{ url_for('admin_dashboard') }}"{% if initial_view|default('control') == 'admin' %} aria-current="page"{% endif %}>Admin</a>
@@ -47,9 +65,8 @@
       <div class="control-primary">
         <div class="mission-grid">
           <div class="mission-rail">
-            <section class="panel-v6 phase-overview" aria-labelledby="phaseHeading">
-              <div class="panel-heading-v6"><h1 id="phaseHeading"><span class="heading-icon" aria-hidden="true">&#9881;</span> Phase, Zeit und Buchung</h1></div>
-              <div id="phaseValue" class="phase-current">Phase 0 · Aus</div>
+            <section class="panel-v6 phase-overview" aria-labelledby="phaseValue">
+              <h1 id="phaseValue" class="phase-current">Phase 0 - Aus</h1>
               <div class="mission-metrics">
                 <div><span>Gesamtspielzeit</span><strong id="timerValue">00:00</strong></div>
                 <div><span>Aktuelles Rätsel</span><strong id="riddleTimerValue">--:--</strong></div>
@@ -69,11 +86,14 @@
             <section id="bookingDetails" class="panel-v6 booking-card" aria-labelledby="bookingHeading">
               <div class="panel-heading-v6">
                 <h2 id="bookingHeading">Aktuelle Buchung</h2>
-                <div class="booking-heading-actions"><button id="bookingEditBtn" class="booking-edit-button" type="button" aria-haspopup="dialog" aria-controls="bookingDialog">Bearbeiten</button></div>
               </div>
               <div class="booking-details-body">
                 <div id="bookingCurrentInfo" class="booking-selected-info"></div>
-                <div id="postGameActions" class="post-game-actions hidden"><button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button></div>
+                <div class="booking-card-action">
+                  <span class="booking-action-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-calendar"></use></svg></span>
+                  <button id="bookingEditBtn" class="booking-edit-button" type="button" aria-haspopup="dialog" aria-controls="bookingDialog">Buchung ändern</button>
+                </div>
+                <div id="postGameActions" class="post-game-actions hidden"><button id="sendSummaryEmailBtn" type="button" class="summary-email-btn">Spielzusammenfassung senden</button><span id="summaryDeliveryStatus" class="summary-delivery-status"></span></div>
               </div>
             </section>
           </div>
@@ -85,7 +105,7 @@
 
         <section id="allRiddlesPanel" class="panel-v6 all-riddles-panel" aria-labelledby="allRiddlesHeading">
           <div class="panel-heading-v6 table-heading-v6">
-            <h2 id="allRiddlesHeading"><span class="heading-icon" aria-hidden="true">&#9776;</span> Alle Rätsel</h2>
+            <h2 id="allRiddlesHeading"><svg class="heading-icon ui-icon" aria-hidden="true"><use href="#icon-list"></use></svg> Alle Rätsel</h2>
             <span id="riddleProgressValue" class="table-progress">0 abgeschlossen / 12</span>
           </div>
           <div class="table-scroll-wrap">
@@ -99,28 +119,32 @@
 
       <aside class="control-technical" aria-label="Raumsteuerung">
         <section class="panel-v6 technical-panel lights-panel-v6">
-          <div class="technical-heading"><span aria-hidden="true">&#128161;</span><h2>Lichtsteuerung</h2></div>
+          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-bulb"></use></svg><h2>Lichtsteuerung</h2></div>
           <div id="lightsGrid" class="lights-grid-v6"></div>
         </section>
 
         <section class="panel-v6 technical-panel locks-panel-v6">
-          <div class="technical-heading"><span aria-hidden="true">&#128274;</span><h2>Schlosssteuerung</h2></div>
+          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-lock"></use></svg><h2>Schlosssteuerung</h2></div>
           <div id="locksGrid" class="locks-grid-v6"></div>
         </section>
 
         <section class="panel-v6 technical-panel nodes-panel-v6">
-          <div class="technical-heading"><span aria-hidden="true">&#9881;</span><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
+          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-nodes"></use></svg><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
           <div id="nodeStatusBar" class="node-list-v6"></div>
         </section>
 
         <section class="panel-v6 technical-panel operator-log-panel">
           <div class="operator-log-toolbar">
-            <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2>Log</h2><span id="diagnosticsMqttStatus" class="mqtt-log-status is-pending"><span aria-hidden="true"></span> MQTT wird verbunden</span></div>
+            <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-log"></use></svg><h2>Log</h2><span id="diagnosticsMqttStatus" class="mqtt-log-status is-pending"><span aria-hidden="true"></span> MQTT wird verbunden</span></div>
             <div class="operator-log-filters" role="group" aria-label="Log filtern">
               <button type="button" class="is-active" data-log-view="all">Alle</button>
               <button type="button" data-log-view="commands">Befehle</button>
               <button type="button" data-log-view="system">System</button>
               <button type="button" data-log-view="errors">Fehler</button>
+            </div>
+            <div class="log-display-controls">
+              <label><span class="visually-hidden">Logs durchsuchen</span><input id="controlDiagnosticsSearchInput" class="diagnostics-search-input" type="search" maxlength="256" placeholder="Log suchen" /></label>
+              <label class="log-autoscroll-toggle"><input id="controlDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" /> Auto-Scroll</label>
             </div>
             <span id="diagnosticsCount" class="technical-summary">0 Einträge</span>
           </div>
@@ -165,7 +189,11 @@
           </fieldset>
         </div>
         <section class="admin-diagnostics-log operator-log-panel" aria-labelledby="adminLogHeading">
-          <div class="technical-heading"><span aria-hidden="true">&#8801;</span><h2 id="adminLogHeading">Diagnose-Log</h2><span id="adminDiagnosticsCount" class="technical-summary">0 Einträge</span></div>
+          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-log"></use></svg><h2 id="adminLogHeading">Diagnose-Log</h2><span id="adminDiagnosticsCount" class="technical-summary">0 Einträge</span></div>
+          <div class="log-display-controls admin-log-display-controls">
+            <label><span class="visually-hidden">Logs durchsuchen</span><input id="adminDiagnosticsSearchInput" class="diagnostics-search-input" type="search" maxlength="256" placeholder="Log durchsuchen" /></label>
+            <label class="log-autoscroll-toggle"><input id="adminDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" /> Auto-Scroll</label>
+          </div>
           <div id="adminDiagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
           <div id="adminDiagnosticsLogList" class="diagnostics-log-list operator-log-list" role="log" aria-label="Dashboard-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
         </section>
@@ -187,6 +215,7 @@
             <label>Suche<input id="logArchiveSearchInput" type="search" maxlength="256" placeholder="Meldung oder Detail" /></label>
             <button id="logArchiveSearchBtn" type="button">Suchen</button>
             <button id="logArchiveRefreshBtn" type="button">Aktualisieren</button>
+            <span id="logArchiveResultCount" class="technical-summary">0 Treffer</span>
           </div>
           <div class="node-table-wrap">
             <table class="simple-table log-archive-table">
@@ -213,7 +242,7 @@
       </section>
 
       <section id="maintenanceHintEditor" class="panel-v6 admin-panel hint-editor-panel" aria-labelledby="hintEditorHeading">
-        <div class="panel-heading-v6"><h2 id="hintEditorHeading">Tipp-Editor</h2><span id="hintEditorCompactStatus" class="technical-summary">Außerhalb der Wartung schreibgeschützt</span></div>
+        <div class="panel-heading-v6"><h2 id="hintEditorHeading">Tipp-Editor</h2><span id="hintEditorCompactStatus" class="technical-summary">Bearbeitung in Aus oder Wartung</span></div>
         <div class="hint-editor-body">
           <div class="hint-editor-toolbar">
             <label>Sprache<select id="hintEditorLanguage" class="booking-select"><option value="de">Deutsch</option><option value="en">English</option><option value="it">Italiano</option></select></label>
@@ -231,7 +260,7 @@
     <dialog id="bookingDialog" class="booking-dialog" aria-labelledby="bookingDialogTitle">
       <button id="bookingDialogClose" class="dialog-close" type="button" aria-label="Buchungsdialog schließen">&#215;</button>
       <div class="booking-dialog-heading">
-        <span class="booking-dialog-symbol" aria-hidden="true">&#128197;</span>
+        <span class="booking-dialog-symbol" aria-hidden="true"><svg class="ui-icon"><use href="#icon-calendar"></use></svg></span>
         <div><span>Buchungszuordnung</span><h2 id="bookingDialogTitle">Buchung ändern</h2></div>
       </div>
       <div class="booking-dialog-form">
@@ -262,6 +291,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261011-dashboard-v12"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261012-dashboard-v15"></script>
 </body>
 </html>

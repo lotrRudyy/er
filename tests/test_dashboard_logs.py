@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import hmac
 import json
 import math
+import os
 import re
+import shutil
+import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import types
 import unittest
 import uuid
 from collections import deque
+from contextlib import closing
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +41,8 @@ PRODUCTION_CONSTANTS = {
     "LOG_NODE_LABELS",
     "LOG_NODE_IDS",
     "LOG_NODE_ID_SET",
+    "LOG_ARCHIVE_NODE_IDS",
+    "LOG_ARCHIVE_SOURCES",
     "LEGACY_LOG_NODE_ID_SET",
     "PARSED_LOG_NODE_ID_SET",
     "LOG_LEVELS",
@@ -48,6 +58,8 @@ PRODUCTION_CONSTANTS = {
     "LOG_BUFFER_CAPACITY",
     "LOG_API_DEFAULT_LIMIT",
     "LOG_API_MAX_LIMIT",
+    "AUDIT_SIGNATURE_VERSION",
+    "AUDIT_SIGNATURE_MAX_SKEW_MS",
 }
 
 
@@ -59,13 +71,19 @@ def extracted_dashboard(*names: str) -> dict[str, Any]:
         "Any": Any,
         "datetime": datetime,
         "deque": deque,
+        "hashlib": hashlib,
+        "hmac": hmac,
         "json": json,
         "math": math,
+        "os": os,
+        "Path": Path,
         "re": re,
+        "sqlite3": sqlite3,
         "threading": threading,
         "time": time,
         "timezone": timezone,
         "uuid": uuid,
+        "closing": closing,
     }
     found: set[str] = set()
     for original in tree.body:
@@ -143,6 +161,263 @@ class IdParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "div" and self.current_log_node:
             self.current_log_node = None
+
+
+class ProxyAuditSignatureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.namespace = extracted_dashboard(
+            "_canonical_audit_target",
+            "_audit_signature_payload",
+            "verify_proxy_identity",
+            "_capture_operator_audit_context",
+        )
+        self.canonical_target = self.namespace["_canonical_audit_target"]
+        self.payload = self.namespace["_audit_signature_payload"]
+        self.verify = self.namespace["verify_proxy_identity"]
+        self.secret = "a" * 48
+        self.now_ms = 1_800_000_000_000
+        self.body = b'{"action":"prepare"}'
+
+    def signed_headers(self, **overrides: str) -> dict[str, str]:
+        values = {
+            "actor": "alice",
+            "body_hash": hashlib.sha256(self.body).hexdigest(),
+            "method": "POST",
+            "operation_id": "57a969ff-7c14-4f3d-9faa-b9b5c6307df3",
+            "path": "/api/phase",
+            "source": "database",
+            "timestamp": str(self.now_ms),
+        }
+        values.update(overrides)
+        signature = hmac.new(self.secret.encode(), self.payload(**values), hashlib.sha256).hexdigest()
+        return {
+            "X-ER1-Audit-Version": "1",
+            "X-ER1-Audit-Timestamp": values["timestamp"],
+            "X-ER1-Audit-Actor": values["actor"],
+            "X-ER1-Audit-Source": values["source"],
+            "X-ER1-Audit-Operation-Id": values["operation_id"],
+            "X-ER1-Audit-Body-SHA256": values["body_hash"],
+            "X-ER1-Audit-Signature": signature,
+            "Idempotency-Key": values["operation_id"],
+        }
+
+    def verify_headers(
+        self,
+        headers: dict[str, str],
+        body: bytes | None = None,
+        *,
+        target: str = "/api/phase",
+    ) -> dict[str, Any]:
+        return self.verify(
+            headers,
+            method="POST",
+            path=target,
+            body=self.body if body is None else body,
+            now_ms=self.now_ms,
+            secret=self.secret,
+        )
+
+    def test_valid_signature_attributes_authenticated_admin(self) -> None:
+        result = self.verify_headers(self.signed_headers())
+        self.assertTrue(result["trusted"])
+        self.assertEqual(result["actor"], "alice")
+        self.assertEqual(result["source"], "database")
+
+    def test_signature_uses_canonical_path_and_query_and_rejects_operation_mismatch(self) -> None:
+        self.assertEqual(self.canonical_target("/api/phase", b""), "/api/phase")
+        target = self.canonical_target("/api/phase", b"mode=live%20run&step=2")
+        self.assertEqual(target, "/api/phase?mode=live%20run&step=2")
+        headers = self.signed_headers(path=target)
+        self.assertTrue(self.verify_headers(headers, target=target)["trusted"])
+        self.assertEqual(self.verify_headers(headers)["reason"], "invalid_signature")
+
+        headers["Idempotency-Key"] = "749ef908-d60b-474b-814b-310587e95025"
+        rejected = self.verify_headers(headers, target=target)
+        self.assertFalse(rejected["trusted"])
+        self.assertTrue(rejected["reject_request"])
+        self.assertEqual(rejected["reason"], "operation_id_mismatch")
+
+    def test_operation_mismatch_is_rejected_by_before_request_hook(self) -> None:
+        timestamp = str(int(time.time() * 1000))
+        headers = self.signed_headers(timestamp=timestamp)
+        headers["Idempotency-Key"] = "749ef908-d60b-474b-814b-310587e95025"
+        self.namespace.update({
+            "request": types.SimpleNamespace(
+                headers=headers,
+                method="POST",
+                path="/api/phase",
+                query_string=b"",
+                get_data=lambda cache=True: self.body,
+            ),
+            "g": types.SimpleNamespace(),
+            "jsonify": lambda payload: payload,
+        })
+
+        with mock.patch.dict(os.environ, {"ER1_GAME_MASTER_AUDIT_SECRET": self.secret}):
+            response, status = self.namespace["_capture_operator_audit_context"]()
+
+        self.assertEqual(status, 400)
+        self.assertFalse(response["ok"])
+        self.assertIn("Idempotency-Key", response["error"])
+
+    def test_absent_stale_tampered_and_spoofed_headers_are_local_unknown(self) -> None:
+        stale = self.signed_headers(timestamp=str(self.now_ms - 61_000))
+        tampered = self.signed_headers()
+        tampered["X-ER1-Audit-Actor"] = "mallory"
+        cases = [
+            {},
+            stale,
+            tampered,
+            {"X-ER1-Audit-Actor": "spoofed", "X-ER1-Audit-Signature": "0" * 64},
+            self.signed_headers(),
+        ]
+        bodies = [self.body, self.body, self.body, self.body, b'{"action":"standby"}']
+        for headers, body in zip(cases, bodies):
+            with self.subTest(headers=headers):
+                result = self.verify_headers(headers, body)
+                self.assertFalse(result["trusted"])
+                self.assertEqual(result["actor"], "local/unknown")
+
+
+class SummaryDeliveryStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="summary-delivery-test-"))
+        namespace = extracted_dashboard("SummaryDeliveryStore")
+        namespace["_ensure_dashboard_directory_durable"] = lambda path: Path(path).mkdir(parents=True, exist_ok=True)
+        namespace["_fsync_parent_directory"] = lambda _path: None
+        self.store_class = namespace["SummaryDeliveryStore"]
+        self.store = self.store_class(self.directory / "deliveries.sqlite3")
+        self.payload = {
+            "run": {"run_id": "run-1", "leaderboard_code": "123456"},
+            "leaderboardCode": "123456",
+            "booking": {"id": "booking-1"},
+        }
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def test_delay_retry_and_sent_state_are_durable_and_duplicate_safe(self) -> None:
+        registered = self.store.register(self.payload, now=100.0, delay_s=1800)
+        self.assertEqual(registered["status"], "pending")
+        self.assertEqual(self.store.claim(now=1899.0)[0], "not_due")
+
+        outcome, claimed = self.store.claim(now=1900.0)
+        self.assertEqual(outcome, "claimed")
+        self.assertEqual(claimed["attempt_count"], 1)
+        self.assertEqual(self.store.claim(now=1900.0, run_id="run-1")[0], "in_progress")
+
+        failed = self.store.mark_failed("run-1", "temporary", now=1901.0, retry_delay_s=60, max_attempts=6)
+        self.assertEqual(failed["status"], "retry")
+        self.assertEqual(self.store.claim(now=1960.0)[0], "not_due")
+        outcome, retried = self.store.claim(now=1961.0)
+        self.assertEqual(outcome, "claimed")
+        self.assertEqual(retried["attempt_count"], 2)
+
+        sent = self.store.mark_sent("run-1", now=1962.0)
+        self.assertEqual(sent["status"], "sent")
+        self.store.register({**self.payload, "booking": {"id": "changed"}}, now=2000.0, delay_s=1800)
+        self.assertEqual(self.store.get("run-1")["status"], "sent")
+        self.assertEqual(self.store.claim(now=4000.0, run_id="run-1")[0], "sent")
+
+    def test_restart_recovers_an_interrupted_claim_for_website_idempotent_retry(self) -> None:
+        self.store.register(self.payload, now=100.0, delay_s=0)
+        self.assertEqual(self.store.claim(now=100.0)[0], "claimed")
+
+        restored = self.store_class(self.directory / "deliveries.sqlite3")
+        record = restored.get("run-1")
+        self.assertEqual(record["status"], "retry")
+        self.assertEqual(restored.claim(now=time.time())[0], "claimed")
+
+    def test_manual_claim_atomically_refreshes_failed_payload_but_never_sent_payload(self) -> None:
+        old_payload = {**self.payload, "booking": {"id": "old", "customerEmail": "old@example.invalid"}}
+        self.store.register(old_payload, now=100.0, delay_s=0)
+        self.assertEqual(self.store.claim(now=100.0)[0], "claimed")
+        failed = self.store.mark_failed("run-1", "terminal", now=101.0, max_attempts=1)
+        self.assertEqual(failed["status"], "failed")
+
+        corrected = {**self.payload, "booking": {"id": "new", "customerEmail": "new@example.invalid"}}
+        outcome, claimed = self.store.claim(
+            now=102.0,
+            run_id="run-1",
+            max_attempts=1,
+            refresh_payload=corrected,
+        )
+        self.assertEqual(outcome, "claimed")
+        self.assertEqual(json.loads(claimed["payload_json"])["booking"], corrected["booking"])
+
+        self.store.mark_sent("run-1", now=103.0)
+        replacement = {**self.payload, "booking": {"id": "other", "customerEmail": "other@example.invalid"}}
+        outcome, sent = self.store.claim(now=104.0, run_id="run-1", refresh_payload=replacement)
+        self.assertEqual(outcome, "sent")
+        self.assertEqual(json.loads(sent["payload_json"])["booking"], corrected["booking"])
+
+
+class DashboardEventRegressionTests(unittest.TestCase):
+    def test_emitted_event_is_immediately_visible_and_queued_once(self) -> None:
+        namespace = extracted_dashboard("_bounded_log_text", "_sanitize_log_detail", "emit_dashboard_event")
+        buffered: list[dict[str, Any]] = []
+        queued: list[dict[str, Any]] = []
+
+        class Buffer:
+            def append(self, entry: dict[str, Any]) -> dict[str, Any]:
+                stored = {**entry, "seq": 1, "received_at": "2026-10-12T12:00:00.000Z"}
+                buffered.append(stored)
+                return stored
+
+        class Writer:
+            def append(self, entry: dict[str, Any]) -> bool:
+                queued.append(entry)
+                return True
+
+        namespace.update({
+            "node_log_buffer": Buffer(),
+            "node_log_archive_writer": Writer(),
+        })
+        stored = namespace["emit_dashboard_event"](
+            "Riddle solved",
+            source="mqtt",
+            category="player",
+            detail={"riddle": "images", "result": "solved"},
+        )
+
+        self.assertEqual(stored, buffered[0])
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["seq"], 1)
+        self.assertEqual(queued[0]["source"], "mqtt")
+        source = APP_PATH.read_text(encoding="utf-8")
+        emit_node = next(
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "emit_dashboard_event"
+        )
+        emit_block = ast.get_source_segment(source, emit_node) or ""
+        self.assertIn("node_log_archive_writer.append({", emit_block)
+        self.assertNotIn("dashboard_log_archive.append(stored)", emit_block)
+        self.assertIn("DashboardArchiveHandler(node_log_archive_writer)", source)
+
+    def test_phase_14_booking_audit_uses_override_without_mutating_completed_run(self) -> None:
+        namespace = extracted_dashboard("_state_audit_context")
+        completed = {
+            "phase": 14,
+            "run": {
+                "run_id": "run-1",
+                "booking": {"id": "original", "bookingCode": "ORIGINAL"},
+            },
+        }
+        fake_store = types.SimpleNamespace(
+            lock=threading.RLock(),
+            game_state=completed,
+            selected_booking={"id": "original", "kind": "booking", "bookingCode": "ORIGINAL"},
+        )
+        namespace["store"] = fake_store
+
+        before = namespace["_state_audit_context"]()
+        fake_store.selected_booking = {"id": "corrected", "kind": "booking", "bookingCode": "CORRECTED"}
+        after = namespace["_state_audit_context"]()
+
+        self.assertEqual((before["booking_id"], before["booking_code"]), ("original", "ORIGINAL"))
+        self.assertEqual((after["booking_id"], after["booking_code"]), ("corrected", "CORRECTED"))
+        self.assertEqual(completed["run"]["booking"], {"id": "original", "bookingCode": "ORIGINAL"})
 
 
 class DashboardLogTests(unittest.TestCase):
@@ -664,6 +939,14 @@ class DashboardDiagnosticsSourceTests(unittest.TestCase):
         self.assertNotIn("+/dbg", connect_source)
         self.assertLess(handler_source.index("parse_node_log"), handler_source.index("parse_json_payload"))
 
+    def test_registered_mqtt_disconnect_handler_is_defined(self) -> None:
+        source = APP_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function_names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+        self.assertIn("on_disconnect", function_names)
+        self.assertIn("mqtt_client.on_disconnect = on_disconnect", source)
+
     def test_dashboard_and_firmware_default_to_warning_logs(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
         core_source = CORE_NODE_PATH.read_text(encoding="utf-8")
@@ -741,6 +1024,39 @@ class DashboardDiagnosticsSourceTests(unittest.TestCase):
         self.assertIn("return;", stream_branch)
         self.assertIn("MQTT getrennt; Pufferanzeige", status)
         self.assertNotIn("Empfang aktiv", source)
+
+    def test_state_poll_debounces_disconnect_and_records_one_incident_and_recovery(self) -> None:
+        source = JS_PATH.read_text(encoding="utf-8")
+
+        def function_source(name: str) -> str:
+            start = source.index(f"function {name}(")
+            next_starts = [
+                source.find(marker, start + 1)
+                for marker in ("\nfunction ", "\nasync function ")
+            ]
+            next_starts = [position for position in next_starts if position >= 0]
+            return source[start:] if not next_starts else source[start:min(next_starts)]
+
+        failure = function_source("noteStateFailure")
+        success = function_source("noteStateSuccess")
+        poll = function_source("pollLoop")
+        self.assertIn("STATE_DISCONNECT_MIN_FAILURES = 2", source)
+        self.assertIn("STATE_DISCONNECT_MIN_DURATION_MS = 1000", source)
+        self.assertIn("!stateConnection.incidentLogged", failure)
+        self.assertIn("connection_incident", failure)
+        self.assertIn("if (stateConnection.incidentLogged)", success)
+        self.assertIn("connection_recovery", success)
+        self.assertNotIn("showRecoverableStateFeedback", poll)
+
+    def test_live_and_archive_logs_expose_search_autoscroll_and_visible_counts(self) -> None:
+        source = JS_PATH.read_text(encoding="utf-8")
+        html = HTML_PATH.read_text(encoding="utf-8")
+        self.assertEqual(html.count('class="diagnostics-search-input"'), 2)
+        self.assertEqual(html.count('class="diagnostics-autoscroll"'), 2)
+        self.assertIn('id="logArchiveResultCount"', html)
+        self.assertIn("diagnostics.searchText", source)
+        self.assertIn("if (diagnostics.autoScroll) list.scrollTop = list.scrollHeight", source)
+        self.assertIn("`${visible} / ${total} Einträge`", source)
 
     def test_dirty_log_level_draft_survives_blur_and_hydration_until_success(self) -> None:
         source = JS_PATH.read_text(encoding="utf-8")

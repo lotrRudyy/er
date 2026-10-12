@@ -20,9 +20,6 @@ class RiddleTiming:
     hints: str = ""
     skipped: bool = False
     not_solved: bool = False
-    original_solve_time_s: float | None = None
-    original_adjustment_side: str | None = None
-    correction_target_deltas: dict[str, float] = field(default_factory=dict)
     segment_started_monotonic: float | None = None
     first_started_monotonic: float | None = None
 

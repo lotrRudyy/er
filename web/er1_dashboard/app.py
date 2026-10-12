@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import atexit
+import copy
 import hashlib
+import hmac
 import logging
 import math
 import os
@@ -365,6 +367,7 @@ HINT_TEMPLATE_RIDDLES = (
     "images", "piano", "prison", "wheel", "chains", "tangram",
     "magnet", "chess", "knocking", "candles", "stars", "sissi",
 )
+RESULT_EXCLUDED_RIDDLES = frozenset({"prison", "wheel"})
 MAX_HINT_TEMPLATE_BYTES = 96 * 1024
 MAX_HINT_TIPS_PER_LANGUAGE = 20
 MAX_HINT_TIP_CHARS = 2000
@@ -376,6 +379,9 @@ START_ASSIGNMENT_PATH = Path(
 ).expanduser()
 OPERATION_LEDGER_PATH = Path(
     os.getenv("ER1_OPERATION_LEDGER_PATH", str(BASE_DIR / "data" / "dashboard_operations.sqlite3"))
+).expanduser()
+SUMMARY_DELIVERY_PATH = Path(
+    os.getenv("ER1_SUMMARY_DELIVERY_PATH", str(BASE_DIR / "data" / "summary_deliveries.sqlite3"))
 ).expanduser()
 LOG_ARCHIVE_PATH = Path(
     os.getenv("ER1_DASHBOARD_LOG_ARCHIVE_DIR", str(BASE_DIR / "data" / "log_archive"))
@@ -703,6 +709,231 @@ class OperationLedger:
                 record["state"] = "acknowledged"
                 record["updated_at"] = now
             return record
+
+
+class SummaryDeliveryStore:
+    MAX_PAYLOAD_BYTES = 1024 * 1024
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        _ensure_dashboard_directory_durable(self.path.parent)
+        with closing(self._connect()) as connection, connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS summary_deliveries (
+                    run_id TEXT PRIMARY KEY,
+                    leaderboard_code TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    due_at REAL NOT NULL,
+                    next_attempt_at REAL NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    claimed_at REAL,
+                    sent_at REAL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_summary_deliveries_due
+                ON summary_deliveries (status, next_attempt_at)
+            """)
+            connection.execute("""
+                UPDATE summary_deliveries
+                SET status = 'retry', next_attempt_at = ?, claimed_at = NULL,
+                    last_error = CASE WHEN last_error = '' THEN 'Dashboard restarted during delivery' ELSE last_error END,
+                    updated_at = ?
+                WHERE status = 'sending'
+            """, (time.time(), time.time()))
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+        _fsync_parent_directory(self.path)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA synchronous=FULL")
+        return connection
+
+    @staticmethod
+    def _record(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    def _identity(payload: dict[str, Any]) -> tuple[str, str]:
+        run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+        run_id = str(run.get("run_id") or run.get("id") or "").strip()
+        code = str(payload.get("leaderboardCode") or run.get("leaderboard_code") or "").strip()
+        if not run_id or not code or len(run_id) > 200 or len(code) > 128:
+            raise ValueError("Summary delivery requires a valid run ID and leaderboard code")
+        return run_id, code
+
+    def register(self, payload: dict[str, Any], *, now: float | None = None, delay_s: float = 1800.0) -> dict[str, Any]:
+        run_id, code = self._identity(payload)
+        payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(payload_json.encode("utf-8")) > self.MAX_PAYLOAD_BYTES:
+            raise ValueError("Summary delivery payload is too large")
+        timestamp = time.time() if now is None else float(now)
+        due_at = timestamp + max(0.0, float(delay_s))
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ? OR leaderboard_code = ? LIMIT 1",
+                (run_id, code),
+            ).fetchone()
+            if row is None:
+                connection.execute("""
+                    INSERT INTO summary_deliveries (
+                        run_id, leaderboard_code, payload_json, status, due_at, next_attempt_at,
+                        attempt_count, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'pending', ?, ?, 0, ?, ?)
+                """, (run_id, code, payload_json, due_at, due_at, timestamp, timestamp))
+            else:
+                record = dict(row)
+                if record["run_id"] != run_id or record["leaderboard_code"] != code:
+                    raise ValueError("Summary delivery identity conflicts with an existing run")
+                if record["status"] not in {"sent", "sending", "failed"}:
+                    connection.execute(
+                        "UPDATE summary_deliveries SET payload_json = ?, updated_at = ? WHERE run_id = ?",
+                        (payload_json, timestamp, run_id),
+                    )
+            return self._record(connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ?", (run_id,),
+            ).fetchone()) or {}
+
+    def claim(
+        self,
+        *,
+        now: float | None = None,
+        run_id: str = "",
+        max_attempts: int = 6,
+        refresh_payload: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        timestamp = time.time() if now is None else float(now)
+        refreshed_identity: tuple[str, str] | None = None
+        refreshed_json = ""
+        if refresh_payload is not None:
+            refreshed_identity = self._identity(refresh_payload)
+            refreshed_json = json.dumps(refresh_payload, ensure_ascii=False, separators=(",", ":"))
+            if len(refreshed_json.encode("utf-8")) > self.MAX_PAYLOAD_BYTES:
+                raise ValueError("Summary delivery payload is too large")
+            if run_id and refreshed_identity[0] != str(run_id):
+                raise ValueError("Summary delivery refresh does not match the requested run")
+            run_id = refreshed_identity[0]
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if run_id:
+                if refreshed_identity is None:
+                    row = connection.execute(
+                        "SELECT * FROM summary_deliveries WHERE run_id = ?", (str(run_id),),
+                    ).fetchone()
+                else:
+                    row = connection.execute(
+                        "SELECT * FROM summary_deliveries WHERE run_id = ? OR leaderboard_code = ? LIMIT 1",
+                        refreshed_identity,
+                    ).fetchone()
+            else:
+                row = connection.execute("""
+                    SELECT * FROM summary_deliveries
+                    WHERE status IN ('pending', 'retry') AND next_attempt_at <= ? AND attempt_count < ?
+                    ORDER BY next_attempt_at ASC, created_at ASC
+                    LIMIT 1
+                """, (timestamp, int(max_attempts))).fetchone()
+            if row is None and refreshed_identity is not None:
+                connection.execute("""
+                    INSERT INTO summary_deliveries (
+                        run_id, leaderboard_code, payload_json, status, due_at, next_attempt_at,
+                        attempt_count, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'pending', ?, ?, 0, ?, ?)
+                """, (
+                    refreshed_identity[0], refreshed_identity[1], refreshed_json,
+                    timestamp, timestamp, timestamp, timestamp,
+                ))
+                row = connection.execute(
+                    "SELECT * FROM summary_deliveries WHERE run_id = ?", (refreshed_identity[0],),
+                ).fetchone()
+            record = self._record(row)
+            if record is None:
+                return "not_due", None
+            if refreshed_identity is not None and (
+                record["run_id"] != refreshed_identity[0]
+                or record["leaderboard_code"] != refreshed_identity[1]
+            ):
+                raise ValueError("Summary delivery identity conflicts with an existing run")
+            if record["status"] == "sent":
+                return "sent", record
+            if record["status"] == "sending":
+                return "in_progress", record
+            if not run_id and (record["next_attempt_at"] > timestamp or record["attempt_count"] >= int(max_attempts)):
+                return "not_due", record
+            if refreshed_identity is not None:
+                connection.execute(
+                    "UPDATE summary_deliveries SET payload_json = ?, updated_at = ? WHERE run_id = ?",
+                    (refreshed_json, timestamp, record["run_id"]),
+                )
+            connection.execute("""
+                UPDATE summary_deliveries
+                SET status = 'sending', attempt_count = attempt_count + 1, claimed_at = ?, updated_at = ?
+                WHERE run_id = ? AND status NOT IN ('sending', 'sent')
+            """, (timestamp, timestamp, record["run_id"]))
+            claimed = self._record(connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ?", (record["run_id"],),
+            ).fetchone())
+            return "claimed", claimed
+
+    def mark_sent(self, run_id: str, *, now: float | None = None) -> dict[str, Any] | None:
+        timestamp = time.time() if now is None else float(now)
+        with closing(self._connect()) as connection, connection:
+            connection.execute("""
+                UPDATE summary_deliveries
+                SET status = 'sent', sent_at = ?, claimed_at = NULL, last_error = '', updated_at = ?
+                WHERE run_id = ? AND status IN ('sending', 'sent')
+            """, (timestamp, timestamp, str(run_id)))
+            return self._record(connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ?", (str(run_id),),
+            ).fetchone())
+
+    def mark_failed(
+        self,
+        run_id: str,
+        error: str,
+        *,
+        now: float | None = None,
+        retry_delay_s: float = 60.0,
+        max_attempts: int = 6,
+    ) -> dict[str, Any] | None:
+        timestamp = time.time() if now is None else float(now)
+        with closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                "SELECT attempt_count FROM summary_deliveries WHERE run_id = ?", (str(run_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            terminal = int(row[0] or 0) >= int(max_attempts)
+            connection.execute("""
+                UPDATE summary_deliveries
+                SET status = ?, next_attempt_at = ?, claimed_at = NULL, last_error = ?, updated_at = ?
+                WHERE run_id = ? AND status = 'sending'
+            """, (
+                "failed" if terminal else "retry",
+                timestamp + max(0.0, float(retry_delay_s)),
+                str(error or "Summary delivery failed")[:1000],
+                timestamp,
+                str(run_id),
+            ))
+            return self._record(connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ?", (str(run_id),),
+            ).fetchone())
+
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        with closing(self._connect()) as connection:
+            return self._record(connection.execute(
+                "SELECT * FROM summary_deliveries WHERE run_id = ?", (str(run_id),),
+            ).fetchone())
 
 
 def _minimal_start_assignment(value: Any) -> dict[str, Any]:
@@ -1277,6 +1508,8 @@ MAX_LOG_DETAIL_NODES = 300
 LOG_BUFFER_CAPACITY = 1500
 LOG_API_DEFAULT_LIMIT = 200
 LOG_API_MAX_LIMIT = 500
+AUDIT_SIGNATURE_VERSION = "1"
+AUDIT_SIGNATURE_MAX_SKEW_MS = 60_000
 
 
 def _bounded_log_text(value: str, limit: int) -> str:
@@ -1309,7 +1542,12 @@ def _sanitize_log_detail(value: Any, *, _depth: int = 0, _budget: list[int] | No
             cleaned_key = _bounded_log_text(str(key), MAX_LOG_DETAIL_KEY_CHARS)
             if cleaned_key in cleaned:
                 continue
-            cleaned[cleaned_key] = _sanitize_log_detail(item, _depth=_depth + 1, _budget=_budget)
+            if re.search(r"(?:password|passwd|secret|token|authorization|cookie|credential)", cleaned_key, re.IGNORECASE):
+                cleaned[cleaned_key] = "[redacted]"
+            elif re.search(r"(?:customer_?email|booking_?email|email_?body|message_?body)", cleaned_key, re.IGNORECASE):
+                cleaned[cleaned_key] = "[redacted]"
+            else:
+                cleaned[cleaned_key] = _sanitize_log_detail(item, _depth=_depth + 1, _budget=_budget)
         return cleaned
     if isinstance(value, (list, tuple)):
         return [
@@ -1397,6 +1635,7 @@ class NodeLogBuffer:
             stored = dict(entry)
             stored["seq"] = self._next_seq
             stored["received_at"] = received
+            stored["timestamp_ms"] = int(round(timestamp * 1000))
             self._next_seq += 1
             self._entries.append(stored)
             return dict(stored)
@@ -1504,7 +1743,7 @@ def parse_logs_query(args: Any) -> dict[str, Any]:
     nodes = _parse_log_filter(
         _query_arg_values(args, "node") + _query_arg_values(args, "nodes"),
         name="node",
-        allowed=LOG_NODE_ID_SET,
+        allowed=LOG_ARCHIVE_NODE_IDS,
     )
     levels = _parse_log_filter(
         _query_arg_values(args, "level") + _query_arg_values(args, "levels"),
@@ -1824,6 +2063,7 @@ class DashboardStore:
 
     def update_game_state(self, payload: dict[str, Any], *, merge: bool = False) -> None:
         with self.lock:
+            previous_state = json.loads(json.dumps(self.game_state or {}))
             try:
                 previous_phase = int(self.game_state.get("phase", 0) or 0)
             except Exception:
@@ -1931,6 +2171,10 @@ class DashboardStore:
                         self.local_booking_override_phase = None
                         if not directory_synced:
                             self.persistence_degraded = True
+            current_state = json.loads(json.dumps(self.game_state or {}))
+        audit_transition = globals().get("_audit_game_state_transitions")
+        if callable(audit_transition):
+            audit_transition(previous_state, current_state)
 
     def set_local_phase(self, mode: str) -> None:
         phase_by_mode = {"standby": 0, "maintenance": 1, "prepare": 2}
@@ -2531,17 +2775,6 @@ class DashboardStore:
                 "display_time_s": display_seconds,
                 "solve_time_s": _first_seconds(timing.get("solve_time_s")),
                 "live_time_s": _first_seconds(timing.get("live_time_s")),
-                "original_solve_time_s": (
-                    _first_seconds(timing.get("original_solve_time_s"))
-                    if timing.get("original_solve_time_s") not in {None, ""}
-                    else None
-                ),
-                "original_adjustment_side": timing.get("original_adjustment_side"),
-                "restore_time_s": (
-                    _first_seconds(timing.get("restore_time_s"))
-                    if timing.get("restore_time_s") not in {None, ""}
-                    else None
-                ),
                 "skipped": skipped,
                 "not_solved": not_solved,
                 "can_solve": phase_state == "active",
@@ -2754,12 +2987,13 @@ class DashboardStore:
 
 dashboard_log_archive = JsonlLogArchive(LOG_ARCHIVE_PATH)
 node_log_archive_writer = QueuedArchiveWriter(dashboard_log_archive)
-_dashboard_archive_handler = DashboardArchiveHandler(dashboard_log_archive)
+_dashboard_archive_handler = DashboardArchiveHandler(node_log_archive_writer)
 _dashboard_archive_handler.setFormatter(logging.Formatter())
 LOG.addHandler(_dashboard_archive_handler)
 LOG.setLevel(logging.WARNING)
 store = DashboardStore()
 operation_ledger = OperationLedger(OPERATION_LEDGER_PATH)
+summary_delivery_store = SummaryDeliveryStore(SUMMARY_DELIVERY_PATH)
 node_log_buffer = NodeLogBuffer()
 _last_requested_log_levels: dict[str, dict[str, str]] = {}
 _last_requested_log_levels_lock = threading.RLock()
@@ -2771,6 +3005,118 @@ if hasattr(mqtt_client, "suppress_exceptions"):
     mqtt_client.suppress_exceptions = True
 _start_assignment_workers: dict[str, threading.Thread] = {}
 _start_assignment_workers_lock = threading.Lock()
+_mqtt_connection_lock = threading.RLock()
+_mqtt_disconnected_at: float | None = None
+_summary_delivery_stop = threading.Event()
+_summary_delivery_thread: threading.Thread | None = None
+
+
+def emit_dashboard_event(
+    message: str,
+    *,
+    level: str = "INF",
+    category: str = "system",
+    event_type: str = "dashboard_event",
+    source: str = "dashboard",
+    node: str = "Dashboard",
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cleaned_detail = _sanitize_log_detail(detail or {})
+    entry = {
+        "source": source if source in LOG_ARCHIVE_SOURCES else "dashboard",
+        "node": node if node in LOG_ARCHIVE_NODE_IDS else "Dashboard",
+        "lv": level if level in LOG_LEVEL_SET else "INF",
+        "msg": _bounded_log_text(str(message or "Dashboard event"), MAX_LOG_MESSAGE_CHARS),
+        "d": cleaned_detail,
+        "d_type": _bounded_log_text(event_type, 32),
+        "_category": category,
+    }
+    for key in (
+        "actor", "action", "target", "phase", "run_id", "riddle", "booking_id",
+        "booking_code", "operation_id", "duration_ms", "result",
+    ):
+        if isinstance(cleaned_detail, dict) and key in cleaned_detail:
+            entry[key] = cleaned_detail[key]
+    stored = node_log_buffer.append(entry)
+    node_log_archive_writer.append({
+        **stored,
+        "source": entry["source"],
+    })
+    return stored
+
+
+def _state_audit_context(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    state_payload = payload
+    selected_booking: dict[str, Any] = {}
+    if state_payload is None:
+        with store.lock:
+            state_payload = json.loads(json.dumps(store.game_state or {}))
+            selected_booking = json.loads(json.dumps(getattr(store, "selected_booking", {}) or {}))
+    state_payload = state_payload if isinstance(state_payload, dict) else {}
+    run = state_payload.get("run") if isinstance(state_payload.get("run"), dict) else {}
+    booking = selected_booking if selected_booking.get("kind") not in {None, "empty"} else {}
+    if not booking:
+        booking = run.get("booking") if isinstance(run.get("booking"), dict) else {}
+    if not booking and isinstance(state_payload.get("booking"), dict):
+        booking = state_payload["booking"]
+    try:
+        phase = int(state_payload.get("phase", 0) or 0)
+    except Exception:
+        phase = 0
+    return {
+        "phase": phase,
+        "run_id": str(run.get("run_id") or run.get("id") or state_payload.get("run_id") or "").strip(),
+        "riddle": str(state_payload.get("current_riddle_name") or "").strip(),
+        "booking_id": str(booking.get("id") or "").strip(),
+        "booking_code": str(booking.get("bookingCode") or booking.get("booking_code") or "").strip(),
+    }
+
+
+def _audit_game_state_transitions(previous: dict[str, Any], current: dict[str, Any]) -> None:
+    before = _state_audit_context(previous)
+    after = _state_audit_context(current)
+    if before["phase"] != after["phase"] or before["run_id"] != after["run_id"]:
+        emit_dashboard_event(
+            f"Game state changed: phase {before['phase']} -> {after['phase']}",
+            category="system",
+            event_type="state_transition",
+            source="mqtt",
+            detail={"actor": "game_master", "action": "phase_transition", "target": "game", "before": before, "after": after},
+        )
+    if (before["booking_id"], before["booking_code"]) != (after["booking_id"], after["booking_code"]):
+        emit_dashboard_event(
+            "Run booking assignment changed",
+            category="system",
+            event_type="state_transition",
+            source="mqtt",
+            detail={"actor": "game_master", "action": "booking_assignment", "target": "booking", "before": before, "after": after},
+        )
+
+    previous_run = previous.get("run") if isinstance(previous.get("run"), dict) else {}
+    current_run = current.get("run") if isinstance(current.get("run"), dict) else {}
+    previous_timings = previous_run.get("riddle_timings") if isinstance(previous_run.get("riddle_timings"), dict) else {}
+    current_timings = current_run.get("riddle_timings") if isinstance(current_run.get("riddle_timings"), dict) else {}
+    for riddle, timing in current_timings.items():
+        if not isinstance(timing, dict):
+            continue
+        old_timing = previous_timings.get(riddle) if isinstance(previous_timings.get(riddle), dict) else {}
+        old_status = str(old_timing.get("status") or "").strip()
+        new_status = str(timing.get("status") or "").strip()
+        if new_status and new_status != old_status:
+            emit_dashboard_event(
+                f"Riddle {riddle}: {old_status or 'unknown'} -> {new_status}",
+                category="player" if new_status in {"solved", "skipped", "not_solved"} else "system",
+                event_type="state_transition",
+                source="mqtt",
+                detail={
+                    "actor": "game_master",
+                    "action": "riddle_transition",
+                    "target": str(riddle),
+                    "before": {"status": old_status or None},
+                    "after": {"status": new_status},
+                    **after,
+                },
+            )
 
 
 def _remember_requested_log_level(node: str, level: str, *, requested_at: datetime | None = None) -> dict[str, str]:
@@ -3720,7 +4066,12 @@ def parse_json_payload(payload: bytes) -> dict[str, Any] | None:
 
 
 def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
-    global _default_log_levels_published
+    global _default_log_levels_published, _mqtt_disconnected_at
+    disconnected_at = None
+    with _mqtt_connection_lock:
+        if _mqtt_disconnected_at is not None:
+            disconnected_at = _mqtt_disconnected_at
+            _mqtt_disconnected_at = None
     for topic, qos in [
         (TOPIC_DASHBOARD_STATE, 0),
         (TOPIC_GAME_STATE, 0),
@@ -3735,6 +4086,41 @@ def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any,
         _default_log_levels_published = _publish_default_log_levels(client)
         if not _default_log_levels_published:
             LOG.warning("Default WRN log level could not be queued for every node")
+    if disconnected_at is not None:
+        emit_dashboard_event(
+            "MQTT-Verbindung wiederhergestellt",
+            category="connection",
+            event_type="mqtt_reconnected",
+            detail={
+                "duration_ms": max(int((time.time() - disconnected_at) * 1000), 0),
+                "result": "connected",
+            },
+        )
+
+
+def on_disconnect(
+    client: mqtt.Client,
+    userdata: Any,
+    disconnect_flags: Any,
+    reason_code: Any,
+    properties: Any = None,
+) -> None:
+    global _mqtt_disconnected_at
+    disconnected_at = time.time()
+    with _mqtt_connection_lock:
+        if _mqtt_disconnected_at is not None:
+            return
+        _mqtt_disconnected_at = disconnected_at
+    emit_dashboard_event(
+        "MQTT-Verbindung unterbrochen",
+        level="WRN",
+        category="connection",
+        event_type="mqtt_disconnected",
+        detail={
+            "reason_code": str(reason_code),
+            "result": "disconnected",
+        },
+    )
 
 
 def _handle_mqtt_message(msg: mqtt.MQTTMessage) -> None:
@@ -3832,13 +4218,28 @@ def mqtt_publish_batch(commands: list[tuple[str, dict[str, Any] | str]]) -> dict
     }
 
 
+def _summary_run_with_result_exclusions(run: dict[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(run)
+    timings = normalized.get("riddle_timings")
+    if isinstance(timings, dict):
+        # The website merges these setup steps into Chains. Keep their details,
+        # but do not let their outcomes determine whether Chains is ranked.
+        for riddle in RESULT_EXCLUDED_RIDDLES:
+            timing = timings.get(riddle)
+            if isinstance(timing, dict):
+                timing["solved"] = False
+                timing["skipped"] = False
+                timing["not_solved"] = False
+    return normalized
+
+
 def current_raw_run_payload() -> dict[str, Any]:
     with store.lock:
-        raw_game_state = json.loads(json.dumps(store.game_state))
-    run = raw_game_state.get("run") if isinstance(raw_game_state.get("run"), dict) else None
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else None
+        run = copy.deepcopy(run) if run is not None else None
     if not run:
         raise ValueError("Es ist noch kein aktueller Spieldurchlauf verfügbar.")
-    return run
+    return _summary_run_with_result_exclusions(run)
 
 
 def website_json(path: str, payload: dict[str, Any] | None = None, method: str | None = None, timeout: int | None = None) -> dict[str, Any]:
@@ -3920,8 +4321,11 @@ def build_ranking_preview_candidate(snapshot: Any) -> dict[str, Any]:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Ungültiger Tippzähler für {puzzle_key}.") from exc
         phase_state = str(row.get("phase_state") or "pending").strip().lower()
-        skipped = phase_state == "skipped" or bool(row.get("skipped", False))
-        solved = not skipped and (phase_state == "solved" or bool(row.get("solved", False)))
+        counts_toward_result = puzzle_key not in RESULT_EXCLUDED_RIDDLES
+        skipped = counts_toward_result and (phase_state == "skipped" or bool(row.get("skipped", False)))
+        solved = counts_toward_result and not skipped and (
+            phase_state == "solved" or bool(row.get("solved", False))
+        )
         raw_puzzles.append({
             "puzzleKey": puzzle_key,
             "timeS": _nonnegative_preview_number(
@@ -4152,7 +4556,7 @@ def _booking_is_eligible(booking: dict[str, Any], reference_time: datetime) -> b
     if appointment is None:
         return False
     reference = _rome_datetime_from_local(reference_time)
-    return reference < appointment + timedelta(hours=1)
+    return appointment.date() == reference.date() and reference < appointment + timedelta(hours=1)
 
 
 def _last_sunday_of_month(year: int, month: int) -> int:
@@ -5004,6 +5408,213 @@ def send_summary_email_via_ssh(payload: dict[str, Any]) -> dict[str, Any]:
             pass
 
 
+def summary_delivery_delay_s() -> int:
+    return max(0, _read_int_env("ER1_SUMMARY_DELIVERY_DELAY_S", 30 * 60))
+
+
+def summary_delivery_max_attempts() -> int:
+    return max(1, min(20, _read_int_env("ER1_SUMMARY_DELIVERY_MAX_ATTEMPTS", 6)))
+
+
+def summary_delivery_retry_delay_s(attempt_count: int) -> int:
+    attempt = max(1, int(attempt_count or 1))
+    return min(30 * 60, 60 * (2 ** (attempt - 1)))
+
+
+def _completed_summary_payload() -> dict[str, Any] | None:
+    with store.lock:
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+        current_run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        run_id = str(current_run.get("run_id") or current_run.get("id") or "").strip()
+    if phase != 14 or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", run_id):
+        return None
+
+    json_path = _run_json_path(run_id)
+    if not GAME_DB_PATH.is_file() or not json_path.is_file():
+        return None
+    try:
+        run = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(run, dict) or str(run.get("run_id") or "").strip() != run_id:
+        return None
+    code = str(run.get("leaderboard_code") or "").strip()
+    timings = run.get("riddle_timings") if isinstance(run.get("riddle_timings"), dict) else {}
+    if not code or not run.get("ended_at") or not set(RIDDLE_ORDER_V2).issubset(timings):
+        return None
+    if any(str((timings.get(key) or {}).get("status") or "") not in {"solved", "skipped", "not_solved"} for key in RIDDLE_ORDER_V2):
+        return None
+
+    try:
+        with closing(sqlite3.connect(f"file:{GAME_DB_PATH}?mode=ro", uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            game = connection.execute(
+                "SELECT id, ended_at, leaderboard_code FROM games WHERE id = ?", (run_id,),
+            ).fetchone()
+            if game is None or not game["ended_at"] or str(game["leaderboard_code"] or "").strip() != code:
+                return None
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(game_riddles)").fetchall()}
+            riddle_column = "riddle_key" if "riddle_key" in columns else ("riddle" if "riddle" in columns else "")
+            if not riddle_column:
+                return None
+            persisted_riddles = {
+                str(row[0])
+                for row in connection.execute(
+                    f"SELECT DISTINCT {riddle_column} FROM game_riddles WHERE game_id = ?", (run_id,),
+                ).fetchall()
+            }
+            if not set(RIDDLE_ORDER_V2).issubset(persisted_riddles):
+                return None
+    except (OSError, sqlite3.Error):
+        return None
+
+    run = _summary_run_with_result_exclusions(run)
+    selected_booking = store.get_selected_booking()
+    if selected_booking.get("kind") == "empty":
+        selected_booking = normalize_booking_selection(run.get("booking"))
+    else:
+        run = dict(run)
+        run["booking"] = selected_booking
+        if selected_booking.get("players"):
+            run["players_count"] = int(selected_booking["players"])
+    return {
+        "run": run,
+        "leaderboardCode": code,
+        "bookingCode": str(selected_booking.get("bookingCode") or "").strip(),
+        "booking": selected_booking,
+        "bookingEmail": str(selected_booking.get("customerEmail") or "").strip(),
+        "players": int(selected_booking.get("players") or run.get("players_count") or 0),
+        "testBooking": selected_booking.get("kind") == "test",
+        "emailTemplate": "minimal_leaderboard_summary",
+        "emailFields": ["total_time", "hint_count", "leaderboard_code", "leaderboard_link"],
+        "leaderboardUrl": os.getenv("ER1_LEADERBOARD_URL", "https://escapeschenna.com/rangliste").strip(),
+    }
+
+
+def _public_summary_delivery(record: dict[str, Any] | None) -> dict[str, Any]:
+    if not record:
+        return {"status": "waiting_for_persistence", "attempt_count": 0}
+    return {
+        "run_id": record.get("run_id"),
+        "leaderboard_code": record.get("leaderboard_code"),
+        "status": record.get("status"),
+        "due_at_ms": int(float(record.get("due_at") or 0) * 1000),
+        "next_attempt_at_ms": int(float(record.get("next_attempt_at") or 0) * 1000),
+        "attempt_count": int(record.get("attempt_count") or 0),
+        "sent_at_ms": int(float(record.get("sent_at") or 0) * 1000) if record.get("sent_at") else None,
+        "last_error": _sanitized_technical_error(record.get("last_error")) if record.get("last_error") else "",
+    }
+
+
+def _current_summary_delivery_status() -> dict[str, Any]:
+    with store.lock:
+        run = store.game_state.get("run") if isinstance(store.game_state.get("run"), dict) else {}
+        run_id = str(run.get("run_id") or run.get("id") or "").strip()
+    return _public_summary_delivery(summary_delivery_store.get(run_id) if run_id else None)
+
+
+def _register_current_summary_delivery() -> dict[str, Any] | None:
+    payload = _completed_summary_payload()
+    if payload is None:
+        return None
+    return summary_delivery_store.register(payload, delay_s=summary_delivery_delay_s())
+
+
+def _send_summary_delivery(payload: dict[str, Any]) -> dict[str, Any]:
+    mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
+    if mode == "http":
+        return post_website_json("/api/game-summary/send", payload)
+    return send_summary_email_via_ssh(payload)
+
+
+def _summary_delivery_succeeded(result: Any) -> bool:
+    return isinstance(result, dict) and (
+        result.get("alreadySent") is True
+        or result.get("email", {}).get("sent") is True
+        or result.get("delivery", {}).get("status") == "sent"
+    )
+
+
+def process_summary_delivery_once(
+    *,
+    force_run_id: str = "",
+    force_payload: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    if force_run_id:
+        payload = force_payload if force_payload is not None else _completed_summary_payload()
+        if payload is None:
+            return "not_due", None, None
+        outcome, record = summary_delivery_store.claim(
+            run_id=str(force_run_id),
+            max_attempts=summary_delivery_max_attempts(),
+            refresh_payload=payload,
+        )
+    else:
+        _register_current_summary_delivery()
+        outcome, record = summary_delivery_store.claim(
+            max_attempts=summary_delivery_max_attempts(),
+        )
+    if outcome != "claimed" or record is None:
+        return outcome, record, None
+    try:
+        payload = json.loads(str(record["payload_json"]))
+        result = _send_summary_delivery(payload)
+        if not _summary_delivery_succeeded(result):
+            raise RuntimeError(str(result.get("error") or result.get("email", {}).get("reason") or "Summary email was not sent"))
+    except Exception as exc:
+        retry_delay = summary_delivery_retry_delay_s(int(record.get("attempt_count") or 1))
+        failed = summary_delivery_store.mark_failed(
+            str(record["run_id"]),
+            _sanitized_technical_error(exc),
+            retry_delay_s=retry_delay,
+            max_attempts=summary_delivery_max_attempts(),
+        )
+        emit_dashboard_event(
+            "Summary email delivery failed",
+            level="ERR",
+            category="errors",
+            event_type="summary_delivery",
+            detail={
+                "actor": "summary_worker" if not force_run_id else "operator",
+                "action": "send_summary_email",
+                "target": str(record.get("leaderboard_code") or ""),
+                "run_id": str(record.get("run_id") or ""),
+                "attempt_count": int(record.get("attempt_count") or 0),
+                "result": "failure",
+                "error": _sanitized_technical_error(exc),
+            },
+        )
+        return "failed", failed, None
+    sent = summary_delivery_store.mark_sent(str(record["run_id"]))
+    emit_dashboard_event(
+        "Summary email delivered",
+        category="commands" if force_run_id else "system",
+        event_type="summary_delivery",
+        detail={
+            "actor": "operator" if force_run_id else "summary_worker",
+            "action": "send_summary_email",
+            "target": str(record.get("leaderboard_code") or ""),
+            "run_id": str(record.get("run_id") or ""),
+            "attempt_count": int(record.get("attempt_count") or 0),
+            "result": "success",
+        },
+    )
+    return "sent", sent, result
+
+
+def _summary_delivery_worker() -> None:
+    while not _summary_delivery_stop.wait(5.0):
+        try:
+            process_summary_delivery_once()
+        except Exception:
+            LOG.exception("Summary delivery worker iteration failed")
+        if _summary_delivery_stop.wait(25.0):
+            return
+
+
 def _action_guard_error(data: Any) -> str | None:
     if not isinstance(data, dict):
         return "Die Aktion enthält keinen gültigen Zustandsabgleich. Bitte die Ansicht aktualisieren und erneut versuchen."
@@ -5033,6 +5644,133 @@ def _stale_action_response(data: Any) -> Any | None:
     return jsonify({"ok": False, "error": error, "stale_action": True}), 409
 
 
+def _canonical_audit_target(path: str, query_string: bytes | str | None = None) -> str:
+    pathname = str(path or "/")
+    if isinstance(query_string, bytes):
+        query = query_string.decode("latin-1")
+    else:
+        query = str(query_string or "")
+    return f"{pathname}?{query}" if query else pathname
+
+
+def _audit_signature_payload(
+    *,
+    actor: str,
+    body_hash: str,
+    method: str,
+    operation_id: str,
+    path: str,
+    source: str,
+    timestamp: str,
+) -> bytes:
+    return json.dumps({
+        "version": AUDIT_SIGNATURE_VERSION,
+        "timestamp": timestamp,
+        "actor": actor,
+        "source": source,
+        "method": method,
+        "path": path,
+        "operationId": operation_id,
+        "bodyHash": body_hash,
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def verify_proxy_identity(
+    headers: Any,
+    *,
+    method: str,
+    path: str,
+    body: bytes,
+    now_ms: int | None = None,
+    secret: str | None = None,
+) -> dict[str, Any]:
+    fallback = {"actor": "local/unknown", "source": "local", "operation_id": "", "trusted": False}
+    key = str(secret if secret is not None else os.getenv("ER1_GAME_MASTER_AUDIT_SECRET", ""))
+    if len(key.encode("utf-8")) < 32:
+        return {**fallback, "reason": "audit_secret_unavailable"}
+
+    def value(name: str) -> str:
+        raw = headers.get(name, "") if hasattr(headers, "get") else ""
+        return str(raw or "").strip()
+
+    version = value("X-ER1-Audit-Version")
+    timestamp = value("X-ER1-Audit-Timestamp")
+    actor = value("X-ER1-Audit-Actor")
+    source = value("X-ER1-Audit-Source")
+    operation_id = value("X-ER1-Audit-Operation-Id")
+    body_hash = value("X-ER1-Audit-Body-SHA256").lower()
+    signature = value("X-ER1-Audit-Signature").lower()
+    if not all((version, timestamp, actor, source, operation_id, body_hash, signature)):
+        return {**fallback, "reason": "unsigned"}
+    if version != AUDIT_SIGNATURE_VERSION or not timestamp.isdigit():
+        return {**fallback, "reason": "invalid_metadata"}
+    if len(actor) > 128 or len(source) > 64 or len(operation_id) > 128:
+        return {**fallback, "reason": "invalid_metadata"}
+    if any(char in actor + source + operation_id for char in "\r\n\0"):
+        return {**fallback, "reason": "invalid_metadata"}
+    reference_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    if abs(reference_ms - int(timestamp)) > AUDIT_SIGNATURE_MAX_SKEW_MS:
+        return {**fallback, "reason": "stale"}
+    actual_body_hash = hashlib.sha256(body or b"").hexdigest()
+    if not re.fullmatch(r"[0-9a-f]{64}", body_hash) or not hmac.compare_digest(body_hash, actual_body_hash):
+        return {**fallback, "reason": "body_mismatch"}
+    if not re.fullmatch(r"[0-9a-f]{64}", signature):
+        return {**fallback, "reason": "invalid_signature"}
+    expected = hmac.new(key.encode("utf-8"), _audit_signature_payload(
+        actor=actor,
+        body_hash=body_hash,
+        method=str(method or "GET").upper(),
+        operation_id=operation_id,
+        path=str(path or "/"),
+        source=source,
+        timestamp=timestamp,
+    ), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return {**fallback, "reason": "invalid_signature"}
+    if str(method or "GET").upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        actual_operation_id = value("Idempotency-Key")
+        if not actual_operation_id or not hmac.compare_digest(operation_id, actual_operation_id):
+            return {**fallback, "reason": "operation_id_mismatch", "reject_request": True}
+    return {"actor": actor, "source": source, "operation_id": operation_id, "trusted": True, "reason": "verified"}
+
+
+def _sanitized_technical_error(value: Any) -> str:
+    text = _bounded_log_text(str(value or "Unknown error"), MAX_LOG_MESSAGE_CHARS)
+    text = re.sub(r"(?i)(authorization|token|password|secret|cookie)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", text)
+    text = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[email redacted]", text, flags=re.IGNORECASE)
+    return text
+
+
+def _operator_action_target() -> tuple[str, str, str]:
+    payload = request.get_json(silent=True)
+    payload = payload if isinstance(payload, dict) else {}
+    path = request.path
+    action = {
+        "/api/phase": str(payload.get("action") or "phase_change"),
+        "/api/select-booking": "select_booking",
+        "/api/send-summary-email": "send_summary_email",
+        "/api/players-count": "set_players_count",
+        "/api/solve": "solve",
+        "/api/lock": "lock_command",
+        "/api/light": "light_command",
+        "/api/node-reboot": "node_reboot",
+        "/api/service-restart": "service_restart",
+        "/api/hints": "set_hint_count",
+        "/api/riddle-time": "set_riddle_time",
+        "/api/riddle-outcome": "set_riddle_outcome",
+        "/api/hint-templates": "save_hint_templates",
+        "/api/log-level": "set_log_level",
+        "/api/log-archive/delete": "delete_log_segment",
+    }.get(path, request.endpoint or path)
+    target = str(
+        payload.get("node") or payload.get("riddle") or payload.get("lock")
+        or payload.get("group") or payload.get("service") or payload.get("segment_id")
+        or ("booking" if path == "/api/select-booking" else "game")
+    ).strip()
+    riddle = str(payload.get("riddle") or payload.get("node") or "").strip()
+    return _bounded_log_text(action, 128), _bounded_log_text(target, 128), _bounded_log_text(riddle, 128)
+
+
 IDEMPOTENT_API_PATHS = frozenset({
     "/api/hint-templates",
     "/api/log-level",
@@ -5047,7 +5785,6 @@ IDEMPOTENT_API_PATHS = frozenset({
     "/api/service-restart",
     "/api/hints",
     "/api/riddle-time",
-    "/api/riddle-time-restore",
     "/api/riddle-outcome",
     "/api/log-archive/delete",
 })
@@ -5104,28 +5841,69 @@ def _archive_operator_outcome(response: Any, operation_id: str = "") -> None:
     status = int(getattr(response, "status_code", 500) or 500)
     level = "INF" if 200 <= status < 400 else ("WRN" if status < 500 else "ERR")
     payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+    identity = getattr(g, "audit_identity", None) or {
+        "actor": "local/unknown", "source": "local", "operation_id": "", "trusted": False,
+    }
+    action, target, riddle = _operator_action_target()
+    before = getattr(g, "audit_before", None) or {}
+    after = _state_audit_context()
+    started = getattr(g, "audit_started_monotonic", time.monotonic())
     detail: dict[str, Any] = {
+        "actor": identity["actor"],
+        "actor_source": identity["source"],
+        "attribution_verified": bool(identity.get("trusted")),
+        "action": action,
+        "target": target,
+        "before": before,
+        "after": after,
+        "phase": after.get("phase"),
+        "run_id": after.get("run_id"),
+        "riddle": riddle or after.get("riddle"),
+        "booking_id": after.get("booking_id"),
+        "booking_code": after.get("booking_code"),
         "method": request.method.upper(),
         "path": request.path,
         "http_status": status,
+        "duration_ms": max(0, int(round((time.monotonic() - started) * 1000))),
+        "result": "success" if 200 <= status < 400 else "failure",
     }
-    if operation_id:
-        detail["operation_id"] = operation_id
+    effective_operation_id = operation_id or str(identity.get("operation_id") or "")
+    if effective_operation_id:
+        detail["operation_id"] = effective_operation_id
     if isinstance(payload, dict):
         for key in ("mqtt_queued", "queued_count", "command_count", "partial", "applied", "device_confirmed", "stale_action", "scope"):
             value = payload.get(key)
             if isinstance(value, (bool, int, str)) or (isinstance(value, float) and math.isfinite(value)):
                 detail[key] = value
         if status >= 400 and isinstance(payload.get("error"), str):
-            detail["error"] = _bounded_log_text(payload["error"], MAX_LOG_MESSAGE_CHARS)
-    dashboard_log_archive.append({
-        "source": "operator",
-        "node": "Dashboard",
-        "lv": level,
-        "msg": f"{request.method.upper()} {request.path} -> HTTP {status}",
-        "d": detail,
-        "d_type": "operator_outcome",
-    })
+            detail["error"] = _sanitized_technical_error(payload["error"])
+    emit_dashboard_event(
+        f"{identity['actor']}: {action} {target} -> HTTP {status}",
+        level=level,
+        category="commands" if status < 400 else "errors",
+        event_type="operator_outcome",
+        source="operator",
+        detail=detail,
+    )
+
+
+@app.before_request
+def _capture_operator_audit_context() -> Any | None:
+    g.audit_started_monotonic = time.monotonic()
+    g.audit_identity = verify_proxy_identity(
+        request.headers,
+        method=request.method,
+        path=_canonical_audit_target(request.path, request.query_string),
+        body=request.get_data(cache=True),
+    )
+    if g.audit_identity.get("reject_request"):
+        return jsonify({
+            "ok": False,
+            "error": "Die signierte Befehls-ID stimmt nicht mit dem Idempotency-Key überein.",
+        }), 400
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        g.audit_before = _state_audit_context()
+    return None
 
 
 @app.before_request
@@ -5512,7 +6290,9 @@ def api_db_update() -> Any:
 @app.get("/api/state")
 def api_state() -> Any:
     _maybe_resume_persisted_start_assignment()
-    response = jsonify(store.snapshot())
+    snapshot = store.snapshot()
+    snapshot["summary_delivery"] = _current_summary_delivery_status()
+    response = jsonify(snapshot)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
@@ -5555,10 +6335,10 @@ def api_hint_templates() -> Any:
             phase = int(store.game_state.get("phase", 0) or 0)
         except Exception:
             phase = 0
-    if phase != 1:
+    if phase not in {0, 1}:
         return jsonify({
             "ok": False,
-            "error": "Tippvorlagen können nur in Phase 1 (Wartung) bearbeitet werden.",
+            "error": "Tippvorlagen können nur in Phase 0 (Aus) oder Phase 1 (Wartung) bearbeitet werden.",
         }), 409
     try:
         templates, directory_synced = save_hint_templates(data.get("templates"))
@@ -5910,51 +6690,43 @@ def api_select_booking() -> Any:
 
 @app.post("/api/send-summary-email")
 def api_send_summary_email() -> Any:
-    data = request.get_json(silent=True) or {}
     try:
-        run = current_raw_run_payload()
-        code = str(run.get("leaderboard_code") or run.get("leaderboardCode") or "").strip()
-        if not code:
-            return jsonify({"ok": False, "error": "Das Spiel hat noch keinen Ranglisten-Code. Beende zuerst das Spiel und versuche es danach erneut."}), 400
-        selected_booking = normalize_booking_selection(data.get("booking") if isinstance(data.get("booking"), dict) else store.get_selected_booking())
-        if selected_booking.get("players"):
-            run = dict(run)
-            run["players_count"] = int(selected_booking.get("players") or 0)
-        payload = {
-            "run": run,
-            "leaderboardCode": code,
-            "bookingCode": str(data.get("bookingCode") or data.get("booking_code") or selected_booking.get("bookingCode") or "").strip(),
-            "booking": selected_booking,
-            "bookingEmail": str(selected_booking.get("customerEmail") or "").strip(),
-            "players": int(selected_booking.get("players") or 0),
-            "testBooking": selected_booking.get("kind") == "test",
-            # Hint for the website-side mailer: keep the summary email minimal.
-            # Intended content: total time, hint count, highlighted leaderboard code,
-            # then the leaderboard link. Older website scripts simply ignore this.
-            "emailTemplate": "minimal_leaderboard_summary",
-            "emailFields": ["total_time", "hint_count", "leaderboard_code", "leaderboard_link"],
-            "leaderboardUrl": os.getenv("ER1_LEADERBOARD_URL", "https://escapeschenna.com/rangliste").strip(),
-        }
-        mode = os.getenv("ER1_SUMMARY_EMAIL_MODE", "ssh").strip().lower()
-        try:
-            if mode == "http":
-                result = post_website_json("/api/game-summary/send", payload)
-            else:
-                result = send_summary_email_via_ssh(payload)
-        except Exception as exc:
-            LOG.warning("Summary email unavailable; completed game remains stored locally: %s", exc)
+        payload = _completed_summary_payload()
+        if payload is None:
             return jsonify({
                 "ok": False,
-                "retryable": True,
-                "game_saved": True,
-                "error": (
-                    "Die E-Mail-Verbindung ist derzeit nicht verfügbar. Das abgeschlossene Spiel bleibt lokal "
-                    "gespeichert; der Versand kann später erneut versucht werden."
-                ),
-            }), 503
-        return jsonify(result)
+                "error": "Das abgeschlossene Spiel ist noch nicht vollständig in Datenbank und JSON gespeichert.",
+            }), 409
+        run_id = str(payload["run"]["run_id"])
+        outcome, record, result = process_summary_delivery_once(
+            force_run_id=run_id,
+            force_payload=payload,
+        )
+        delivery = _public_summary_delivery(record)
+        if outcome == "sent" and result is None:
+            return jsonify({
+                "ok": True,
+                "alreadySent": True,
+                "email": {"sent": True, "skipped": True, "reason": "already_sent"},
+                "summary_delivery": delivery,
+            })
+        if outcome == "sent" and result is not None:
+            return jsonify({**result, "ok": True, "summary_delivery": delivery})
+        if outcome == "in_progress":
+            return jsonify({"ok": True, "inProgress": True, "summary_delivery": delivery}), 202
+        return jsonify({
+            "ok": False,
+            "retryable": delivery.get("status") != "failed",
+            "game_saved": True,
+            "summary_delivery": delivery,
+            "error": (
+                "Die E-Mail-Verbindung ist derzeit nicht verfügbar. Das abgeschlossene Spiel bleibt lokal "
+                "gespeichert; der Versand wird begrenzt erneut versucht."
+            ),
+        }), 503
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        LOG.warning("Summary email unavailable; completed game remains stored locally: %s", exc)
+        return jsonify({"ok": False, "retryable": True, "game_saved": True, "error": _sanitized_technical_error(exc)}), 503
 
 
 @app.post("/api/players-count")
@@ -6114,16 +6886,6 @@ def api_node_reboot() -> Any:
     if stale is not None:
         return stale
     node = str(data.get("node") or "").strip()
-    with store.lock:
-        try:
-            phase = int(store.game_state.get("phase", 0) or 0)
-        except Exception:
-            phase = 0
-    if phase != 0 and node in {"all", "maglock"}:
-        return jsonify({
-            "ok": False,
-            "error": "Alle Steuergeräte und die Schlosssteuerung dürfen nur in Phase 0 neu gestartet werden.",
-        }), 409
     if node == "all":
         nodes = sorted(REBOOT_NODE_IDS)
     elif node in REBOOT_NODE_IDS:
@@ -6287,38 +7049,6 @@ def api_riddle_time() -> Any:
     }):
         return jsonify({"ok": False, "error": "Die Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
     return jsonify({"ok": True, "riddle": riddle, "solve_time_s": round(seconds, 3), "adjustment_side": adjustment_side, "mqtt_queued": True})
-
-
-@app.post("/api/riddle-time-restore")
-def api_riddle_time_restore() -> Any:
-    data = request.get_json(force=True) or {}
-    stale = _stale_action_response(data)
-    if stale is not None:
-        return stale
-    riddle = _canonical_riddle_name(data.get("riddle") or data.get("node") or "")
-    if not riddle:
-        return jsonify({"ok": False, "error": "Rätsel-ID fehlt"}), 400
-    if data["expected_phase"] < 3:
-        return jsonify({"ok": False, "error": "Rätselzeiten können erst nach einem gestarteten Spiel wiederhergestellt werden."}), 409
-    snapshot = store.snapshot()
-    current_row = next((row for row in (snapshot.get("riddles") or []) if _canonical_riddle_name(row.get("id")) == riddle), None)
-    if not current_row or current_row.get("original_solve_time_s") in {None, ""}:
-        return jsonify({"ok": False, "error": "Für dieses Rätsel ist keine ursprüngliche Zeit gespeichert."}), 409
-    if str(current_row.get("phase_state") or "pending") not in {"solved", "skipped", "not_solved"}:
-        return jsonify({"ok": False, "error": "Nur die Zeit eines abgeschlossenen Rätsels kann wiederhergestellt werden."}), 409
-    if not mqtt_publish(TOPIC_GAME_CMD, {
-        "cmd": "restore_riddle_time",
-        "riddle": riddle,
-        "expected_phase": data["expected_phase"],
-        "expected_run_id": data["expected_run_id"].strip(),
-    }):
-        return jsonify({"ok": False, "error": "Die ursprüngliche Rätselzeit konnte nicht an MQTT übergeben werden."}), 503
-    return jsonify({
-        "ok": True,
-        "riddle": riddle,
-        "original_solve_time_s": current_row["original_solve_time_s"],
-        "mqtt_queued": True,
-    })
 
 
 def build_riddle_time_preview(snapshot: Any, riddle: str, solve_time_s: float, adjustment_side: str) -> dict[str, Any]:
@@ -7026,12 +7756,22 @@ def _snapshot_german(self):
 DashboardStore.snapshot = _snapshot_german
 
 mqtt_client.on_connect = on_connect
+mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message = on_message
 mqtt_client.connect_async(BROKER_HOST, BROKER_PORT, keepalive=30)
 mqtt_client.loop_start()
+_summary_delivery_thread = threading.Thread(
+    target=_summary_delivery_worker,
+    name="summary-delivery",
+    daemon=True,
+)
+_summary_delivery_thread.start()
 
 
 def _flush_log_archive() -> None:
+    _summary_delivery_stop.set()
+    if _summary_delivery_thread is not None and _summary_delivery_thread is not threading.current_thread():
+        _summary_delivery_thread.join(timeout=5.0)
     node_log_archive_writer.flush(5.0)
 
 

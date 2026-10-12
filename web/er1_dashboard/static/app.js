@@ -26,6 +26,7 @@ const state = {
   },
   hint_templates: { version: 2, templates: {} },
   start_assignment: { active: false, status: 'idle', message: '' },
+  summary_delivery: { status: 'waiting_for_persistence', attempt_count: 0 },
   meta: { persistence_degraded: false },
 };
 
@@ -49,6 +50,16 @@ const DASHBOARD_NODE_IDS = Object.freeze([
   'lighting', 'maglock', 'images_piano', 'chess',
   'knocking', 'candles', 'star_slider', 'star_sky',
 ]);
+const DASHBOARD_NODE_LABELS = Object.freeze({
+  lighting: 'Lighting Controller',
+  maglock: 'Maglock Controller',
+  images_piano: 'Images / Piano',
+  chess: 'Schach',
+  knocking: 'Knocking',
+  candles: 'Candles',
+  star_slider: 'Star Slider',
+  star_sky: 'Star Sky',
+});
 const NO_HINT_TEMPLATE_TEXT = Object.freeze({
   de: 'Für dieses Rätsel ist keine Tippvorlage hinterlegt.',
   en: 'No hint template is available for this riddle.',
@@ -62,6 +73,8 @@ const DIAGNOSTICS_BACKLOG_PAGE_BUDGET = 4;
 const DIAGNOSTICS_BACKLOG_BUDGET_PAUSE_MS = 400;
 const STATE_FETCH_TIMEOUT_MS = 1000;
 const STATE_RETRY_DELAY_MS = 100;
+const STATE_DISCONNECT_MIN_FAILURES = 2;
+const STATE_DISCONNECT_MIN_DURATION_MS = 1000;
 const MUTATION_ATTEMPT_TIMEOUT_MS = 1500;
 const MUTATION_RESOLUTION_TIMEOUT_MS = 10000;
 const OPERATION_STATUS_TIMEOUT_MS = 1000;
@@ -80,6 +93,8 @@ const diagnostics = {
   generation: 0,
   timer: null,
   requestController: null,
+  searchText: '',
+  autoScroll: false,
 };
 const operatorLogEntries = [];
 let operatorLogView = 'all';
@@ -116,6 +131,13 @@ let rankingState = { overall: null, riddles: new Map(), unavailable: false };
 let pulseCooldown = { id: '', until: 0 };
 let dismissedGlobalFeedbackMessage = '';
 let dismissedStartAssignmentSignature = '';
+const stateConnection = {
+  lastValidAt: 0,
+  failureStartedAt: 0,
+  failureCount: 0,
+  incidentLogged: false,
+  lastError: '',
+};
 
 let localTimerBaseElapsed = 0;
 let localTimerSyncedAt = 0;
@@ -483,7 +505,6 @@ function commandLabel(path) {
     '/api/solve': 'Rätsel gelöst',
     '/api/riddle-outcome': 'Rätselstatus geändert',
     '/api/riddle-time': 'Rätselzeit geändert',
-    '/api/riddle-time-restore': 'Ursprüngliche Rätselzeit wiederhergestellt',
     '/api/hints': 'Tippanzahl geändert',
     '/api/light': 'Lichtbefehl gesendet',
     '/api/lock': 'Schlossbefehl gesendet',
@@ -494,7 +515,7 @@ function commandLabel(path) {
   })[path] || `Befehl ${path}`;
 }
 
-function recordOperatorLog(message, level = 'INF', category = 'commands') {
+function recordOperatorLog(message, level = 'INF', category = 'commands', detail = {}) {
   operatorLogEntries.push({
     seq: `local-${Date.now()}-${operatorLogEntries.length}`,
     received_at: Date.now(),
@@ -502,7 +523,7 @@ function recordOperatorLog(message, level = 'INF', category = 'commands') {
     node: 'Dashboard',
     lv: level,
     msg: String(message || ''),
-    d: {},
+    d: detail && typeof detail === 'object' ? detail : {},
     _category: category,
   });
   if (operatorLogEntries.length > 100) operatorLogEntries.splice(0, operatorLogEntries.length - 100);
@@ -546,6 +567,10 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function iconSvg(name, className = '') {
+  return `<svg class="ui-icon ${className}" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
 }
 
 function safeInt(value, fallback = 0) {
@@ -761,7 +786,7 @@ function showFeedback(message, kind = '') {
 
 function showRecoverableStateFeedback(message, kind = 'error') {
   recoverableStateFeedback = String(message || '');
-  showFeedback(recoverableStateFeedback, kind);
+  recordOperatorLog(recoverableStateFeedback, kind === 'error' ? 'ERR' : 'WRN', kind === 'error' ? 'errors' : 'system');
 }
 
 function clearRecoverableStateFeedback() {
@@ -868,15 +893,74 @@ async function requestState() {
   }
 }
 
+function renderConnectionStatus(now = Date.now()) {
+  const connection = document.getElementById('connectionLabel');
+  if (!connection) return;
+  const ageSeconds = stateConnection.lastValidAt
+    ? Math.max(0, Math.floor((now - stateConnection.lastValidAt) / 1000))
+    : null;
+  if (stateConnection.incidentLogged) {
+    connection.textContent = ageSeconds == null ? 'Verbindung getrennt' : `Verbindung getrennt · Stand ${ageSeconds}s`;
+    document.body.classList.add('connection-lost');
+    return;
+  }
+  connection.textContent = ageSeconds == null ? 'Verbinde...' : `Live verbunden · Stand ${ageSeconds}s`;
+  document.body.classList.remove('connection-lost');
+}
+
+function noteStateSuccess() {
+  const now = Date.now();
+  if (stateConnection.incidentLogged) {
+    recordOperatorLog('Live-Verbindung wiederhergestellt.', 'INF', 'system', {
+      event: 'connection_recovery',
+      duration_ms: Math.max(0, now - stateConnection.failureStartedAt),
+      failed_polls: stateConnection.failureCount,
+      last_error: stateConnection.lastError,
+    });
+  }
+  stateConnection.lastValidAt = now;
+  stateConnection.failureStartedAt = 0;
+  stateConnection.failureCount = 0;
+  stateConnection.incidentLogged = false;
+  stateConnection.lastError = '';
+  renderConnectionStatus(now);
+}
+
+function noteStateFailure(error) {
+  const now = Date.now();
+  if (!stateConnection.failureStartedAt) stateConnection.failureStartedAt = now;
+  stateConnection.failureCount += 1;
+  stateConnection.lastError = String(error?.message || error || 'Unbekannter Fehler');
+  const sustained = stateConnection.failureCount >= STATE_DISCONNECT_MIN_FAILURES
+    && now - stateConnection.failureStartedAt >= STATE_DISCONNECT_MIN_DURATION_MS;
+  if (sustained && !stateConnection.incidentLogged) {
+    stateConnection.incidentLogged = true;
+    recordOperatorLog('Live-Verbindung anhaltend unterbrochen.', 'ERR', 'errors', {
+      event: 'connection_incident',
+      duration_ms: now - stateConnection.failureStartedAt,
+      failed_polls: stateConnection.failureCount,
+      error: stateConnection.lastError,
+      last_valid_age_ms: stateConnection.lastValidAt ? now - stateConnection.lastValidAt : null,
+    });
+  }
+  renderConnectionStatus(now);
+}
+
 function fetchAndPatch() {
   const generation = snapshotGeneration;
   if (stateRefreshPromise && stateRefreshGeneration === generation) return stateRefreshPromise;
   const request = (async () => {
-    const data = await requestState();
-    if (generation !== snapshotGeneration) return;
-    queueOrPatch(data);
-    clearRecoverableStateFeedback();
-    return data;
+    try {
+      const data = await requestState();
+      noteStateSuccess();
+      if (generation !== snapshotGeneration) return data;
+      queueOrPatch(data);
+      clearRecoverableStateFeedback();
+      return data;
+    } catch (error) {
+      noteStateFailure(error);
+      throw error;
+    }
   })();
   stateRefreshPromise = request;
   stateRefreshGeneration = generation;
@@ -894,15 +978,8 @@ async function pollLoop() {
   let failed = false;
   try {
     await fetchAndPatch();
-    const connection = document.getElementById('connectionLabel');
-    if (connection) connection.textContent = 'Live verbunden';
-    document.body.classList.remove('connection-lost');
   } catch (error) {
     failed = true;
-    const connection = document.getElementById('connectionLabel');
-    if (connection) connection.textContent = 'Verbindung getrennt';
-    document.body.classList.add('connection-lost');
-    showRecoverableStateFeedback(`Live-Aktualisierung unterbrochen; neuer Versuch läuft: ${error.message || error}`);
   } finally {
     const knockingIsCurrent = Number(state.game.phase || 0) === 10
       || String(state.game.current_riddle_name || '') === 'knocking';
@@ -991,9 +1068,7 @@ function installInteractionGuard() {
 
 function refreshStateAfterResume() {
   if (document.visibilityState === 'hidden') return;
-  fetchAndPatch().catch((error) => {
-    showRecoverableStateFeedback(`Live-Aktualisierung unterbrochen; neuer Versuch läuft: ${error.message || error}`);
-  });
+  fetchAndPatch().catch(() => {});
 }
 
 document.addEventListener('visibilitychange', refreshStateAfterResume);
@@ -1028,6 +1103,14 @@ function confirmAction({ title, message, confirmLabel = 'Bestätigen' }) {
   });
 }
 
+function gameControlConfirmationsRequired() {
+  return !document.getElementById('controlView') || Number(state.game.phase || 0) >= 2;
+}
+
+function confirmGameControlAction(options) {
+  return gameControlConfirmationsRequired() ? confirmAction(options) : Promise.resolve(true);
+}
+
 function wireConfirmationDialog() {
   const dialog = document.getElementById('confirmDialog');
   const confirmButton = document.getElementById('confirmDialogAccept');
@@ -1050,6 +1133,39 @@ function wireConfirmationDialog() {
       settleConfirmation(false);
     }
   });
+}
+
+function wireOperatorMenu() {
+  const button = document.getElementById('operatorMenuButton');
+  const tabs = document.getElementById('operatorTabs');
+  if (!button || !tabs) return;
+
+  const mobile = window.matchMedia('(max-width: 1100px)');
+  const setOpen = (open) => {
+    const expanded = Boolean(open);
+    tabs.classList.toggle('is-open', expanded);
+    tabs.classList.toggle('is-collapsed', !expanded);
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', expanded ? 'Navigation schließen' : 'Navigation öffnen');
+  };
+
+  button.addEventListener('click', () => {
+    setOpen(button.getAttribute('aria-expanded') !== 'true');
+  });
+  tabs.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => setOpen(false)));
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || button.getAttribute('aria-expanded') !== 'true') return;
+    event.preventDefault();
+    setOpen(false);
+    button.focus();
+  });
+  document.addEventListener('click', (event) => {
+    if (button.getAttribute('aria-expanded') !== 'true') return;
+    if (button.contains(event.target) || tabs.contains(event.target)) return;
+    setOpen(false);
+  });
+  mobile.addEventListener?.('change', () => setOpen(!mobile.matches));
+  setOpen(!mobile.matches);
 }
 
 function syncLocalTimers(game) {
@@ -1164,14 +1280,21 @@ function bookingOptionLabel(booking) {
 function bookingInfoHtml(booking) {
   const item = normalizeBooking(booking);
   const language = HINT_LANGUAGE_LABELS[item.language] || HINT_LANGUAGE_LABELS.de;
-  const details = [];
   const dateTime = [item.date, item.slot ? `${item.slot} Uhr` : ''].filter(Boolean).join(' ');
-  if (dateTime) details.push(['datetime', '&#128197;', 'Termin', dateTime]);
-  details.push(['players', '&#128101;', 'Spieler', `${item.players} ${item.players === 1 ? 'Person' : 'Personen'}`]);
-  if (item.customerName || item.kind === 'test') details.push(['name', '&#128100;', 'Name', item.customerName || 'Testbuchung']);
-  details.push(['language', '&#127760;', 'Sprache', language]);
-  if (item.customerEmail) details.push(['email', '&#9993;', 'E-Mail', item.customerEmail]);
-  return `<div class="booking-info-grid">${details.map(([field, icon, label, value]) => `<span class="booking-info-${field}" aria-label="${escapeAttr(label)}: ${escapeAttr(value)}"><i aria-hidden="true">${icon}</i>${escapeHtml(value)}</span>`).join('')}</div>`;
+  const detail = (field, icon, label, value) => value
+    ? `<span class="booking-info-${field}" aria-label="${escapeAttr(label)}: ${escapeAttr(value)}">${iconSvg(icon)}<span>${escapeHtml(value)}</span></span>`
+    : '';
+  return `<div class="booking-info-grid">
+    <div class="booking-info-column booking-info-primary">
+      ${detail('datetime', 'calendar', 'Termin', dateTime || (item.kind === 'test' ? 'Testbuchung' : 'Kein Termin'))}
+      ${detail('name', 'user', 'Name', item.customerName || (item.kind === 'test' ? 'Testbuchung' : ''))}
+      ${detail('email', 'mail', 'E-Mail', item.customerEmail)}
+    </div>
+    <div class="booking-info-column booking-info-secondary">
+      ${detail('players', 'users', 'Spieler', `${item.players} ${item.players === 1 ? 'Person' : 'Personen'}`)}
+      ${detail('language', 'globe', 'Sprache', language)}
+    </div>
+  </div>`;
 }
 
 async function loadBookings({ silent = false } = {}) {
@@ -1391,7 +1514,7 @@ function bookingOverrideMessage(booking) {
 
 async function confirmAndSaveBooking(booking) {
   const normalized = normalizeBooking(booking);
-  const confirmed = await confirmAction({
+  const confirmed = await confirmGameControlAction({
     title: 'Buchung manuell übernehmen?',
     message: bookingOverrideMessage(normalized),
   });
@@ -1411,14 +1534,30 @@ async function confirmAndSaveBooking(booking) {
 function renderSummaryControls() {
   const sendButton = document.getElementById('sendSummaryEmailBtn');
   const postGameActions = document.getElementById('postGameActions');
+  const statusNode = document.getElementById('summaryDeliveryStatus');
   if (!sendButton || !postGameActions) return;
   const finished = Number(state.game.phase || 0) >= 14 || Boolean(state.game.ended_at);
   const code = String(state.game.leaderboard_code || '').trim();
+  const delivery = state.summary_delivery || {};
+  const deliveryStatus = String(delivery.status || 'waiting_for_persistence');
+  const dueInSeconds = delivery.due_at_ms ? Math.max(0, Math.ceil((Number(delivery.due_at_ms) - Date.now()) / 1000)) : null;
   postGameActions.classList.toggle('hidden', !finished);
-  sendButton.disabled = summaryEmailBusy || !finished || !code;
-  sendButton.textContent = summaryEmailBusy
-    ? 'Wird gesendet…'
-    : (code ? `Spielzusammenfassung senden (${code})` : 'Spielzusammenfassung senden');
+  sendButton.disabled = summaryEmailBusy || !finished || !code || ['waiting_for_persistence', 'sending', 'sent'].includes(deliveryStatus);
+  if (summaryEmailBusy || deliveryStatus === 'sending') sendButton.textContent = 'Wird gesendet…';
+  else if (deliveryStatus === 'sent') sendButton.textContent = 'Spielzusammenfassung gesendet';
+  else if (deliveryStatus === 'failed' || deliveryStatus === 'retry') sendButton.textContent = 'Versand erneut versuchen';
+  else sendButton.textContent = code ? `Spielzusammenfassung senden (${code})` : 'Spielzusammenfassung senden';
+  if (statusNode) {
+    const labels = {
+      waiting_for_persistence: 'Wartet auf vollständig gespeichertes Spiel',
+      sending: 'Versand läuft',
+      sent: 'Dauerhaft als gesendet markiert',
+      failed: `Versand nach ${Number(delivery.attempt_count || 0)} Versuchen gestoppt`,
+      retry: `Nächster Versuch vorgemerkt${delivery.next_attempt_at_ms ? ` (${formatDiagnosticsTimestamp(delivery.next_attempt_at_ms)})` : ''}`,
+      pending: dueInSeconds == null ? 'Automatischer Versand vorgemerkt' : `Automatischer Versand in ${Math.ceil(dueInSeconds / 60)} Min.`,
+    };
+    statusNode.textContent = labels[deliveryStatus] || deliveryStatus;
+  }
 }
 
 function renderStartAssignmentStatus() {
@@ -1513,7 +1652,7 @@ function renderTop() {
 
   const phase = Number(state.game.phase || 0);
   const phaseLabel = String(state.game.phase_name_pretty || state.game.phase_name || '').trim();
-  if (phaseValue) phaseValue.textContent = `Phase ${phase} · ${phaseLabel || 'Aus'}`;
+  if (phaseValue) phaseValue.textContent = `Phase ${phase} - ${phaseLabel || 'Aus'}`;
   if (lastPhaseValue) {
     lastPhaseValue.textContent = state.game.last_phase == null
       ? '—'
@@ -1581,11 +1720,8 @@ function renderNodes() {
   if (!statusBar && !tableBody) return;
   if (statusBar) statusBar.innerHTML = '';
   if (tableBody) tableBody.innerHTML = '';
-  const phase = Number(state.game.phase || 0);
-  const phaseZero = phase === 0;
-
   const rebootNode = async (node, button) => {
-    const confirmed = await confirmAction({
+    const confirmed = await confirmGameControlAction({
       title: node === 'all' ? 'Alle Steuergeräte neu starten?' : `${button.dataset.nodeLabel} neu starten?`,
       message: node === 'all'
         ? 'Der Neustart wird an alle physischen Nodes gesendet. OTA wird nicht gestartet.'
@@ -1609,38 +1745,43 @@ function renderNodes() {
   };
 
   if (rebootAll) {
-    rebootAll.disabled = !phaseZero;
-    rebootAll.title = phaseZero
-      ? 'REBOOT an alle physischen Steuergeräte senden'
-      : 'Alle Steuergeräte dürfen nur in Phase 0 neu gestartet werden.';
+    rebootAll.disabled = false;
+    rebootAll.title = 'REBOOT an alle physischen Steuergeräte senden';
     rebootAll.onclick = () => rebootNode('all', rebootAll).catch(() => {});
   }
 
-  const diagnosticNodes = (state.nodes || []).filter((item) => item.id !== 'stop_timer');
-  const statusNodes = diagnosticNodes;
+  const nodesById = new Map((state.nodes || []).map((item) => [item.id, item]));
+  const diagnosticNodes = DASHBOARD_NODE_IDS.map((id) => {
+    const item = nodesById.get(id);
+    return item || {
+      id,
+      label: DASHBOARD_NODE_LABELS[id] || id,
+      online: false,
+      last_seen_s: null,
+      status: 'unknown',
+      _missing: true,
+    };
+  });
   const diagnosticOnlineCount = diagnosticNodes.filter((item) => item.online).length;
-  const statusOnlineCount = statusNodes.filter((item) => item.online).length;
   const diagnosticHealthText = `${diagnosticOnlineCount} online · ${diagnosticNodes.length - diagnosticOnlineCount} offline`;
-  const statusHealthText = `${statusOnlineCount} online · ${statusNodes.length - statusOnlineCount} offline`;
   const diagnosticsSummary = document.getElementById('nodeDiagnosticsSummary');
   if (diagnosticsSummary) diagnosticsSummary.textContent = diagnosticHealthText;
 
   for (const item of diagnosticNodes) {
     if (statusBar) {
-      const card = document.createElement('article');
-      card.className = 'node-row-v6';
-      card.innerHTML = `<span class="node-dot ${item.online ? 'is-online' : 'is-offline'}" aria-hidden="true"></span><strong>${escapeHtml(item.label)}</strong><span class="node-contact">(${Number.isFinite(Number(item.last_seen_s)) ? `vor ${Math.max(0, Math.round(Number(item.last_seen_s)))} s` : 'kein Kontakt'})</span>`;
       const reboot = document.createElement('button');
       reboot.type = 'button';
-      reboot.className = 'node-reboot-compact';
-      reboot.textContent = '↻ Reboot';
+      const age = item.last_seen_s != null && Number.isFinite(Number(item.last_seen_s))
+        ? String(Math.max(0, Math.round(Number(item.last_seen_s))))
+        : '?';
+      const statusClass = item._missing ? 'is-unknown' : (item.online ? 'is-online' : 'is-offline');
+      reboot.className = `node-status-button ${statusClass}`;
+      reboot.innerHTML = `${iconSvg('refresh', 'node-status-icon')}<strong>${escapeHtml(item.label)} (${age}s)</strong>`;
       reboot.dataset.nodeLabel = item.label;
-      reboot.setAttribute('aria-label', `${item.label} neu starten; Status ${item.online ? 'online' : 'offline'}`);
-      const phaseRestricted = item.id === 'maglock' && !phaseZero;
-      reboot.disabled = !item.online || phaseRestricted;
+      reboot.setAttribute('aria-label', `${item.label} (${age}s) neu starten; Status ${item._missing ? 'unbekannt' : (item.online ? 'online' : 'offline')}`);
+      reboot.disabled = false;
       reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
-      card.appendChild(reboot);
-      statusBar.appendChild(card);
+      statusBar.appendChild(reboot);
     }
 
     if (!tableBody) continue;
@@ -1650,7 +1791,7 @@ function renderNodes() {
     const statusCell = document.createElement('td');
     statusCell.innerHTML = `<span class="node-table-status ${item.online ? 'is-online' : 'is-offline'}">${item.online ? 'Online' : 'Offline'}</span>`;
     const contactCell = document.createElement('td');
-    contactCell.textContent = Number.isFinite(Number(item.last_seen_s)) ? `vor ${Math.max(0, Math.round(Number(item.last_seen_s)))} s` : '—';
+    contactCell.textContent = item.last_seen_s != null && Number.isFinite(Number(item.last_seen_s)) ? `vor ${Math.max(0, Math.round(Number(item.last_seen_s)))} s` : '—';
     const firmwareCell = document.createElement('td');
     firmwareCell.textContent = item.firmware || '—';
     const errorCell = document.createElement('td');
@@ -1661,13 +1802,10 @@ function renderNodes() {
     reboot.className = 'node-reboot-btn';
     reboot.textContent = 'Reboot';
     reboot.dataset.nodeLabel = item.label;
-    const phaseRestricted = item.id === 'maglock' && !phaseZero;
-    reboot.disabled = !item.online || phaseRestricted;
-    reboot.title = phaseRestricted
-      ? 'Die Schlosssteuerung darf nur in Phase 0 neu gestartet werden.'
-      : (item.online
-        ? 'REBOOT über MQTT einreihen'
-        : 'Knoten ist offline; Neustart ist deaktiviert. Diagnose-Logs bleiben verfügbar.');
+    reboot.disabled = false;
+    reboot.title = item.online
+      ? 'REBOOT über MQTT einreihen'
+      : 'Knoten meldet sich als offline; REBOOT trotzdem über MQTT einreihen.';
     reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
     actionCell.appendChild(reboot);
     row.append(labelCell, statusCell, contactCell, firmwareCell, errorCell, actionCell);
@@ -1714,7 +1852,7 @@ async function restartSystemService(target, button) {
 }
 
 async function confirmManualControl(title, message) {
-  return confirmAction({
+  return confirmGameControlAction({
     title,
     message: isLiveGame()
       ? `${message} Das Spiel läuft gerade; dieser Eingriff kann den normalen Ablauf verändern.`
@@ -1742,19 +1880,23 @@ function renderLocks() {
 
   for (const lock of locks) {
     const card = document.createElement('div');
-    card.className = `lock-card-v6 lock-card-v6--${lock.kind}`;
+    const roomLock = lock.kind === 'toggle';
+    card.className = `lock-card-v6 lock-card-v6--${lock.kind} ${roomLock ? 'lock-card-v6--room' : 'lock-card-v6--main'}`;
     const open = lock.is_open === true;
+    const closed = lock.is_open === false;
     const action = lock.kind === 'toggle' && open ? 'close' : 'open';
     const actionLabel = action === 'close' ? 'schließen' : 'öffnen';
     const hardwareBlocked = Boolean(lock.command_blocked || lock.boot_guard || lock.cooldown || lock.pulsing);
     const commandBlocked = lock.kind === 'pulse' ? (pulseBlocked || hardwareBlocked) : false;
     const displayLabel = labels[lock.id] || lock.label;
     const isTriggered = lock.kind === 'pulse' && pulseCooldown.id === lock.id && localSeconds > 0;
-    const icon = lock.kind === 'toggle' ? '&#128682;' : '&#128274;';
+    const visualState = isTriggered
+      ? 'is-triggered'
+      : (roomLock ? (open ? 'is-open' : (closed ? 'is-closed' : 'is-unknown')) : 'is-neutral');
     const stateText = lock.kind === 'toggle'
-      ? (open ? 'Offen' : 'Geschlossen')
+      ? (open ? 'Schließen' : (closed ? 'Öffnen' : 'Unbekannt'))
       : (isTriggered ? `${localSeconds} s` : 'Öffnen');
-    card.innerHTML = `<button class="lock-button-v6 ${open ? 'is-open' : 'is-closed'} ${isTriggered ? 'is-triggered' : ''}" type="button" ${commandBlocked ? 'disabled' : ''}><span class="lock-icon" aria-hidden="true">${icon}</span><span><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(stateText)}</small></span></button>`;
+    card.innerHTML = `<button class="lock-button-v6 ${visualState}" type="button" ${commandBlocked ? 'disabled' : ''} aria-label="${escapeAttr(displayLabel)}: ${escapeAttr(stateText)}"><span class="lock-icon" aria-hidden="true">${iconSvg(roomLock ? 'door' : 'lock')}</span><span><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(stateText)}</small></span></button>`;
     const button = card.querySelector('button');
     button.title = commandBlocked
       ? 'Alle Impulsschlösser sind während Impuls und Sperrzeit vorübergehend blockiert.'
@@ -1815,19 +1957,21 @@ function renderLights() {
       unknown: 'is-unknown',
     }[lightState] || 'is-unknown';
     const displayLabel = labels[light.id] || light.label;
+    const visibleStateLabel = lightState === 'unknown'
+      ? 'Unbekannt'
+      : (['mixed', 'partial'].includes(lightState) ? 'Teilweise' : (anyLightOn ? 'An' : 'Aus'));
     if (Number(light.pct) > 0) dimLastNonZero[light.id] = Number(light.pct);
 
     if (light.dimmable) {
       const dimValue = resolveDimValue(light);
       card.innerHTML = `
-        <div class="light-dimmer-head">
-          <button class="light-bulb-button ${buttonClass}" type="button" aria-label="${escapeAttr(displayLabel)} ein- oder ausschalten"><span aria-hidden="true">&#128161;</span></button>
-          <div><strong>${escapeHtml(displayLabel)}</strong><span class="dim-value">${escapeHtml(dimValue)} %</span></div>
+        <div class="light-dimmer-label">
+          <button class="light-bulb-button ${buttonClass}" type="button" aria-label="${escapeAttr(displayLabel)} ein- oder ausschalten">${iconSvg('bulb')}</button>
+          <strong>${escapeHtml(displayLabel)}</strong>
         </div>
-        <div class="dim-row-v6">
-          <input class="dim-input" type="range" min="0" max="100" step="1" value="${escapeAttr(dimValue)}" aria-label="Helligkeit ${escapeAttr(displayLabel)}" />
-          <button class="dim-apply-button" type="button">Übernehmen</button>
-          </div>
+        <input class="dim-input" type="range" min="0" max="100" step="1" value="${escapeAttr(dimValue)}" aria-label="Helligkeit ${escapeAttr(displayLabel)}" />
+        <span class="dim-value">${escapeHtml(dimValue)} %</span>
+        <button class="dim-apply-button" type="button">Übernehmen</button>
       `;
       const toggleButton = card.querySelector('.light-bulb-button');
       const input = card.querySelector('.dim-input');
@@ -1883,7 +2027,7 @@ function renderLights() {
       });
     } else {
       card.innerHTML = `
-        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><span class="light-toggle-icon" aria-hidden="true">${light.id === 'star_sky' ? '&#10022;' : '&#128293;'}</span><strong>${escapeHtml(displayLabel)}</strong><small>${anyLightOn ? 'An' : 'Aus'}</small></button>
+        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><span class="light-toggle-icon" aria-hidden="true">${iconSvg(light.id === 'star_sky' ? 'stars' : 'flame')}</span><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(visibleStateLabel)}</small></button>
       `;
       const button = card.querySelector('button');
       button.addEventListener('click', async () => {
@@ -1959,20 +2103,47 @@ function renderKnockingSummary(summary) {
 
 function renderStarSliderSummary(summary) {
   if (!summary) return '';
-  const symbol = (value) => {
+  const signs = [
+    ['Libra', 'libra', 7],
+    ['Aquarius', 'aquarius', 13],
+    ['Scorpio', 'scorpio', 10],
+    ['Gemini', 'gemini', 7],
+    ['Sagittarius', 'sagittarius', 10],
+    ['Leo', 'leo', 10],
+    ['Pisces', 'pisces', 13],
+  ];
+  const symbol = (value, extraClass = '') => {
     const key = String(value || 'none').trim().toLowerCase();
     const glyph = STAR_SIGN_SYMBOLS[key] || '?';
-    return `<span class="star-sign-symbol" title="${escapeAttr(key)}" aria-label="${escapeAttr(key)}">${glyph}</span>`;
+    return `<span class="star-sign-symbol ${extraClass}" title="${escapeAttr(key)}" aria-label="${escapeAttr(key)}">${glyph}</span>`;
   };
-  const current = (summary.current || []).map(symbol).join('');
-  const attempts = (summary.attempts || []).map((item) => `<span class="star-sign-attempt">${item.map(symbol).join('')}</span>`).join('');
+  const expected = ['libra', 'aquarius', 'scorpio'];
+  const current = (summary.current || []).map((value, index) => {
+    const key = String(value || 'none').trim().toLowerCase();
+    const correct = key === expected[index];
+    return `<span class="star-current-position ${correct ? 'is-correct' : ''}"><b>${index + 1}</b>${symbol(key)}</span>`;
+  }).join('');
+  const attempts = (summary.attempts || []).map((item) => {
+    const values = Array.isArray(item) ? item : [item];
+    return `<span class="star-sign-attempt">${values.map((value) => symbol(value)).join('')}</span>`;
+  }).join('<span class="star-attempt-separator">,</span>');
   return `
-    <div class="star-sign-summary">
-      <span class="star-sign-solution"><b>Lösung:</b> Waage ♎ (7), Wassermann ♒ (13), Skorpion ♏ (10), Zwillinge ♊ (7), Schütze ♐ (10), Löwe ♌ (10), Fische ♓ (13)</span>
-      <span><b>Aktuell:</b><span class="star-sign-row">${current || '—'}</span></span>
-      <span><b>Versuche:</b><span class="star-sign-attempts">${attempts || '—'}</span></span>
+    <div class="star-dashboard">
+      <table class="star-reference-table" aria-label="Sternzeichen und Anzahl der Sterne">
+        <thead><tr><th>Name</th><th>Symbol</th><th>Sterne</th></tr></thead>
+        <tbody>${signs.map(([name, key, count]) => `<tr><td>${name}</td><td>${symbol(key)}</td><td>${count}</td></tr>`).join('')}</tbody>
+      </table>
+      <div class="star-sign-summary">
+        <div class="star-sign-solution"><b>Lösung:</b><span class="star-sign-row">${expected.map((key) => symbol(key)).join('')}</span></div>
+        <div class="star-current"><b>Aktuell:</b><span class="star-sign-row">${current || '—'}</span></div>
+        <div class="star-attempts-block"><b>Versuche:</b><div class="star-attempts-scroll" tabindex="0" aria-label="Bisherige Sternzeichen-Versuche">${attempts || '—'}</div></div>
+      </div>
     </div>
   `;
+}
+
+function renderCandlesSummary(summary) {
+  return `<div class="candles-summary"><div class="candles-solution"><b>Lösung:</b><strong>2413</strong></div>${renderAttemptsSummary(summary)}</div>`;
 }
 
 function renderPianoSummary(summary) {
@@ -1994,7 +2165,7 @@ function renderRiddleInfo(riddle) {
   if (riddle.id === 'piano') return renderPianoSummary(riddle.piano_summary);
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
   if (riddle.id === 'knocking') return renderKnockingSummary(riddle.attempts_summary);
-  if (riddle.id === 'candles') return renderAttemptsSummary(riddle.attempts_summary);
+  if (riddle.id === 'candles') return renderCandlesSummary(riddle.attempts_summary);
   if (riddle.id === 'stars' || riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
   return riddle.info ? `<span>${escapeHtml(riddle.info)}</span>` : '<span class="muted-info">Keine Live-Daten.</span>';
 }
@@ -2071,6 +2242,7 @@ function riddleActionsHtml(riddle, compact = false) {
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
   const canMutateHints = riddleMutationsAvailable();
   return `<div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
+    ${compact ? `<div class="current-riddle-identity">${iconSvg('puzzle')}<h2>${escapeHtml(riddle.label)}</h2></div>` : ''}
     <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}><span aria-hidden="true">&#10003;</span> Gelöst</button>
     <div class="current-hint-control"><button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippanzahl verringern" ${!canMutateHints || count === 0 ? 'disabled' : ''}>−</button><span><small>Tippanzahl</small><strong>${count}</strong></span><button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippanzahl erhöhen" ${canMutateHints ? '' : 'disabled'}>+</button></div>
     ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button"><span aria-hidden="true">&#9654;</span> Überspringen</button>` : '<span class="riddle-action-spacer" aria-hidden="true"></span>'}
@@ -2082,20 +2254,14 @@ function riddleTimeEditorHtml(riddle) {
     && ['solved', 'skipped', 'not_solved'].includes(String(riddle.phase_state || 'pending'));
   if (!timeEditable) return '<span class="table-empty">--</span>';
   const seconds = Number(riddle.display_time_s ?? riddle.time_s ?? riddle.solve_time_s ?? 0);
-  const originalSeconds = Number(riddle.original_solve_time_s);
-  const restoreSeconds = Number(riddle.restore_time_s ?? riddle.original_solve_time_s);
-  const canRestore = Number.isFinite(originalSeconds) && originalSeconds > 0;
-  const alreadyOriginal = canRestore && Number.isFinite(restoreSeconds) && Math.abs(seconds - restoreSeconds) < 0.001;
   const editorId = `riddle-time-editor-${riddle.id}`;
   return `
     <div class="riddle-time-edit">
       <span class="riddle-time-current">${fmtGameTime(seconds)}</span>
       <button class="riddle-time-toggle" type="button" aria-label="Zeit von ${escapeAttr(riddle.label)} ändern" aria-controls="${escapeAttr(editorId)}" aria-expanded="false">&#9881;</button>
-      ${canRestore ? `<button class="riddle-time-restore" type="button" aria-label="Ursprüngliche Zeit von ${escapeAttr(riddle.label)} wiederherstellen" title="Ursprüngliche Zeit ${escapeAttr(fmtDurationInput(originalSeconds))} wiederherstellen" ${alreadyOriginal ? 'disabled' : ''}>↻</button>` : ''}
       <div class="riddle-time-editor" id="${escapeAttr(editorId)}" popover="auto">
-        <label class="riddle-time-input-wrap"><span>Neue Zeit</span><input class="riddle-time-input" type="text" inputmode="numeric" maxlength="5" value="${escapeAttr(fmtDurationInput(seconds))}" placeholder="MM:SS" aria-label="Rätselzeit als Minuten und Sekunden" /></label>
         <div class="riddle-time-options" aria-label="Ausgleichsvariante" aria-live="polite"><span class="riddle-time-preview-hint">Zeit eingeben, um beide Ausgleichsvarianten zu berechnen.</span></div>
-        <button class="riddle-time-save" type="button" disabled>Speichern</button>
+        <div class="riddle-time-entry"><input class="riddle-time-input" type="text" inputmode="numeric" maxlength="5" value="${escapeAttr(fmtDurationInput(seconds))}" placeholder="MM:SS" aria-label="Rätselzeit als Minuten und Sekunden" /><button class="riddle-time-save" type="button" disabled>Speichern</button></div>
       </div>
     </div>
   `;
@@ -2104,7 +2270,7 @@ function riddleTimeEditorHtml(riddle) {
 async function solveRiddle(riddle, button) {
   if (!riddle.can_solve) return;
 
-  const confirmed = await confirmAction({
+  const confirmed = await confirmGameControlAction({
     title: `${riddle.label} als gelöst markieren?`,
     message: riddle.solve_advances
       ? 'Diese Aktion setzt die Rätselzeit fest und wechselt zum nächsten Spielschritt.'
@@ -2130,7 +2296,7 @@ async function solveRiddle(riddle, button) {
 async function toggleSkip(riddle, button) {
   const stateName = String(riddle.phase_state || 'pending');
   if (stateName === 'pending' || stateName === 'skipped') return;
-  const confirmed = await confirmAction({
+  const confirmed = await confirmGameControlAction({
     title: `${riddle.label} überspringen?`,
     message: riddle.solve_advances
       ? 'Das aktive Rätsel wird als übersprungen markiert und der Spielablauf wird fortgesetzt.'
@@ -2166,13 +2332,13 @@ function renderRiddleTimeOptions(editor, preview) {
   });
   options.innerHTML = orderedOptions.map((option) => {
     if (!option.available) {
-      return `<button class="riddle-time-option is-unavailable" type="button" disabled><strong>${escapeHtml(option.label)}</strong><span>${escapeHtml(option.error || 'Nicht verfügbar')}</span></button>`;
+      return `<button class="riddle-time-option is-unavailable" type="button" data-adjustment-side="${escapeAttr(option.adjustment_side)}" disabled><strong>${escapeHtml(option.label)}</strong><span>Nicht verfügbar</span></button>`;
     }
     const receiving = option.receiving;
     const detail = receiving
-      ? `${receiving.label}: ${fmtDurationInput(receiving.old_time_s)} → ${fmtDurationInput(receiving.new_time_s)}`
-      : 'Keine zusätzliche Zeitverschiebung nötig';
-    return `<button class="riddle-time-option" type="button" data-adjustment-side="${escapeAttr(option.adjustment_side)}" aria-pressed="false"><strong>${escapeHtml(option.label)}</strong><span>${escapeHtml(detail)}</span></button>`;
+      ? `${receiving.label}: ${fmtDurationInput(receiving.old_time_s)} -> ${fmtDurationInput(receiving.new_time_s)}`
+      : '';
+    return `<button class="riddle-time-option" type="button" data-adjustment-side="${escapeAttr(option.adjustment_side)}" aria-pressed="false"><strong>${escapeHtml(option.label)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ''}</button>`;
   }).join('');
   options.querySelectorAll('.riddle-time-option:not(.is-unavailable)').forEach((optionButton) => {
     optionButton.addEventListener('click', () => {
@@ -2249,25 +2415,6 @@ async function saveRiddleTime(riddle, input, editor, button) {
   });
 }
 
-async function restoreRiddleTime(riddle, button) {
-  const originalSeconds = Number(riddle.original_solve_time_s);
-  const restoreSeconds = Number(riddle.restore_time_s ?? riddle.original_solve_time_s);
-  if (!Number.isFinite(originalSeconds) || originalSeconds <= 0) return;
-  const preservedAdjustment = Number.isFinite(restoreSeconds) && Math.abs(restoreSeconds - originalSeconds) >= 0.001
-    ? ` Spätere Ausgleiche bleiben erhalten; dadurch wird aktuell ${fmtDurationInput(restoreSeconds)} gesetzt.`
-    : '';
-  const confirmed = await confirmAction({
-    title: `Ursprüngliche Zeit für ${riddle.label} wiederherstellen?`,
-    message: `Die gemessene Zeit ${fmtDurationInput(originalSeconds)} wird wiederhergestellt und ihr ursprünglicher Zeitausgleich rückgängig gemacht.${preservedAdjustment}`,
-    confirmLabel: 'Zeit wiederherstellen',
-  });
-  if (!confirmed) return;
-  await runAction(button, () => api('/api/riddle-time-restore', {
-    method: 'POST',
-    body: JSON.stringify({ riddle: riddle.id, ...actionGuard() }),
-  }));
-}
-
 function positionRiddleTimeEditor(editor, toggleButton) {
   const gap = 8;
   const margin = 12;
@@ -2313,9 +2460,7 @@ function bindRiddleActions(container, riddle, { includeTimeEditor = false } = {}
   const input = container.querySelector('.riddle-time-input');
   const saveButton = container.querySelector('.riddle-time-save');
   const toggleButton = container.querySelector('.riddle-time-toggle');
-  const restoreButton = container.querySelector('.riddle-time-restore');
   const editor = container.querySelector('.riddle-time-editor');
-  restoreButton?.addEventListener('click', () => restoreRiddleTime(riddle, restoreButton).catch(() => {}));
   bindSegmentedDurationInput(input);
   editor?.addEventListener('toggle', (event) => {
     const open = event.newState === 'open';
@@ -2387,7 +2532,7 @@ function buildRiddleRow(riddle) {
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
   const ranking = rankingState.riddles.get(riddle.id);
   const rank = stateName === 'skipped' ? '--' : (ranking?.rank ? `#${ranking.rank}` : '--');
-  const status = final && riddle.id !== 'sissi' && !['prison', 'wheel'].includes(riddle.id)
+  const status = final && riddle.id !== 'sissi'
     ? `<button class="status-correction status-correction--${escapeAttr(stateName)}" type="button">${escapeHtml(riddle.phase_state_label || stateName)}</button>`
     : `<span class="table-status table-status--${escapeAttr(stateName)}"><span aria-hidden="true"></span>${escapeHtml(riddle.phase_state_label || stateName)}</span>`;
   const tips = final
@@ -2415,9 +2560,6 @@ function buildCurrentRiddleCard(riddle) {
   card.className = `current-riddle-card current-riddle-card--${escapeAttr(String(riddle.phase_state || 'pending'))}`;
   card.dataset.riddleId = riddle.id;
   card.innerHTML = `
-    <div class="current-riddle-card-head">
-      <h2><span aria-hidden="true">&#129513;</span>${escapeHtml(riddle.label)}</h2>
-    </div>
     <div class="current-riddle-body">
       <div class="current-riddle-facts" aria-label="Live-Informationen">
         <div class="current-fact-content">${renderRiddleInfo(riddle)}</div>
@@ -2456,7 +2598,10 @@ function renderCurrentRiddles() {
   wrap.innerHTML = '';
   const phase = Number(state.game.phase || 0);
   if (phase === 1) {
-    for (const riddle of state.riddles || []) wrap.appendChild(buildMaintenanceRiddleCard(riddle));
+    const hiddenMaintenanceRiddles = new Set(['prison', 'wheel', 'chains', 'tangram', 'magnet']);
+    for (const riddle of state.riddles || []) {
+      if (!hiddenMaintenanceRiddles.has(riddle.id)) wrap.appendChild(buildMaintenanceRiddleCard(riddle));
+    }
     return;
   }
   if (phase === 2) {
@@ -2519,6 +2664,10 @@ function selectedHintEditorValues() {
   return { language, riddle };
 }
 
+function hintTemplateEditingAvailable() {
+  return [0, 1].includes(Number(state.game.phase || 0));
+}
+
 function renderHintEditor() {
   const panel = document.getElementById('maintenanceHintEditor');
   const languageSelect = document.getElementById('hintEditorLanguage');
@@ -2546,34 +2695,34 @@ function renderHintEditor() {
     riddleSelect.value = HINT_RIDDLE_ORDER.includes(previousRiddle) ? previousRiddle : 'images';
   }
 
-  const maintenance = Number(state.game.phase || 0) === 1;
+  const editable = hintTemplateEditingAvailable();
   const { language, riddle } = selectedHintEditorValues();
   const tips = hintEditorDraft?.[riddle]?.[language] || [];
   list.innerHTML = tips.length
     ? tips.map((tip, index) => `
       <div class="hint-editor-row" data-index="${index}">
-        <textarea class="hint-editor-text" rows="3" maxlength="2000" ${maintenance ? '' : 'disabled'}>${escapeHtml(tip.text)}</textarea>
+        <textarea class="hint-editor-text" rows="3" maxlength="2000" ${editable ? '' : 'disabled'}>${escapeHtml(tip.text)}</textarea>
         <div class="hint-editor-time-fields">
-          <label>Seit Spielstart<input class="hint-editor-time" data-time-field="offer_after_total_s" data-allow-empty="true" type="text" inputmode="numeric" maxlength="5" placeholder="MM:SS" value="${tip.offer_after_total_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_total_s))}" ${maintenance ? '' : 'disabled'} /></label>
-          <label>Seit Rätselstart<input class="hint-editor-time" data-time-field="offer_after_riddle_s" data-allow-empty="true" type="text" inputmode="numeric" maxlength="5" placeholder="MM:SS" value="${tip.offer_after_riddle_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_riddle_s))}" ${maintenance ? '' : 'disabled'} /></label>
+          <label>Seit Spielstart<input class="hint-editor-time" data-time-field="offer_after_total_s" data-allow-empty="true" type="text" inputmode="numeric" maxlength="5" placeholder="MM:SS" value="${tip.offer_after_total_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_total_s))}" ${editable ? '' : 'disabled'} /></label>
+          <label>Seit Rätselstart<input class="hint-editor-time" data-time-field="offer_after_riddle_s" data-allow-empty="true" type="text" inputmode="numeric" maxlength="5" placeholder="MM:SS" value="${tip.offer_after_riddle_s == null ? '' : escapeAttr(formatHintOfferTime(tip.offer_after_riddle_s))}" ${editable ? '' : 'disabled'} /></label>
         </div>
         <div class="hint-editor-row-actions">
-          <button type="button" data-editor-action="up" ${!maintenance || index === 0 ? 'disabled' : ''} aria-label="Tipp nach oben">↑</button>
-          <button type="button" data-editor-action="down" ${!maintenance || index === tips.length - 1 ? 'disabled' : ''} aria-label="Tipp nach unten">↓</button>
-          <button type="button" data-editor-action="delete" ${maintenance ? '' : 'disabled'}>Löschen</button>
+          <button type="button" data-editor-action="up" ${!editable || index === 0 ? 'disabled' : ''} aria-label="Tipp nach oben">↑</button>
+          <button type="button" data-editor-action="down" ${!editable || index === tips.length - 1 ? 'disabled' : ''} aria-label="Tipp nach unten">↓</button>
+          <button type="button" data-editor-action="delete" ${editable ? '' : 'disabled'}>Löschen</button>
         </div>
       </div>
     `).join('')
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
   languageSelect.disabled = false;
   riddleSelect.disabled = false;
-  addButton.disabled = !maintenance;
-  saveButton.disabled = !maintenance || !hintEditorDirty;
-  status.textContent = maintenance
-    ? (hintEditorDirty ? 'Ungespeicherte Änderungen.' : 'Bearbeitung ist in Wartung freigeschaltet.')
-    : 'Schreibgeschützt. Bearbeitung ist nur in Phase 1 (Wartung) möglich.';
-  if (compactStatus) compactStatus.textContent = maintenance ? 'Bearbeitung freigeschaltet' : 'Außerhalb der Wartung schreibgeschützt';
-  panel.classList.toggle('hint-editor-readonly', !maintenance);
+  addButton.disabled = !editable;
+  saveButton.disabled = !editable || !hintEditorDirty;
+  status.textContent = editable
+    ? (hintEditorDirty ? 'Ungespeicherte Änderungen.' : 'Bearbeitung ist in Aus oder Wartung freigeschaltet.')
+    : 'Schreibgeschützt. Bearbeitung ist nur in Aus oder Wartung möglich.';
+  if (compactStatus) compactStatus.textContent = editable ? 'Bearbeitung freigeschaltet' : 'Nur in Aus oder Wartung bearbeitbar';
+  panel.classList.toggle('hint-editor-readonly', !editable);
   list.querySelectorAll('.hint-editor-time').forEach(bindSegmentedDurationInput);
 }
 
@@ -2587,7 +2736,7 @@ function wireHintEditor() {
   riddleSelect?.addEventListener('change', renderHintEditor);
   list?.addEventListener('input', (event) => {
     const input = event.target.closest?.('.hint-editor-text, .hint-editor-time');
-    if (!input || Number(state.game.phase || 0) !== 1) return;
+    if (!input || !hintTemplateEditingAvailable()) return;
     const index = safeInt(input.closest('.hint-editor-row')?.dataset.index, -1);
     const { language, riddle } = selectedHintEditorValues();
     if (index < 0 || !hintEditorDraft?.[riddle]?.[language]) return;
@@ -2607,7 +2756,7 @@ function wireHintEditor() {
   });
   list?.addEventListener('click', (event) => {
     const button = event.target.closest?.('[data-editor-action]');
-    if (!button || button.disabled || Number(state.game.phase || 0) !== 1) return;
+    if (!button || button.disabled || !hintTemplateEditingAvailable()) return;
     const index = safeInt(button.closest('.hint-editor-row')?.dataset.index, -1);
     const { language, riddle } = selectedHintEditorValues();
     const tips = hintEditorDraft?.[riddle]?.[language];
@@ -2619,7 +2768,7 @@ function wireHintEditor() {
     renderHintEditor();
   });
   addButton?.addEventListener('click', () => {
-    if (Number(state.game.phase || 0) !== 1) return;
+    if (!hintTemplateEditingAvailable()) return;
     const { language, riddle } = selectedHintEditorValues();
     hintEditorDraft[riddle][language].push({
       text: 'Neuer Tipp',
@@ -2631,7 +2780,7 @@ function wireHintEditor() {
     list?.querySelector('.hint-editor-row:last-child .hint-editor-text')?.focus();
   });
   saveButton?.addEventListener('click', async () => {
-    if (Number(state.game.phase || 0) !== 1 || !hintEditorDirty) return;
+    if (!hintTemplateEditingAvailable() || !hintEditorDirty) return;
     const invalid = list?.querySelector(':invalid');
     if (invalid) {
       invalid.reportValidity();
@@ -2666,17 +2815,12 @@ function updateRiddleTimeDisplays() {
     }
     const current = row?.querySelector('.riddle-time-current');
     if (current) current.textContent = seconds >= 1 ? fmtGameTime(seconds) : '--';
-    const restoreButton = row?.querySelector('.riddle-time-restore');
-    const restoreSeconds = Number(riddle.restore_time_s ?? riddle.original_solve_time_s);
-    if (restoreButton && Number.isFinite(restoreSeconds)) {
-      restoreButton.disabled = Math.abs(Number(seconds) - restoreSeconds) < 0.001;
-    }
   }
 }
 
 function patchState(data) {
   const initialRender = !lastSnapshot;
-  const rerenderTop = sectionChanged(data, 'game') || sectionChanged(data, 'booking') || sectionChanged(data, 'start_assignment') || sectionChanged(data, 'meta');
+  const rerenderTop = sectionChanged(data, 'game') || sectionChanged(data, 'booking') || sectionChanged(data, 'start_assignment') || sectionChanged(data, 'summary_delivery') || sectionChanged(data, 'meta');
   const rerenderNodes = sectionChanged(data, 'nodes') || sectionChanged(data, 'game');
   const rerenderLocks = sectionChanged(data, 'locks');
   const rerenderLights = sectionChanged(data, 'lights');
@@ -2696,6 +2840,7 @@ function patchState(data) {
   state.booking = nextBooking;
   state.hint_templates = data.hint_templates || state.hint_templates;
   state.start_assignment = data.start_assignment || state.start_assignment;
+  state.summary_delivery = data.summary_delivery || state.summary_delivery;
   state.meta = data.meta || state.meta;
   updateLogArchiveDeleteAvailability();
 
@@ -2754,7 +2899,7 @@ async function handleStart(button) {
     return;
   }
 
-  const confirmed = await confirmAction({
+  const confirmed = await confirmGameControlAction({
     title: 'Spiel wirklich starten?',
     message: 'Diese Aktion startet den Countdown und die Spielzeit. Prüfe vorher, ob alle Spieler bereit sind.',
     confirmLabel: 'Spiel starten',
@@ -2809,7 +2954,7 @@ async function handlePhaseAction(action, button) {
     maintenance: 'Wartung',
     prepare: 'Vorbereitung',
   }[action] || action;
-  const confirmed = await confirmAction({
+  const confirmed = await confirmGameControlAction({
     title: `Phase auf „${label}“ ändern?`,
     message: isGameMode()
       ? 'Ein Phasenwechsel kann Timer, Licht, Schlösser und den aktuellen Spielstand verändern.'
@@ -2842,10 +2987,10 @@ async function sendSummaryEmail(button) {
       });
       const email = result?.email || {};
       const target = saved.customerEmail || '';
-      if (email.skipped) {
+      if (email.skipped && !result.alreadySent) {
         setSummaryFeedback(`E-Mail nicht gesendet: ${email.reason || 'kein Grund angegeben'}.`, 'warn');
       } else {
-        setSummaryFeedback(target ? `Spielzusammenfassung an ${target} gesendet.` : 'Spielzusammenfassung gesendet.', 'ok');
+        setSummaryFeedback(result.alreadySent ? 'Spielzusammenfassung war bereits gesendet.' : (target ? `Spielzusammenfassung an ${target} gesendet.` : 'Spielzusammenfassung gesendet.'), 'ok');
       }
     }, { silent: true });
   } catch (error) {
@@ -3079,12 +3224,32 @@ async function loadLogArchive() {
 async function searchLogArchive(segmentId = '') {
   const results = document.getElementById('logArchiveResults');
   const input = document.getElementById('logArchiveSearchInput');
+  const count = document.getElementById('logArchiveResultCount');
   if (!results || !input) return;
   results.replaceChildren();
+  if (document.querySelectorAll('.diagnostics-node-filter').length && !diagnostics.nodes.size) {
+    if (count) count.textContent = '0 Treffer';
+    const empty = document.createElement('p');
+    empty.className = 'muted-info';
+    empty.textContent = 'Kein Knoten ausgewählt.';
+    results.appendChild(empty);
+    return;
+  }
+  if (document.querySelectorAll('.diagnostics-level-filter').length && !diagnostics.levels.size) {
+    if (count) count.textContent = '0 Treffer';
+    const empty = document.createElement('p');
+    empty.className = 'muted-info';
+    empty.textContent = 'Keine Log-Stufe ausgewählt.';
+    results.appendChild(empty);
+    return;
+  }
   const params = new URLSearchParams({ text: input.value.trim(), limit: '200' });
+  if (diagnostics.nodes.size) params.set('node', [...diagnostics.nodes, 'Dashboard'].join(','));
+  if (diagnostics.levels.size) params.set('level', Array.from(diagnostics.levels).join(','));
   if (segmentId) params.append('segment', segmentId);
   try {
     const payload = await api(`/api/log-archive/search?${params.toString()}`);
+    if (count) count.textContent = `${payload.entries?.length || 0} Treffer`;
     if (payload.truncated) {
       const notice = document.createElement('p');
       notice.className = 'diagnostics-status';
@@ -3106,6 +3271,7 @@ async function searchLogArchive(segmentId = '') {
       }));
     });
   } catch (error) {
+    if (count) count.textContent = 'Suche fehlgeschlagen';
     const message = document.createElement('p');
     message.className = 'archive-status-error';
     message.textContent = error.message || 'Archivsuche fehlgeschlagen.';
@@ -3233,10 +3399,13 @@ function createDiagnosticsLogEntry(entry) {
 
 function updateDiagnosticsCount() {
   const count = document.getElementById('diagnosticsCount') || document.getElementById('adminDiagnosticsCount');
-  if (count) count.textContent = `${visibleDiagnosticsEntries().length} Einträge`;
+  if (!count) return;
+  const visible = visibleDiagnosticsEntries().length;
+  const total = diagnosticsEntriesForCategory().length;
+  count.textContent = diagnostics.searchText ? `${visible} / ${total} Einträge` : `${visible} Einträge`;
 }
 
-function visibleDiagnosticsEntries() {
+function diagnosticsEntriesForCategory() {
   const merged = [...diagnostics.entries, ...operatorLogEntries].sort((a, b) => {
     const left = Number(a.received_at || a.ts || 0);
     const right = Number(b.received_at || b.ts || 0);
@@ -3248,15 +3417,27 @@ function visibleDiagnosticsEntries() {
   return merged;
 }
 
+function visibleDiagnosticsEntries() {
+  const entries = diagnosticsEntriesForCategory();
+  const search = diagnostics.searchText.trim().toLocaleLowerCase('de-DE');
+  if (!search) return entries;
+  return entries.filter((entry) => {
+    try {
+      return JSON.stringify(entry).toLocaleLowerCase('de-DE').includes(search);
+    } catch (_error) {
+      return String(entry?.msg || '').toLocaleLowerCase('de-DE').includes(search);
+    }
+  });
+}
+
 function replaceDiagnosticsLogs() {
   const list = document.getElementById('diagnosticsLogList') || document.getElementById('adminDiagnosticsLogList');
   if (!list) return;
-  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 32;
   const previousTop = list.scrollTop;
   const fragment = document.createDocumentFragment();
   for (const entry of visibleDiagnosticsEntries()) fragment.appendChild(createDiagnosticsLogEntry(entry));
   list.replaceChildren(fragment);
-  if (nearBottom) list.scrollTop = list.scrollHeight;
+  if (diagnostics.autoScroll) list.scrollTop = list.scrollHeight;
   else list.scrollTop = previousTop;
   updateDiagnosticsCount();
 }
@@ -3344,7 +3525,7 @@ async function pollDiagnosticsLogs(generation = diagnostics.generation) {
   const params = new URLSearchParams();
   params.set('after', String(diagnostics.after));
   params.set('limit', String(DIAGNOSTICS_POLL_LIMIT));
-  params.set('nodes', Array.from(diagnostics.nodes).join(','));
+  params.set('nodes', [...diagnostics.nodes, 'Dashboard'].join(','));
   params.set('levels', Array.from(diagnostics.levels).join(','));
   const controller = new AbortController();
   diagnostics.requestController = controller;
@@ -3509,6 +3690,14 @@ function wireDiagnostics() {
       replaceDiagnosticsLogs();
     });
   });
+  document.querySelector('.diagnostics-search-input')?.addEventListener('input', (event) => {
+    diagnostics.searchText = String(event.target.value || '');
+    replaceDiagnosticsLogs();
+  });
+  document.querySelector('.diagnostics-autoscroll')?.addEventListener('change', (event) => {
+    diagnostics.autoScroll = event.target.checked === true;
+    if (diagnostics.autoScroll) replaceDiagnosticsLogs();
+  });
   document.getElementById('logArchiveRefreshBtn')?.addEventListener('click', () => loadLogArchive());
   document.getElementById('logArchiveSearchBtn')?.addEventListener('click', () => searchLogArchive());
   document.getElementById('logArchiveSearchInput')?.addEventListener('keydown', (event) => {
@@ -3520,6 +3709,7 @@ function wireDiagnostics() {
 }
 
 function updateFastTimers() {
+  renderConnectionStatus();
   const timerValue = document.getElementById('timerValue');
   const riddleTimerValue = document.getElementById('riddleTimerValue');
   const prepareCounter = document.getElementById('prepareCounterValue');
@@ -3558,6 +3748,7 @@ function updateFastTimers() {
 }
 
 installInteractionGuard();
+wireOperatorMenu();
 wireConfirmationDialog();
 wireFeedbackDismissals();
 wireTopControls();

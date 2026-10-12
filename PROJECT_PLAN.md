@@ -2,9 +2,9 @@
 
 ## 1. Project Goal
 
-Keep ER1 game control fully usable on the local LAN, remove start and time-edit
-race conditions, align booking and riddle behavior with operator expectations,
-and provide reliable game-history and bounded log-archive operations.
+Keep ER1 game control fully usable on the local LAN, make operator actions and
+player events traceable, prevent time-edit side effects, align the control-room
+layout with the supplied references, and deliver the game summary reliably.
 
 ## 2. Functions And Behavior
 
@@ -41,23 +41,57 @@ and provide reliable game-history and bounded log-archive operations.
   capability reference.
 - The control-page log is searchable inside a bounded, manually scrollable
   container.
-- Hint templates are editable in Off phase as well as Maintenance. Saving the
-  German text also translates and stores English and Italian versions.
+- Hint templates are editable in Off phase as well as Maintenance. The current
+  German production inventory is synchronized once into English and Italian;
+  later free-text saves do not invoke automatic translation.
 - Lighting and lock controls follow the supplied reference composition and
   visual states.
+- Each riddle card places icon/name at the left of the same row as Solve, Hints,
+  and Skip. In Maintenance, Prison, Wheel, Chains, Tangram, and Magnet are not
+  shown as active-riddle cards.
+- The phase/riddle column aligns with the phase panel; lighting and logs move
+  left to preserve the reference widths. Tabs, buttons, spacing, typography,
+  booking, lighting, and lock cards are matched responsively to the references.
+- Room 2 and Room 3 render below the three main locks. Open rooms offer Close;
+  closed rooms offer Open. Unknown lock/light state is shown as unknown.
+- Eight active physical nodes render as two columns of large status-colored
+  reboot buttons labeled `Node name (Xs)`.
+- In Off and Maintenance, actions in the Game Control tab run without a confirm
+  dialog. During Preparation/Live, existing confirmations remain and node
+  reboots require confirmation. Database/game/log deletion always confirms.
+- The control log records meaningful player events, operator actions, state
+  transitions, connection loss/recovery, and errors. Raw heartbeat samples are
+  not emitted as individual log rows. Both the Game Control log and Admin live/
+  archive logs are searchable; optional auto-scroll and unclipped entry counts
+  are available.
+- Proxied operator actions carry a cryptographically verified website-admin
+  identity. Logs include actor, action, target, old/new state, run/phase/booking,
+  operation ID, duration, result, and sanitized errors. Unsigned LAN actions are
+  labeled local/unknown rather than attributed to an admin.
+- Connection loss is debounced so one failed poll does not flash a transient
+  message. User-facing transient errors are rendered in the log instead of as
+  unanchored white/black viewport text.
+- The top ER1 `Menu` button opens and closes the responsive tab navigation with
+  correct keyboard and accessibility state.
+- Thirty minutes after a fully persisted completion, the summary email is sent
+  automatically unless that run was already sent manually. Durable claim/status
+  and retries prevent duplicates while leaving a 30-minute correction window.
+- Current German hint templates and timing changes are synchronized once into
+  English and Italian. Future free-text saves are not translated automatically.
 - Deleting a saved game reliably moves it to the removed-games database without
   relying on a browser-native confirmation dialog.
 
 ## 3. Scope And Exclusions
 
-Included log sources: normalized MQTT node logs shown by the Dashboard,
-server-side operator mutation outcomes, and Dashboard WARNING/ERROR/CRITICAL
-records. Heartbeat/state/event traffic, serial-only diagnostics, and Game Master
-journal ingestion are excluded. Authentication and automatic hint delivery are
-also excluded.
+Included log sources: normalized MQTT logs and player events, meaningful state
+transitions, server-side operator outcomes, connection incidents, and Dashboard
+warnings/errors. Raw heartbeat samples, serial-only diagnostics, and unbounded
+debug streams are excluded. Authentication and automatic hint delivery are also
+excluded.
 
-No firmware change is planned. No commit, push, browser action, or deployment is
-implicit in implementation; those require their normal explicit boundaries.
+No firmware change is planned. Correlated device acknowledgements are a separate
+project. This work session permits local code/tests and the specifically approved
+isolated local browser session only; no deployment, production migration, or push.
 
 ## 4. Chosen Approach
 
@@ -78,6 +112,12 @@ implicit in implementation; those require their normal explicit boundaries.
 - Queue MQTT archive writes off the Paho callback, fsync JSONL batches and
   directory changes, expose queue failures, and cap each search snapshot at the
   newest 32 MiB. Individual segments remain searchable and downloadable.
+- Use one event taxonomy for player, operator, system, and connectivity records;
+  archive once server-side and merge relevant records into the live control log.
+- Start summary delivery from durable completion state after a 30-minute delay.
+  Persist one claim/result per run; a successful manual send satisfies the same
+  claim and suppresses automatic delivery.
+- Use responsive CSS/layout changes rather than proxy-side HTML injection.
 
 ## 5. Constraints
 
@@ -86,21 +126,26 @@ implicit in implementation; those require their normal explicit boundaries.
   redesigned for multiple workers.
 - Local Dashboard state and controls cannot depend on Internet availability.
 - Production phase must never be changed automatically.
+- Summary claims, stable message IDs, and persisted retries prevent ordinary
+  duplicate sends. SMTP has one unavoidable uncertainty window if the provider
+  accepts a message and the process dies before persisting success; without a
+  provider idempotency API, retrying favors delivery over a strict at-most-once
+  guarantee.
 
 ## 6. Implementation Steps
 
-1. Fix Start gating, popover lifetime/exclusivity, segmented duration input,
-   booking card, Stars solution, and cache versions.
-2. Add completed-booking filtering and hint due-state calculation/rendering.
-3. Add the JSONL sink, operator/server integration, archive APIs, Admin archive
-   UI, retention controls, and node-level capability reference.
-4. Repair game deletion first, with a database backup and focused regression
-   tests before deployment.
-5. In a separate revision, remove time undo and implement the queued control,
-   booking, riddle-live-data, same-day booking, hint, and log UI changes.
-6. Add focused unit/source tests, then run full Python/Node/syntax gates.
-7. Perform visual browser verification only after separate action-specific
-   approval.
+1. Remove time undo end-to-end, preserve total time during every riddle edit,
+   and decouple Prison/Wheel status from counted results.
+2. Implement phase-sensitive confirmation rules and accurate unknown hardware
+   states.
+3. Restructure the Game Control layout, booking, riddles, Candles, Stars,
+   lighting, locks, nodes, Maintenance visibility, and responsive menu.
+4. Unify operator/player/connectivity logging, debounce connection incidents,
+   and add search plus optional auto-scroll.
+5. Add duplicate-safe automatic summary delivery after 30 minutes with manual
+   early-send status/retry.
+6. Synchronize current German hints/timings into English and Italian.
+7. Run focused and full tests, then the approved isolated local visual session.
 
 ## 7. Success Criteria
 
@@ -117,6 +162,12 @@ implicit in implementation; those require their normal explicit boundaries.
 - Due hints are deterministic and never auto-send.
 - Logs survive restart, remain within age/size bounds, are safely searchable and
   maintainable in Admin, and failures never stop game control.
+- One failed state poll causes no visible disconnect flash; sustained loss and
+  recovery each create one useful log record.
+- Summary email sends 30 minutes after completion unless sent manually; transient
+  failure can retry without accidental duplication.
+- Desktop/tablet/mobile layouts match the supplied hierarchy without clipped
+  controls, overlapping cards, or nested-scroll traps.
 - Full automated test and syntax suites pass.
 
 ## 8. Decisions
@@ -128,26 +179,35 @@ implicit in implementation; those require their normal explicit boundaries.
   accepted; this supersedes the Chains group-outcome decision.
 - Remove time undo and guarantee invariant total game time during every manual
   riddle-time edit: accepted; this supersedes original-time restoration.
-- Automatic German-to-English/Italian hint translation is required. The
-  translation mechanism and failure behavior remain an implementation decision
-  for that later revision.
+- Current German hints/timings are translated once by the implementation into
+  English and Italian. Automatic translation of future edits is not included.
+- Phase 0/1 Game Control actions do not confirm. Preparation/Live keeps current
+  confirmations, including node reboot. Database/game/log deletion always
+  confirms.
+- Summary email automatically sends after 30 minutes unless already sent
+  manually; both paths share durable duplicate prevention.
+- Firmware acknowledgements remain a separate project; no node firmware changes
+  are part of this implementation.
+- Chess remains unchanged.
 
 ## 9. Ideas Parking Lot
 
-- Accepted, queued after game deletion: implement the compact phase/booking
-  hierarchy, larger time editor, Candles solution, symbol-based Stars table and
-  attempt list, same-day bookings, independent Prison/Wheel controls, reference
-  lighting/lock cards, Off-phase hint editing with DE-to-EN/IT translation, and
-  searchable scrollable control logs. The supplied screenshots are the visual
-  target for spacing, typography, panel density, state colors, and control sizes.
 - Proposed: authenticate Admin actions and record trustworthy operator identity.
-- Proposed: firmware acknowledgment of active log level.
+- Accepted separate project: correlated MQTT command acknowledgement. Estimate:
+  10-20 person-days for a low-risk proof of concept, 30-50 for all active nodes,
+  and 45-70 for fully hardened QoS/reboot/OTA fault handling.
 - Proposed: compressed closed log segments.
 - Proposed: automatic hint delivery with durable acknowledgment.
 
 ## 10. Current Status And Next Step
 
-Commit `2ec80dbb` and the isolated saved-game deletion repair are deployed. The
-repair has a fresh production backup and passes the full 148-test Python suite.
-All other newly accepted behavior and visual changes above remain queued for a
-separate revision.
+Production currently includes game-deletion confirmation through commit
+`47359159`. Steps 1-7 are implemented locally and independently reviewed. The
+final ER1 suite passes 167 tests; JavaScript syntax and diff checks pass. An
+isolated headless-Chromium review used 17 of the approved 18 renderings across
+desktop, tablet, 500-pixel mobile, and true 390-pixel emulation. No tested view
+had horizontal document overflow; the 1024-pixel ER1 layout now uses the compact
+responsive flow. All temporary servers, databases, profiles, and screenshots
+were removed. The one-time hint candidate is prepared but not applied. Next:
+obtain separate authorization before committing/deploying or changing production
+data; no deployment or production migration is authorized in this work session.

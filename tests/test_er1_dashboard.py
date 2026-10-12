@@ -36,6 +36,7 @@ GAME_VIEWER_JS_PATH = ROOT / "web" / "er1_dashboard" / "static" / "game_viewer.j
 GAME_VIEWER_HTML_PATH = ROOT / "web" / "er1_dashboard" / "templates" / "game_viewer.html"
 DEFAULT_HINTS_PATH = ROOT / "web" / "er1_dashboard" / "hint_templates.defaults.json"
 ENV_EXAMPLE_PATH = ROOT / "web" / "er1_dashboard" / ".env.example"
+GITIGNORE_PATH = ROOT / ".gitignore"
 
 
 def extracted(*names: str) -> dict[str, Any]:
@@ -46,6 +47,7 @@ def extracted(*names: str) -> dict[str, Any]:
         "Any": Any,
         "Path": Path,
         "closing": contextlib.closing,
+        "copy": copy,
         "datetime": datetime,
         "timedelta": timedelta,
         "timezone": timezone,
@@ -53,6 +55,7 @@ def extracted(*names: str) -> dict[str, Any]:
         "math": math,
         "os": os,
         "re": re,
+        "sqlite3": sqlite3,
         "threading": threading,
         "time": time,
         "unicodedata": __import__("unicodedata"),
@@ -337,6 +340,7 @@ class BookingRulesTests(unittest.TestCase):
         self.assertFalse(eligible(booking(slot="invalid"), reference))
         self.assertFalse(eligible(booking(slot="invalid 12:30 text"), reference))
         self.assertFalse(eligible(booking(date="2026-10-01junk"), reference))
+        self.assertFalse(eligible(booking(date="2026-10-02", slot="00:15"), reference))
 
     def test_stale_cache_cannot_feed_automatic_match(self) -> None:
         namespace = extracted("load_bookings_for_start_assignment")
@@ -455,7 +459,7 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertIn("aktualisieren", guard({"expected_phase": 10, "expected_run_id": "old-run"}))
         self.assertIn("aktualisieren", guard({}))
 
-    def test_node_reboot_is_whitelisted_and_publishes_plain_reboot(self) -> None:
+    def test_node_reboot_is_whitelisted_available_live_and_publishes_plain_reboot(self) -> None:
         namespace = extracted("api_node_reboot")
         published: list[tuple[str, Any]] = []
         store = types.SimpleNamespace(lock=threading.RLock(), game_state={"phase": 0})
@@ -501,16 +505,16 @@ class DashboardMutationTests(unittest.TestCase):
 
         store.game_state["phase"] = 3
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "all"})
-        response, status = namespace["api_node_reboot"]()
-        self.assertEqual(status, 409)
-        self.assertFalse(response["ok"])
-        self.assertEqual(len(published), 9)
+        response = namespace["api_node_reboot"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["queued_count"], 8)
+        self.assertEqual(len(published), 17)
 
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
-        response, status = namespace["api_node_reboot"]()
-        self.assertEqual(status, 409)
-        self.assertFalse(response["ok"])
-        self.assertEqual(len(published), 9)
+        response = namespace["api_node_reboot"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["queued_count"], 1)
+        self.assertEqual(published[-1], ("maglock/sys/cmd", "REBOOT"))
 
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "lighting"})
         response = namespace["api_node_reboot"]()
@@ -572,17 +576,21 @@ class DashboardMutationTests(unittest.TestCase):
 
     def test_summary_email_outage_is_retryable_and_keeps_completed_game(self) -> None:
         namespace = extracted("api_send_summary_email")
+        process_calls: list[dict[str, Any]] = []
+        completed_payload = {
+            "run": {"run_id": "run-1", "leaderboard_code": "123456"},
+            "leaderboardCode": "123456",
+        }
         namespace.update({
-            "request": types.SimpleNamespace(get_json=lambda silent: {}),
             "jsonify": JsonResponse,
-            "current_raw_run_payload": lambda: {"run_id": "run-1", "leaderboard_code": "123456"},
-            "normalize_booking_selection": lambda booking: dict(booking),
-            "store": types.SimpleNamespace(get_selected_booking=lambda: {
-                "kind": "booking",
-                "players": 4,
-                "customerEmail": "guest@example.invalid",
-            }),
-            "send_summary_email_via_ssh": lambda _payload: (_ for _ in ()).throw(RuntimeError("network offline")),
+            "_completed_summary_payload": lambda: completed_payload,
+            "process_summary_delivery_once": lambda **kwargs: process_calls.append(kwargs) or (
+                "failed",
+                {"run_id": "run-1", "leaderboard_code": "123456", "status": "retry", "attempt_count": 1},
+                None,
+            ),
+            "_public_summary_delivery": lambda record: dict(record),
+            "_sanitized_technical_error": lambda error: str(error),
             "LOG": types.SimpleNamespace(warning=lambda *_args: None),
         })
 
@@ -591,6 +599,124 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertTrue(response["retryable"])
         self.assertTrue(response["game_saved"])
+        self.assertEqual(process_calls, [{"force_run_id": "run-1", "force_payload": completed_payload}])
+
+    def test_summary_is_scheduled_only_after_database_and_json_are_complete(self) -> None:
+        namespace = extracted("_summary_run_with_result_exclusions", "_completed_summary_payload")
+        riddles = [
+            "images", "piano", "prison", "wheel", "chains", "tangram",
+            "magnet", "chess", "knocking", "candles", "stars", "sissi",
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "game_master.sqlite3"
+            runs_dir = root / "game_runs"
+            runs_dir.mkdir()
+            with contextlib.closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.executescript("""
+                    CREATE TABLE games (id TEXT PRIMARY KEY, ended_at TEXT, leaderboard_code TEXT);
+                    CREATE TABLE game_riddles (game_id TEXT, riddle_key TEXT);
+                """)
+                connection.execute(
+                    "INSERT INTO games VALUES (?, ?, ?)",
+                    ("run-1", "2026-10-12T19:00:00+02:00", "123456"),
+                )
+                connection.executemany(
+                    "INSERT INTO game_riddles VALUES (?, ?)",
+                    [("run-1", riddle) for riddle in riddles],
+                )
+            run = {
+                "run_id": "run-1",
+                "ended_at": "2026-10-12T19:00:00+02:00",
+                "leaderboard_code": "123456",
+                "players_count": 4,
+                "booking": {"id": "booking-1", "kind": "booking", "players": 4},
+                "riddle_timings": {riddle: {"status": "solved", "marker": riddle} for riddle in riddles},
+            }
+            run["riddle_timings"]["prison"].update({"status": "skipped", "solved": False, "skipped": True, "not_solved": False})
+            run["riddle_timings"]["wheel"].update({"status": "not_solved", "solved": False, "skipped": False, "not_solved": True})
+            (runs_dir / "run-1.json").write_text(json.dumps(run), encoding="utf-8")
+            fake_store = types.SimpleNamespace(
+                lock=threading.RLock(),
+                game_state={"phase": 14, "run": {"run_id": "run-1"}},
+                get_selected_booking=lambda: {"id": "__empty__", "kind": "empty"},
+            )
+            namespace.update({
+                "store": fake_store,
+                "GAME_DB_PATH": db_path,
+                "RIDDLE_ORDER_V2": riddles,
+                "RESULT_EXCLUDED_RIDDLES": frozenset({"prison", "wheel"}),
+                "_run_json_path": lambda run_id: runs_dir / f"{run_id}.json",
+                "normalize_booking_selection": lambda value: dict(value or {}),
+            })
+
+            payload = namespace["_completed_summary_payload"]()
+            self.assertEqual(payload["run"]["run_id"], "run-1")
+            self.assertEqual(payload["leaderboardCode"], "123456")
+            for riddle in ("prison", "wheel"):
+                timing = payload["run"]["riddle_timings"][riddle]
+                self.assertEqual((timing["solved"], timing["skipped"], timing["not_solved"]), (False, False, False))
+                self.assertEqual(timing["status"], run["riddle_timings"][riddle]["status"])
+                self.assertEqual(timing["marker"], riddle)
+
+            with contextlib.closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.execute("DELETE FROM game_riddles WHERE riddle_key = 'sissi'")
+            self.assertIsNone(namespace["_completed_summary_payload"]())
+
+    def test_summary_payload_excludes_prison_and_wheel_outcomes_from_ranking(self) -> None:
+        namespace = extracted("_summary_run_with_result_exclusions", "current_raw_run_payload")
+        game_state = {
+            "run": {
+                "run_id": "run-1",
+                "riddle_timings": {
+                    "prison": {
+                        "solve_time_s": 30.0,
+                        "hint_count": 2,
+                        "status": "skipped",
+                        "solved": False,
+                        "skipped": True,
+                        "not_solved": False,
+                    },
+                    "wheel": {
+                        "solve_time_s": 45.0,
+                        "hint_count": 1,
+                        "status": "not_solved",
+                        "solved": False,
+                        "skipped": False,
+                        "not_solved": True,
+                    },
+                    "chains": {
+                        "solve_time_s": 60.0,
+                        "status": "solved",
+                        "solved": True,
+                        "skipped": False,
+                        "not_solved": False,
+                    },
+                },
+            },
+        }
+        namespace.update({
+            "store": types.SimpleNamespace(lock=threading.RLock(), game_state=game_state),
+            "RESULT_EXCLUDED_RIDDLES": frozenset({"prison", "wheel"}),
+        })
+
+        run = namespace["current_raw_run_payload"]()
+
+        prison = run["riddle_timings"]["prison"]
+        wheel = run["riddle_timings"]["wheel"]
+        self.assertEqual(
+            (prison["solved"], prison["skipped"], prison["not_solved"]),
+            (False, False, False),
+        )
+        self.assertEqual(
+            (wheel["solved"], wheel["skipped"], wheel["not_solved"]),
+            (False, False, False),
+        )
+        self.assertEqual((prison["solve_time_s"], prison["hint_count"], prison["status"]), (30.0, 2, "skipped"))
+        self.assertEqual((wheel["solve_time_s"], wheel["hint_count"], wheel["status"]), (45.0, 1, "not_solved"))
+        self.assertTrue(run["riddle_timings"]["chains"]["solved"])
+        self.assertTrue(game_state["run"]["riddle_timings"]["prison"]["skipped"])
+        self.assertTrue(game_state["run"]["riddle_timings"]["wheel"]["not_solved"])
 
     def test_hint_delta_endpoint_accepts_only_minus_or_plus_one(self) -> None:
         namespace = extracted("api_set_hint_count")
@@ -1179,8 +1305,9 @@ class HintTemplateTests(unittest.TestCase):
             self.assertEqual(loaded["version"], 2)
             self.assertEqual(loaded["templates"]["images"]["de"][0]["text"], legacy["templates"]["images"]["de"][0])
 
-    def test_hint_edit_endpoint_is_gated_to_maintenance(self) -> None:
+    def test_hint_edit_endpoint_is_gated_to_off_or_maintenance(self) -> None:
         namespace = extracted("api_hint_templates")
+        saved: list[dict[str, Any]] = []
         store = types.SimpleNamespace(
             lock=threading.RLock(),
             game_state={"phase": 3},
@@ -1190,16 +1317,20 @@ class HintTemplateTests(unittest.TestCase):
             "jsonify": JsonResponse,
             "store": store,
             "_stale_action_response": lambda _data: None,
-            "save_hint_templates": lambda payload: (payload, True),
+            "save_hint_templates": lambda payload: (saved.append(payload) or payload, True),
         })
         namespace["request"] = types.SimpleNamespace(get_json=lambda silent: {"templates": self.defaults})
         response, status = namespace["api_hint_templates"]()
         self.assertEqual(status, 409)
+        self.assertIn("Phase 0", response["error"])
         self.assertIn("Phase 1", response["error"])
+        self.assertEqual(saved, [])
 
-        store.game_state["phase"] = 1
-        response = namespace["api_hint_templates"]()
-        self.assertTrue(response["ok"])
+        for phase in (0, 1):
+            store.game_state["phase"] = phase
+            response = namespace["api_hint_templates"]()
+            self.assertTrue(response["ok"])
+        self.assertEqual(saved, [self.defaults, self.defaults])
 
 
 class DashboardPreviewTests(unittest.TestCase):
@@ -1234,6 +1365,7 @@ class DashboardPreviewTests(unittest.TestCase):
         namespace.update({
             "RIDDLE_ORDER_V2": list(self.RIDDLE_KEYS),
             "RIDDLE_LABELS_V2": {key: key.title() for key in self.RIDDLE_KEYS},
+            "RESULT_EXCLUDED_RIDDLES": frozenset({"prison", "wheel"}),
             "_canonical_riddle_name": lambda value: str(value or ""),
         })
         return namespace
@@ -1252,6 +1384,8 @@ class DashboardPreviewTests(unittest.TestCase):
             "phase_state": "skipped",
             "skipped": True,
         })
+        snapshot["riddles"][2].update({"display_time_s": 8, "phase_state": "solved"})
+        snapshot["riddles"][3].update({"display_time_s": 9, "phase_state": "skipped", "skipped": True})
 
         candidate = namespace["build_ranking_preview_candidate"](snapshot)
 
@@ -1272,6 +1406,20 @@ class DashboardPreviewTests(unittest.TestCase):
             "hintCount": 1,
             "solved": False,
             "skipped": True,
+        })
+        self.assertEqual(candidate["rawPuzzles"][2], {
+            "puzzleKey": "prison",
+            "timeS": 8.0,
+            "hintCount": 0,
+            "solved": False,
+            "skipped": False,
+        })
+        self.assertEqual(candidate["rawPuzzles"][3], {
+            "puzzleKey": "wheel",
+            "timeS": 9.0,
+            "hintCount": 0,
+            "solved": False,
+            "skipped": False,
         })
 
         website_result = {
@@ -1456,6 +1604,14 @@ class DashboardPreviewTests(unittest.TestCase):
 
 
 class DashboardSourceContractTests(unittest.TestCase):
+    def test_summary_delivery_database_and_sidecars_are_ignored(self) -> None:
+        patterns = {
+            line.strip()
+            for line in GITIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertIn("web/er1_dashboard/data/summary_deliveries.sqlite3*", patterns)
+
     def test_effective_backend_labels_lights_and_active_nodes_match_er1(self) -> None:
         tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
 
@@ -1521,8 +1677,11 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("riddle-time-options", javascript)
         self.assertIn("card.querySelector('.light-bulb-button')", javascript)
         self.assertIn("fmtDurationInput(seconds)", javascript)
-        self.assertIn("/api/riddle-time-restore", javascript)
-        self.assertIn("riddle-time-restore", javascript)
+        self.assertNotIn("/api/riddle-time-restore", javascript)
+        self.assertNotIn("riddle-time-restore", javascript)
+        self.assertIn("function gameControlConfirmationsRequired", javascript)
+        self.assertIn("function confirmGameControlAction", javascript)
+        self.assertIn("Number(state.game.phase || 0) >= 2", javascript)
         self.assertIn("controlViewActive && gameMode", javascript)
         source = APP_PATH.read_text(encoding="utf-8")
         self.assertIn("_installed_game_master_support_dir", source)
@@ -1535,18 +1694,132 @@ class DashboardSourceContractTests(unittest.TestCase):
         start_start = javascript.index("async function handleStart")
         start_end = javascript.index("async function handlePhaseAction", start_start)
         time_start = javascript.index("async function saveRiddleTime")
-        time_end = javascript.index("async function restoreRiddleTime", time_start)
-        restore_end = javascript.index("function positionRiddleTimeEditor", time_end)
-        self.assertIn("confirmAction", javascript[solve_start:solve_end])
-        self.assertIn("confirmAction", javascript[start_start:start_end])
+        time_end = javascript.index("function positionRiddleTimeEditor", time_start)
+        self.assertIn("confirmGameControlAction", javascript[solve_start:solve_end])
+        self.assertIn("confirmGameControlAction", javascript[start_start:start_end])
         self.assertNotIn("confirmAction", javascript[time_start:time_end])
-        self.assertIn("confirmAction", javascript[time_end:restore_end])
         hint_start = javascript.index("async function changeHint")
         hint_end = javascript.index("function bindRiddleActions", hint_start)
         status_start = javascript.index("async function togglePastOutcome")
         status_end = javascript.index("function buildCurrentRiddleCard", status_start)
         self.assertNotIn("confirmAction", javascript[hint_start:hint_end])
         self.assertNotIn("confirmAction", javascript[status_start:status_end])
+
+        node_start = javascript.index("function renderNodes")
+        node_end = javascript.index("async function waitForDashboardRestart", node_start)
+        phase_start = javascript.index("async function handlePhaseAction")
+        phase_end = javascript.index("async function sendSummaryEmail", phase_start)
+        restart_start = javascript.index("async function restartSystemService")
+        restart_end = javascript.index("async function confirmManualControl", restart_start)
+        delete_start = javascript.index("async function deleteLogArchiveSegment")
+        delete_end = javascript.index("function readDiagnosticsFilters", delete_start)
+        self.assertIn("confirmGameControlAction", javascript[node_start:node_end])
+        self.assertNotIn("phaseRestricted", javascript[node_start:node_end])
+        self.assertNotIn("phaseZero", javascript[node_start:node_end])
+        self.assertNotIn("reboot.disabled = !item.online", javascript[node_start:node_end])
+        self.assertIn("confirmGameControlAction", javascript[phase_start:phase_end])
+        self.assertIn("confirmAction", javascript[restart_start:restart_end])
+        self.assertIn("confirmAction", javascript[delete_start:delete_end])
+
+        row_start = javascript.index("function buildRiddleRow")
+        row_end = javascript.index("async function togglePastOutcome", row_start)
+        row_source = javascript[row_start:row_end]
+        self.assertIn("final && riddle.id !== 'sissi'", row_source)
+        self.assertNotIn("['prison', 'wheel']", row_source)
+
+    def test_game_control_confirmation_rule_is_phase_and_view_sensitive(self) -> None:
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        start = javascript.index("function gameControlConfirmationsRequired")
+        end = javascript.index("\nfunction wireConfirmationDialog", start)
+        helpers = javascript[start:end]
+        script = f"""
+let phase = 0;
+let controlView = true;
+let confirmCalls = 0;
+const state = {{ game: {{ phase: 0 }} }};
+const document = {{ getElementById(id) {{ return id === 'controlView' && controlView ? {{}} : null; }} }};
+function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
+{helpers}
+(async () => {{
+  if (await confirmGameControlAction({{}}) !== true || confirmCalls !== 0) throw new Error('phase 0 confirmed');
+  state.game.phase = 1;
+  if (await confirmGameControlAction({{}}) !== true || confirmCalls !== 0) throw new Error('phase 1 confirmed');
+  state.game.phase = 2;
+  if (await confirmGameControlAction({{}}) !== false || confirmCalls !== 1) throw new Error('preparation bypassed');
+  state.game.phase = 10;
+  if (await confirmGameControlAction({{}}) !== false || confirmCalls !== 2) throw new Error('live bypassed');
+  state.game.phase = 0;
+  controlView = false;
+  if (await confirmGameControlAction({{}}) !== false || confirmCalls !== 3) throw new Error('admin bypassed');
+}})().catch((error) => {{ console.error(error.message); process.exitCode = 1; }});
+"""
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_responsive_menu_toggles_accessible_state_and_handles_escape(self) -> None:
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        html = HTML_PATH.read_text(encoding="utf-8")
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+        start = javascript.index("function wireOperatorMenu")
+        end = javascript.index("\nfunction syncLocalTimers", start)
+        menu_function = javascript[start:end]
+        self.assertIn('id="operatorMenuButton"', html)
+        self.assertIn('aria-controls="operatorTabs"', html)
+        self.assertIn('aria-expanded="false"', html)
+        self.assertIn('id="operatorTabs"', html)
+        self.assertIn(".operator-tabs.is-open", css)
+
+        script = f"""
+class Target {{
+  constructor() {{ this.listeners = new Map(); }}
+  addEventListener(type, callback) {{
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(callback);
+  }}
+  dispatch(type, event = {{}}) {{
+    if (!event.target) event.target = this;
+    for (const callback of this.listeners.get(type) || []) callback(event);
+  }}
+  contains(target) {{ return target === this; }}
+}}
+const button = new Target();
+button.attrs = new Map([['aria-expanded', 'false']]);
+button.setAttribute = (name, value) => button.attrs.set(name, String(value));
+button.getAttribute = (name) => button.attrs.get(name);
+button.focused = false;
+button.focus = () => {{ button.focused = true; }};
+const link = new Target();
+const tabs = new Target();
+tabs.classes = new Set();
+tabs.classList = {{ toggle(name, enabled) {{ enabled ? tabs.classes.add(name) : tabs.classes.delete(name); }} }};
+tabs.querySelectorAll = () => [link];
+const document = new Target();
+document.getElementById = (id) => id === 'operatorMenuButton' ? button : (id === 'operatorTabs' ? tabs : null);
+const media = new Target();
+media.matches = true;
+const window = {{ matchMedia() {{ return media; }} }};
+{menu_function}
+wireOperatorMenu();
+button.dispatch('click');
+if (button.getAttribute('aria-expanded') !== 'true' || !tabs.classes.has('is-open')) throw new Error('menu did not open');
+let prevented = false;
+document.dispatch('keydown', {{ key: 'Escape', preventDefault() {{ prevented = true; }} }});
+if (button.getAttribute('aria-expanded') !== 'false' || tabs.classes.has('is-open') || !button.focused || !prevented) throw new Error('escape did not close and restore focus');
+button.dispatch('click');
+link.dispatch('click');
+if (button.getAttribute('aria-expanded') !== 'false') throw new Error('link did not close menu');
+button.dispatch('click');
+document.dispatch('click', {{ target: {{}} }});
+if (button.getAttribute('aria-expanded') !== 'false') throw new Error('outside click did not close menu');
+button.dispatch('click');
+media.matches = false;
+media.dispatch('change');
+if (button.getAttribute('aria-expanded') !== 'true' || !tabs.classes.has('is-open')) throw new Error('desktop viewport did not expose menu');
+button.dispatch('click');
+if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-collapsed')) throw new Error('desktop menu did not close');
+"""
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1555,7 +1828,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         guarded = {
             "api_phase", "api_select_booking", "api_solve", "api_lock", "api_light",
             "api_node_reboot", "api_service_restart", "api_set_hint_count", "api_riddle_time",
-            "api_riddle_time_restore", "api_riddle_time_preview", "api_riddle_outcome",
+            "api_riddle_time_preview", "api_riddle_outcome",
             "api_log_archive_delete",
         }
         for name in guarded:
@@ -1566,6 +1839,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn('"clear_riddle_outcome"', outcome_source)
         self.assertNotIn('"mark_not_solved"', outcome_source)
         self.assertNotIn("reset_pending", source)
+        self.assertNotIn("riddle-time-restore", source)
 
     def test_knocking_chess_polling_and_countdown_contracts_are_present(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1617,7 +1891,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261011-dashboard-v12", html)
+        self.assertIn("app.js') }}?v=20261012-dashboard-v15", html)
 
     def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1627,8 +1901,19 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn("window.setTimeout(() => {\n      riddleTimeEditing[riddle.id] = false", javascript)
         self.assertIn("selectDurationSegment(input, 'seconds')", javascript)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", css)
-        self.assertIn("Waage ♎ (7), Wassermann ♒ (13), Skorpion ♏ (10)", javascript)
-        self.assertIn("Zwillinge ♊ (7), Schütze ♐ (10), Löwe ♌ (10), Fische ♓ (13)", javascript)
+        for row in (
+            "['Libra', 'libra', 7]", "['Aquarius', 'aquarius', 13]",
+            "['Scorpio', 'scorpio', 10]", "['Gemini', 'gemini', 7]",
+            "['Sagittarius', 'sagittarius', 10]", "['Leo', 'leo', 10]",
+            "['Pisces', 'pisces', 13]",
+        ):
+            self.assertIn(row, javascript)
+        self.assertIn("const expected = ['libra', 'aquarius', 'scorpio'];", javascript)
+        self.assertIn('class="star-attempts-scroll" tabindex="0"', javascript)
+        self.assertIn("correct ? 'is-correct'", javascript)
+        self.assertIn('<div class="candles-solution"><b>Lösung:</b><strong>2413</strong>', javascript)
+        self.assertNotIn("Neue Zeit", javascript)
+        self.assertIn(" -> ${fmtDurationInput(receiving.new_time_s)}", javascript)
         self.assertIn("Seit Spielstart", javascript)
         self.assertIn("Seit Rätselstart", javascript)
         self.assertIn("Fällig", javascript)
@@ -1658,7 +1943,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_maintenance_exposes_solve_but_not_run_mutations(self) -> None:
+    def test_maintenance_exposes_only_requested_active_riddle_cards(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         self.assertIn("function riddleMutationsAvailable()", javascript)
         self.assertIn("Number(state.game.phase || 0) >= 3 && Boolean(currentRunId())", javascript)
@@ -1668,6 +1953,13 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("riddleMutationsAvailable()", actions_source)
         self.assertIn(" Gelöst</button>", actions_source)
         self.assertIn("canSkip ?", actions_source)
+        maintenance_start = javascript.index("if (phase === 1)", javascript.index("function renderCurrentRiddles"))
+        maintenance_end = javascript.index("if (phase === 2)", maintenance_start)
+        maintenance_source = javascript[maintenance_start:maintenance_end]
+        self.assertIn("hiddenMaintenanceRiddles", maintenance_source)
+        for riddle in ("prison", "wheel", "chains", "tangram", "magnet"):
+            self.assertIn(f"'{riddle}'", maintenance_source)
+        self.assertNotIn("'chess'", maintenance_source)
 
     def test_control_room_layout_contract_is_present(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
@@ -1676,7 +1968,7 @@ class DashboardSourceContractTests(unittest.TestCase):
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261011-dashboard-v12", html)
+        self.assertIn("dashboard.css') }}?v=20261012-dashboard-v15", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', html)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -1686,6 +1978,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         for action in ("standby", "maintenance", "prepare"):
             self.assertIn(f'data-phase-action="{action}"', html)
         self.assertIn('id="startGameBtn"', html)
+        self.assertNotIn("Phase, Zeit und Buchung", html)
+        self.assertIn('<h1 id="phaseValue" class="phase-current">Phase 0 - Aus</h1>', html)
         self.assertNotIn('class="eyebrow"', html)
         self.assertIn('class="operator-log-toolbar"', html)
         phase_actions = html[html.index('class="phase-action-grid-v6"'):html.index('class="previous-phase"')]
@@ -1710,9 +2004,9 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
         self.assertNotIn("('stop_timer', 'Stop Timer')", html)
 
-        self.assertIn("grid-template-columns: minmax(520px, 38%) minmax(0, 1fr);", css)
+        self.assertIn("grid-template-columns: var(--control-rail-width) minmax(0, 1fr);", css)
         self.assertIn('body.dashboard-v6[data-initial-view="control"]', css)
-        self.assertIn("@media (max-width: 900px)", css)
+        self.assertIn("@media (max-width: 1100px)", css)
         self.assertIn(".mission-grid,", css)
         self.assertIn(".mission-rail {", css)
         self.assertIn(".hidden,", css)
@@ -1722,6 +2016,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn('id="bookingSelect" class="booking-select"', html[html.index('id="bookingDetails"'):html.index('id="currentRiddlesPanel"')])
         self.assertIn(".booking-dialog-form", css)
         self.assertIn('id="bookingEditBtn"', html)
+        self.assertIn('class="booking-card-action"', html)
+        self.assertIn('>Buchung ändern</button>', html)
         self.assertIn("bookingEditorOpen = Boolean(dialog?.open)", javascript)
         self.assertIn("let bookingDraft = null;", javascript)
         self.assertIn("bookingDraft = normalizeBooking", javascript)
@@ -1730,17 +2026,44 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertNotIn("Keine zusätzlichen Live-Daten.", javascript)
         self.assertIn("STAR_SIGN_SYMBOLS", javascript)
         self.assertIn("parallelIds.has(riddle.id)", javascript)
-        self.assertIn("repeat(4, minmax(0, 1fr))", css)
-        self.assertIn("minmax(0, 1.38fr) minmax(0, 0.78fr)", css)
+        self.assertIn("--control-rail-width: minmax(500px, 34.5%);", css)
+        self.assertGreaterEqual(css.count("grid-template-columns: var(--control-rail-width) minmax(0, 1fr);"), 2)
+        self.assertIn("minmax(0, 1.45fr) minmax(0, 0.92fr) minmax(0, 1fr)", css)
         self.assertIn('id="startAssignmentClose"', html)
         self.assertIn('id="diagnosticsMqttStatus"', html)
         self.assertNotIn('class="hint-template-heading"', javascript)
         self.assertNotIn(".dashboard-preparation-mode .control-workspace", css)
-        self.assertIn("grid-template-columns: minmax(45px, 1fr) 92px;", css)
-        self.assertIn('font: 19px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", css)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", css)
+        self.assertIn('font: 14px/1.35 Inter, "Segoe UI", Arial, sans-serif;', css)
         self.assertIn('aria-controls="${escapeAttr(editorId)}" aria-expanded="false"', javascript)
         self.assertIn('aria-pressed="false"', javascript)
         self.assertIn("editor.addEventListener('keydown'", javascript)
+        self.assertIn('class="diagnostics-search-input"', html)
+        self.assertIn('class="diagnostics-autoscroll"', html)
+        self.assertRegex(css, r"(?s)#diagnosticsCount\s*\{[^}]*max-width: none;[^}]*overflow: visible;")
+
+        actions_start = javascript.index("function riddleActionsHtml")
+        actions_end = javascript.index("function riddleTimeEditorHtml", actions_start)
+        actions_source = javascript[actions_start:actions_end]
+        self.assertIn('class="current-riddle-identity"', actions_source)
+        self.assertIn("iconSvg('puzzle')", actions_source)
+        card_start = javascript.index("function buildCurrentRiddleCard")
+        card_end = javascript.index("function buildMaintenanceRiddleCard", card_start)
+        self.assertNotIn("current-riddle-card-head", javascript[card_start:card_end])
+
+        node_start = javascript.index("function renderNodes")
+        node_end = javascript.index("async function waitForDashboardRestart", node_start)
+        node_source = javascript[node_start:node_end]
+        self.assertIn("DASHBOARD_NODE_IDS.map", node_source)
+        self.assertIn("node-status-button", node_source)
+        self.assertIn("(${age}s)", node_source)
+
+        locks_start = javascript.index("function renderLocks")
+        locks_end = javascript.index("function resolveDimValue", locks_start)
+        locks_source = javascript[locks_start:locks_end]
+        self.assertIn("open ? 'Schließen' : (closed ? 'Öffnen' : 'Unbekannt')", locks_source)
+        self.assertIn("'is-unknown'", locks_source)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]
