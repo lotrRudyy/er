@@ -160,6 +160,60 @@ textarea {
   font-size: 22px;
 }
 
+.operator-admin-navigation {
+  position: relative;
+}
+
+.operator-admin-navigation > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.operator-admin-navigation > summary::-webkit-details-marker {
+  display: none;
+}
+
+.operator-admin-navigation[open] > .operator-menu {
+  border-color: rgba(239, 170, 55, 0.62);
+  color: #fff0cf;
+  background: #1d1710;
+}
+
+.operator-admin-menu {
+  width: min(520px, calc(100vw - 24px));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 80;
+  padding: 10px;
+  border: 1px solid rgba(230, 171, 76, 0.4);
+  border-radius: 8px;
+  background: #100d09;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.78);
+}
+
+.operator-admin-link {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(225, 203, 171, 0.1);
+  border-radius: 5px;
+  color: #d8cfc4;
+  background: rgba(255, 255, 255, 0.025);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.operator-admin-link:hover,
+.operator-admin-link.is-active {
+  border-color: rgba(231, 157, 39, 0.5);
+  color: #ffe1a5;
+  background: rgba(188, 111, 17, 0.17);
+}
+
 .operator-brand {
   min-width: 0;
   display: inline-flex;
@@ -222,7 +276,7 @@ textarea {
 }
 
 .operator-tabs.is-collapsed {
-  display: none;
+  display: flex;
 }
 
 .operator-tab {
@@ -793,7 +847,7 @@ textarea {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
   margin: 0;
   padding: 0 3px 0 0;
   overflow-y: auto;
@@ -802,17 +856,18 @@ textarea {
 }
 
 .hint-template-list li {
-  padding: 8px 9px;
+  min-height: 72px;
+  padding: 12px 14px;
   border: 1px solid rgba(227, 169, 67, 0.25);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.025);
 }
 
 .hint-template-list p {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: #e2dbd2;
-  font-size: 18px;
-  line-height: 1.4;
+  font-size: 20px;
+  line-height: 1.48;
 }
 
 .hint-card-meta {
@@ -839,6 +894,20 @@ textarea {
 .hint-template-list li.hint-card-due {
   border-color: rgba(240, 170, 36, 0.7);
   background: rgba(240, 170, 36, 0.08);
+}
+
+.hint-template-list li.hint-card-newly-due {
+  animation: hint-due-once 900ms ease-out 1;
+}
+
+@keyframes hint-due-once {
+  0% { box-shadow: 0 0 0 0 rgba(255, 190, 67, 0); transform: translateY(0); }
+  38% { box-shadow: 0 0 0 4px rgba(255, 190, 67, 0.32), 0 0 28px rgba(240, 151, 28, 0.28); transform: translateY(-2px); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 190, 67, 0); transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint-template-list li.hint-card-newly-due { animation: none; }
 }
 
 .hint-card-meta .hint-threshold-due {
@@ -2859,12 +2928,20 @@ textarea {
   .operator-tabs {
     grid-column: 1 / -1;
     grid-row: 2;
-    display: none;
+    display: flex;
     gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: thin;
   }
 
   .operator-tabs.is-open {
     display: flex;
+  }
+
+  .operator-admin-menu {
+    width: min(360px, calc(100vw - 14px));
+    grid-template-columns: minmax(0, 1fr);
+    top: calc(100% + 7px);
   }
 
   .operator-tab {
@@ -4239,9 +4316,11 @@ button:disabled {
 
 .light-toggle-button {
   min-height: 68px;
-  grid-template-columns: 30px minmax(0, 1fr);
-  column-gap: 7px;
-  padding: 8px 7px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(27px, 1fr) auto;
+  justify-items: center;
+  row-gap: 5px;
+  padding: 9px 7px 7px;
   border-color: rgba(218, 187, 139, 0.17);
   background:
     linear-gradient(150deg, rgba(255, 255, 255, 0.025), transparent 55%),
@@ -4249,6 +4328,7 @@ button:disabled {
 }
 
 .light-toggle-icon {
+  grid-row: 2;
   font-size: 25px;
 }
 
@@ -4258,11 +4338,18 @@ button:disabled {
 }
 
 .light-toggle-button strong {
-  font-size: 11px;
+  grid-row: 1;
+  overflow: visible;
+  font-size: 13px;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .light-toggle-button small {
-  font-size: 9px;
+  grid-row: 3;
+  font-size: 10px;
   letter-spacing: 0.06em;
 }
 
@@ -4302,38 +4389,71 @@ button:disabled {
 }
 
 .light-dimmer-label {
+  width: 100%;
+  min-height: 35px;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  padding: 4px 8px;
+  border-color: rgba(210, 193, 170, 0.18);
+  color: #ddd3c7;
+  background:
+    linear-gradient(90deg, rgba(221, 126, 18, var(--led-alpha, 0.06)), rgba(91, 73, 55, 0.08)),
+    #0d0c0a;
+  text-align: left;
 }
 
 .light-dimmer-label strong {
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   color: #d6ccbf;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.15;
+  text-overflow: clip;
+  white-space: normal;
 }
 
-.light-bulb-button {
+.light-dimmer-label small {
+  display: block;
+  margin-top: 2px;
+  color: #b5a99b;
+  font-size: 9px;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.light-bulb-icon {
   width: 25px;
   height: 25px;
-  min-height: 25px;
   display: grid;
   place-items: center;
   color: #8c8277;
 }
 
-.light-bulb-button .ui-icon {
-  width: 14px;
-  height: 14px;
+.light-bulb-icon .ui-icon {
+  width: 18px;
+  height: 18px;
 }
 
-.light-bulb-button.is-on {
+.light-dimmer-label.is-on,
+.light-dimmer-label.is-mixed,
+.light-dimmer-label.is-partial {
   border-color: rgba(226, 161, 54, 0.62);
   color: #ffd36a;
-  background: rgba(125, 75, 12, 0.26);
+}
+
+.light-dimmer-label.is-on .light-bulb-icon,
+.light-dimmer-label.is-mixed .light-bulb-icon,
+.light-dimmer-label.is-partial .light-bulb-icon {
+  color: #ffd36a;
+  filter: drop-shadow(0 0 5px rgba(255, 197, 42, 0.5));
+}
+
+.light-dimmer-label.is-unknown {
+  border-style: dashed;
+  background: #0d0c0a;
 }
 
 .dim-value {
@@ -4858,6 +4978,24 @@ button:disabled {
     display: block;
     grid-column: 3;
     grid-row: 1;
+  }
+}
+
+@media (min-width: 1101px) {
+  .riddles-table-v6 th:not(:nth-child(2)),
+  .riddles-table-v6 td:not(:nth-child(2)) {
+    text-align: center;
+  }
+
+  .riddles-table-v6 td:nth-child(2) {
+    text-align: left;
+  }
+
+  .riddles-table-v6 .table-status,
+  .riddles-table-v6 .status-correction,
+  .riddles-table-v6 .riddle-time-edit,
+  .riddles-table-v6 .table-hint-control {
+    margin-inline: auto;
   }
 }
 

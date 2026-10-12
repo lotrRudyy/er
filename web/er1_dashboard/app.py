@@ -137,6 +137,30 @@ def website_api_config() -> tuple[str, str]:
     return base, token
 
 
+WEBSITE_ADMIN_ROUTES = (
+    ("overview", "Übersicht", "/admin"),
+    ("bookings", "Buchungen", "/admin/bookings"),
+    ("vouchers", "Gutscheine", "/admin/vouchers"),
+    ("emails", "E-Mails", "/admin/emails"),
+    ("statistics", "Statistiken", "/admin/statistiken"),
+    ("game-statistics", "Spielstatistiken", "/admin/spielstatistiken"),
+    ("game-master", "Spielleitung", "/admin/game-master"),
+    ("users", "Benutzer", "/admin/users"),
+    ("rate-limits", "Anfragelimits", "/admin/rate-limits"),
+    ("profile", "Profil", "/admin/profile"),
+)
+
+
+def website_admin_navigation() -> list[dict[str, str]]:
+    base, _token = website_api_config()
+    parsed = urllib.parse.urlsplit(base or "https://escapeschenna.com")
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://escapeschenna.com"
+    return [
+        {"id": item_id, "label": label, "url": f"{origin}{path}"}
+        for item_id, label, path in WEBSITE_ADMIN_ROUTES
+    ]
+
+
 def _read_int_env(name: str, fallback: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -2595,7 +2619,11 @@ class DashboardStore:
             except (TypeError, ValueError):
                 pct = None
             raw_on = payload.get("on")
-            if isinstance(raw_on, bool):
+            if pct is not None:
+                # Effective output is authoritative. Legacy SET 0 telemetry can
+                # report on=1 even though the physical PWM output is zero.
+                is_on = pct > 0
+            elif isinstance(raw_on, bool):
                 is_on = raw_on
             elif isinstance(raw_on, (int, float)) and not isinstance(raw_on, bool):
                 is_on = raw_on > 0
@@ -2603,8 +2631,6 @@ class DashboardStore:
                 is_on = True
             elif isinstance(raw_on, str) and raw_on.strip().lower() in {"off", "false", "0"}:
                 is_on = False
-            elif pct is not None:
-                is_on = pct > 0
             else:
                 return None
             return is_on, (pct if pct is not None else (100 if is_on else 0))
@@ -5745,30 +5771,217 @@ def _operator_action_target() -> tuple[str, str, str]:
     payload = request.get_json(silent=True)
     payload = payload if isinstance(payload, dict) else {}
     path = request.path
-    action = {
-        "/api/phase": str(payload.get("action") or "phase_change"),
-        "/api/select-booking": "select_booking",
-        "/api/send-summary-email": "send_summary_email",
-        "/api/players-count": "set_players_count",
-        "/api/solve": "solve",
-        "/api/lock": "lock_command",
-        "/api/light": "light_command",
-        "/api/node-reboot": "node_reboot",
-        "/api/service-restart": "service_restart",
-        "/api/hints": "set_hint_count",
-        "/api/riddle-time": "set_riddle_time",
-        "/api/riddle-outcome": "set_riddle_outcome",
-        "/api/hint-templates": "save_hint_templates",
-        "/api/log-level": "set_log_level",
-        "/api/log-archive/delete": "delete_log_segment",
-    }.get(path, request.endpoint or path)
-    target = str(
-        payload.get("node") or payload.get("riddle") or payload.get("lock")
-        or payload.get("group") or payload.get("service") or payload.get("segment_id")
-        or ("booking" if path == "/api/select-booking" else "game")
-    ).strip()
+    endpoint = str(request.endpoint or "")
+    raw_action = str(payload.get("action") or "").strip().lower()
+    if path == "/api/phase":
+        action = f"phase.{raw_action or 'change'}"
+        target = "game"
+    elif path == "/api/select-booking":
+        action = "booking.language_set" if "hint_language" in payload else "booking.select"
+        booking = payload.get("booking") if isinstance(payload.get("booking"), dict) else payload
+        target = str(booking.get("id") or booking.get("bookingCode") or booking.get("booking_code") or "booking").strip()
+    elif path == "/api/send-summary-email":
+        action, target = "summary_email.send", "completed_run"
+    elif path == "/api/players-count":
+        action, target = "players_count.set", "game"
+    elif path == "/api/solve":
+        action = "riddle.solve"
+        target = str(payload.get("node") or payload.get("riddle") or "riddle").strip()
+    elif path == "/api/lock":
+        action = f"lock.{raw_action or 'command'}"
+        target = str(payload.get("lock") or "lock").strip()
+    elif path == "/api/light":
+        action = f"light.{raw_action or 'command'}"
+        target = str(payload.get("group") or "light").strip()
+    elif path == "/api/node-reboot":
+        action, target = "node.reboot", str(payload.get("node") or "node").strip()
+    elif path == "/api/service-restart":
+        action = "service.restart"
+        target = str(payload.get("target") or payload.get("service") or "service").strip()
+    elif path == "/api/hints":
+        delta = payload.get("delta")
+        action = "hint_count.increment" if delta == 1 else ("hint_count.decrement" if delta == -1 else "hint_count.set")
+        target = str(payload.get("riddle") or "riddle").strip()
+    elif path == "/api/riddle-time":
+        action, target = "riddle_time.set", str(payload.get("riddle") or payload.get("node") or "riddle").strip()
+    elif path == "/api/riddle-outcome":
+        outcome = str(payload.get("outcome") or payload.get("status") or "update").strip().lower()
+        action, target = f"riddle.{outcome}", str(payload.get("riddle") or payload.get("node") or "riddle").strip()
+    elif path == "/api/hint-templates":
+        action, target = "hint_templates.update", "templates"
+    elif path == "/api/log-level":
+        action, target = "log_level.set", str(payload.get("node") or "node").strip()
+    elif path == "/api/log-archive/delete":
+        action, target = "log_segment.delete", str(payload.get("segment_id") or "segment").strip()
+    elif endpoint == "delete_game":
+        action, target = "saved_game.delete", str((request.view_args or {}).get("game_id") or "game").strip()
+    elif endpoint == "api_db_update":
+        action = "database_row.update"
+        target = f"{payload.get('table') or 'table'}:{payload.get('rowid') or 'row'}"
+    elif endpoint == "api_acknowledge_operation":
+        action, target = "operation.acknowledge", str((request.view_args or {}).get("operation_id") or "operation").strip()
+    else:
+        action, target = endpoint or path, "game"
     riddle = str(payload.get("riddle") or payload.get("node") or "").strip()
     return _bounded_log_text(action, 128), _bounded_log_text(target, 128), _bounded_log_text(riddle, 128)
+
+
+def _operator_requested_detail(action: str) -> dict[str, Any]:
+    payload = request.get_json(silent=True)
+    payload = payload if isinstance(payload, dict) else {}
+    requested: dict[str, Any] = {}
+    for key in ("action", "outcome", "pct", "players_count", "delta", "solve_time_s", "adjustment_side", "level", "hint_language"):
+        value = payload.get(key)
+        if isinstance(value, (bool, int, str)) or (isinstance(value, float) and math.isfinite(value)):
+            requested[key] = value
+    if action == "booking.select":
+        booking = payload.get("booking") if isinstance(payload.get("booking"), dict) else payload
+        for key in ("id", "bookingCode", "booking_code", "language", "players"):
+            value = booking.get(key)
+            if isinstance(value, (bool, int, str)):
+                requested[key] = value
+    if action == "database_row.update" and isinstance(payload.get("updates"), dict):
+        requested["updated_columns"] = sorted(str(key) for key in payload["updates"])
+    return requested
+
+
+def _operator_result(response: Any, payload: dict[str, Any]) -> str:
+    status = int(getattr(response, "status_code", 500) or 500)
+    if status >= 400:
+        if payload.get("stale_action"):
+            return "stale_rejected"
+        if payload.get("operation_status") == "uncertain":
+            return "uncertain"
+        return "failed"
+    if payload.get("partial"):
+        return "partial"
+    if payload.get("alreadySent"):
+        return "already_sent"
+    if payload.get("inProgress") or status == 202:
+        return "in_progress"
+    if payload.get("scheduled"):
+        return "scheduled"
+    if request.endpoint == "delete_game":
+        return "deleted"
+    if request.endpoint == "api_acknowledge_operation":
+        return "acknowledged"
+    email = payload.get("email")
+    if isinstance(email, dict) and email.get("sent"):
+        return "sent"
+    if payload.get("device_confirmed") is True:
+        return "confirmed"
+    if payload.get("mqtt_queued"):
+        return "queued"
+    if payload.get("applied"):
+        return "applied"
+    return "updated"
+
+
+def _operator_target_label(action: str, target: str) -> str:
+    if action.startswith("lock."):
+        label = next((item["label"] for item in LOCKS if item["id"] == target), target)
+    elif action.startswith("light."):
+        label = LIGHT_GROUPS.get(target, {}).get("label", target)
+    elif action == "node.reboot":
+        label = "Alle Nodes" if target == "all" else LOG_NODE_LABELS.get(target, target)
+    elif action == "service.restart":
+        label = SERVICE_RESTART_TARGETS.get(target, {}).get("label", target)
+    elif action.startswith("riddle.") or action.startswith("riddle_time.") or action.startswith("hint_count."):
+        label = globals().get("RIDDLE_LABELS_V2", {}).get(target, target)
+    else:
+        label = target
+    return _bounded_log_text(label or target or "game", 128)
+
+
+def _operator_action_label(action: str) -> str:
+    labels = {
+        "phase.standby": "Phase auf Aus setzen",
+        "phase.maintenance": "Phase auf Wartung setzen",
+        "phase.prepare": "Vorbereitung starten",
+        "phase.start": "Spiel starten",
+        "booking.select": "Buchung auswählen",
+        "booking.language_set": "Tippsprache ändern",
+        "summary_email.send": "Spielzusammenfassung senden",
+        "players_count.set": "Spieleranzahl setzen",
+        "riddle.solve": "Rätsel lösen",
+        "riddle.solved": "Rätsel als gelöst markieren",
+        "riddle.skipped": "Rätsel überspringen",
+        "riddle_time.set": "Rätselzeit ändern",
+        "hint_count.increment": "Tippanzahl erhöhen",
+        "hint_count.decrement": "Tippanzahl verringern",
+        "lock.open": "Schloss öffnen",
+        "lock.close": "Schloss schließen",
+        "light.on": "Licht einschalten",
+        "light.off": "Licht ausschalten",
+        "light.set_pct": "Lichthelligkeit setzen",
+        "node.reboot": "Node neu starten",
+        "service.restart": "Dienst neu starten",
+        "hint_templates.update": "Tippvorlagen speichern",
+        "log_level.set": "Log-Stufe anfordern",
+        "log_segment.delete": "Logsegment löschen",
+        "saved_game.delete": "Gespeichertes Spiel löschen",
+        "database_row.update": "Datenbankzeile ändern",
+        "operation.acknowledge": "Unklare Operation quittieren",
+    }
+    return labels.get(action, action.replace("_", " ").replace(".", " "))
+
+
+def _operator_result_label(result: str) -> str:
+    return {
+        "queued": "MQTT eingereiht (Gerät nicht bestätigt)",
+        "partial": "teilweise eingereiht",
+        "confirmed": "vom Gerät bestätigt",
+        "applied": "lokal angewendet",
+        "scheduled": "eingeplant",
+        "sent": "gesendet",
+        "already_sent": "bereits gesendet",
+        "in_progress": "in Bearbeitung",
+        "updated": "aktualisiert",
+        "deleted": "gelöscht",
+        "acknowledged": "quittiert",
+        "stale_rejected": "wegen veraltetem Zustand abgelehnt",
+        "uncertain": "Ausgang unklar",
+        "failed": "fehlgeschlagen",
+    }.get(result, result)
+
+
+def _operator_audit_metadata(response: Any) -> dict[str, Any]:
+    payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+    payload = payload if isinstance(payload, dict) else {}
+    identity = getattr(g, "audit_identity", None) or {
+        "actor": "local/unknown", "source": "local", "operation_id": "", "trusted": False,
+    }
+    action, target, riddle = _operator_action_target()
+    result = _operator_result(response, payload)
+    target_label = _operator_target_label(action, target)
+    requested = _operator_requested_detail(action)
+    requested_label = json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")) if requested else "-"
+    message = (
+        f"Aktion: {_operator_action_label(action)} · Ziel: {target_label} · Soll: {requested_label}"
+        f" · Ergebnis: {_operator_result_label(result)} · Akteur: {identity['actor']}"
+    )
+    return {
+        "actor": identity["actor"],
+        "actor_source": identity["source"],
+        "attribution_verified": bool(identity.get("trusted")),
+        "action": action,
+        "target": target,
+        "target_label": target_label,
+        "riddle": riddle,
+        "requested": requested,
+        "result": result,
+        "message": _bounded_log_text(message, MAX_LOG_MESSAGE_CHARS),
+    }
+
+
+def _attach_operator_audit_metadata(response: Any) -> Any:
+    metadata = _operator_audit_metadata(response)
+    g.operator_audit_metadata = metadata
+    payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+    if isinstance(payload, dict):
+        enriched = {**payload, "operator_log": metadata}
+        response.set_data(json.dumps(enriched, ensure_ascii=False, separators=(",", ":")))
+    return response
 
 
 IDEMPOTENT_API_PATHS = frozenset({
@@ -5841,31 +6054,33 @@ def _archive_operator_outcome(response: Any, operation_id: str = "") -> None:
     status = int(getattr(response, "status_code", 500) or 500)
     level = "INF" if 200 <= status < 400 else ("WRN" if status < 500 else "ERR")
     payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+    metadata = getattr(g, "operator_audit_metadata", None) or _operator_audit_metadata(response)
     identity = getattr(g, "audit_identity", None) or {
-        "actor": "local/unknown", "source": "local", "operation_id": "", "trusted": False,
+        "actor": metadata["actor"], "source": metadata["actor_source"], "operation_id": "", "trusted": False,
     }
-    action, target, riddle = _operator_action_target()
     before = getattr(g, "audit_before", None) or {}
     after = _state_audit_context()
     started = getattr(g, "audit_started_monotonic", time.monotonic())
     detail: dict[str, Any] = {
-        "actor": identity["actor"],
-        "actor_source": identity["source"],
-        "attribution_verified": bool(identity.get("trusted")),
-        "action": action,
-        "target": target,
+        "actor": metadata["actor"],
+        "actor_source": metadata["actor_source"],
+        "attribution_verified": metadata["attribution_verified"],
+        "action": metadata["action"],
+        "target": metadata["target"],
+        "target_label": metadata["target_label"],
+        "requested": metadata["requested"],
         "before": before,
         "after": after,
         "phase": after.get("phase"),
         "run_id": after.get("run_id"),
-        "riddle": riddle or after.get("riddle"),
+        "riddle": metadata["riddle"] or after.get("riddle"),
         "booking_id": after.get("booking_id"),
         "booking_code": after.get("booking_code"),
         "method": request.method.upper(),
         "path": request.path,
         "http_status": status,
         "duration_ms": max(0, int(round((time.monotonic() - started) * 1000))),
-        "result": "success" if 200 <= status < 400 else "failure",
+        "result": metadata["result"],
     }
     effective_operation_id = operation_id or str(identity.get("operation_id") or "")
     if effective_operation_id:
@@ -5878,7 +6093,7 @@ def _archive_operator_outcome(response: Any, operation_id: str = "") -> None:
         if status >= 400 and isinstance(payload.get("error"), str):
             detail["error"] = _sanitized_technical_error(payload["error"])
     emit_dashboard_event(
-        f"{identity['actor']}: {action} {target} -> HTTP {status}",
+        metadata["message"],
         level=level,
         category="commands" if status < 400 else "errors",
         event_type="operator_outcome",
@@ -5984,11 +6199,16 @@ def _claim_idempotent_dashboard_operation() -> Any | None:
 def _complete_idempotent_dashboard_operation(response: Any) -> Any:
     operation_id = getattr(g, "dashboard_operation_id", "")
     if not operation_id:
-        if request.method.upper() in {"POST", "PUT", "DELETE"} and request.endpoint in {
+        mutation = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        operator_route = request.path in IDEMPOTENT_API_PATHS or request.endpoint in {
             "api_acknowledge_operation", "api_db_update", "delete_game",
-        }:
+        }
+        payload = response.get_json(silent=True) if hasattr(response, "get_json") else None
+        if mutation and operator_route and not (isinstance(payload, dict) and "operator_log" in payload):
+            response = _attach_operator_audit_metadata(response)
             _archive_operator_outcome(response)
         return response
+    response = _attach_operator_audit_metadata(response)
     try:
         operation_ledger.complete(
             operation_id,
@@ -6010,6 +6230,8 @@ def _complete_idempotent_dashboard_operation(response: Any) -> Any:
         })
         failure.status_code = 503
         failure.headers["X-Operation-Id"] = operation_id
+        failure = _attach_operator_audit_metadata(failure)
+        _archive_operator_outcome(failure, operation_id)
         return failure
     response.headers["X-Operation-Id"] = operation_id
     _archive_operator_outcome(response, operation_id)
@@ -6177,6 +6399,7 @@ def index() -> str:
         diagnostic_nodes=LOG_NODE_LABELS.items(),
         log_node_labels=LOG_NODE_LABELS,
         log_capabilities=LOG_NODE_CAPABILITIES,
+        website_admin_links=website_admin_navigation(),
     )
 
 
@@ -6188,6 +6411,7 @@ def admin_dashboard() -> str:
         diagnostic_nodes=LOG_NODE_LABELS.items(),
         log_node_labels=LOG_NODE_LABELS,
         log_capabilities=LOG_NODE_CAPABILITIES,
+        website_admin_links=website_admin_navigation(),
     )
 
 
@@ -6246,6 +6470,7 @@ def game_viewer() -> str:
         serialize_db_value=serialize_db_value,
         editable_tables=EDITABLE_TABLES,
         raw_rows=raw_rows,
+        website_admin_links=website_admin_navigation(),
     )
 
 
@@ -6845,14 +7070,22 @@ def api_light() -> Any:
             pct = max(0, min(100, int(pct_raw)))
         except Exception:
             pct = 100
-        if action == "off":
-            pct = 0
-        elif action not in {"on", "off", "set_pct"}:
+        if action not in {"on", "off", "set_pct"}:
             return jsonify({"ok": False, "error": "Ungültige Aktion"}), 400
-        result = mqtt_publish_batch([
-            (TOPIC_LIGHTING_CMD, {"cmd": "set", "light": light_name, "pct": pct})
-            for light_name in cfg["lights"]
-        ])
+        if action == "off" or (action == "set_pct" and pct == 0):
+            pct = 0
+            commands = [
+                (TOPIC_LIGHTING_CMD, {"cmd": "turn_off", "light": light_name})
+                for light_name in cfg["lights"]
+            ]
+        else:
+            if action == "on" and pct == 0:
+                pct = 100
+            commands = [
+                (TOPIC_LIGHTING_CMD, {"cmd": "set", "light": light_name, "pct": pct})
+                for light_name in cfg["lights"]
+            ]
+        result = mqtt_publish_batch(commands)
         if not result["mqtt_queued"]:
             return jsonify({
                 "ok": False,
@@ -6892,6 +7125,23 @@ def api_node_reboot() -> Any:
         nodes = [node]
     else:
         return jsonify({"ok": False, "error": "Unbekannter physischer Knoten."}), 400
+
+    with store.lock:
+        try:
+            phase = int(store.game_state.get("phase", 0) or 0)
+        except Exception:
+            phase = 0
+    if 2 <= phase <= 13 and node in {"all", "maglock"}:
+        return jsonify({
+            "ok": False,
+            "node": node,
+            "phase": phase,
+            "error": (
+                "Die Schlosssteuerung darf während Vorbereitung oder laufendem Spiel nicht neu gestartet werden."
+                if node == "maglock"
+                else "Der Sammelneustart ist während Vorbereitung oder laufendem Spiel gesperrt, weil die Schlosssteuerung enthalten ist."
+            ),
+        }), 409
 
     result = mqtt_publish_batch([(f"{node_id}/sys/cmd", "REBOOT") for node_id in nodes])
     if not result["mqtt_queued"]:

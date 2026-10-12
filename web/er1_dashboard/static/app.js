@@ -149,6 +149,8 @@ let lastRiddleTimerSignature = '';
 const dimDrafts = {};
 const dimEditing = {};
 const dimLastNonZero = {};
+const seenDueHintKeys = new Set();
+let dueHintRunSignature = '';
 const riddleTimeDrafts = {};
 const riddleTimeEditing = {};
 
@@ -498,20 +500,29 @@ async function reconcileStoredOperations(interactive = false) {
   }
 }
 
-function commandLabel(path) {
+function commandLabel(path, options = {}) {
+  let payload = {};
+  try { payload = JSON.parse(options.body || '{}'); } catch (_error) { payload = {}; }
+  if (path === '/api/lock') {
+    return `Schloss ${payload.lock || 'unbekannt'}: ${payload.action === 'close' ? 'Schließen' : 'Öffnen'} angefordert`;
+  }
+  if (path === '/api/light') {
+    const action = payload.action === 'set_pct' ? `auf ${payload.pct} % setzen` : (payload.action === 'off' ? 'ausschalten' : 'einschalten');
+    return `Licht ${payload.group || 'unbekannt'}: ${action} angefordert`;
+  }
+  if (path === '/api/node-reboot') return `Node ${payload.node || 'unbekannt'}: Neustart angefordert`;
+  if (path === '/api/service-restart') return `Dienst ${payload.target || 'unbekannt'}: Neustart angefordert`;
+  if (path === '/api/phase') return `Phase: ${payload.action || 'Änderung'} angefordert`;
+  if (path === '/api/solve') return `Rätsel ${payload.node || payload.riddle || 'unbekannt'}: Gelöst angefordert`;
+  if (path === '/api/riddle-outcome') return `Rätsel ${payload.riddle || 'unbekannt'}: ${payload.outcome || 'Statusänderung'} angefordert`;
+  if (path === '/api/riddle-time') return `Rätsel ${payload.riddle || 'unbekannt'}: Zeitänderung angefordert`;
+  if (path === '/api/hints') return `Rätsel ${payload.riddle || 'unbekannt'}: Tippanzahl ${payload.delta > 0 ? 'erhöhen' : 'verringern'} angefordert`;
   return ({
-    '/api/phase': 'Phase geändert',
-    '/api/select-booking': 'Buchung geändert',
-    '/api/solve': 'Rätsel gelöst',
-    '/api/riddle-outcome': 'Rätselstatus geändert',
-    '/api/riddle-time': 'Rätselzeit geändert',
-    '/api/hints': 'Tippanzahl geändert',
-    '/api/light': 'Lichtbefehl gesendet',
-    '/api/lock': 'Schlossbefehl gesendet',
-    '/api/node-reboot': 'Node-Neustart angefordert',
-    '/api/service-restart': 'Dienstneustart angefordert',
-    '/api/hint-templates': 'Tippvorlagen gespeichert',
-    '/api/log-level': 'Log-Stufe angefordert',
+    '/api/select-booking': 'Buchungsänderung angefordert',
+    '/api/send-summary-email': 'Spielzusammenfassung angefordert',
+    '/api/players-count': 'Spieleranzahländerung angefordert',
+    '/api/hint-templates': 'Tippvorlagenänderung angefordert',
+    '/api/log-level': 'Log-Stufenänderung angefordert',
   })[path] || `Befehl ${path}`;
 }
 
@@ -537,10 +548,22 @@ async function api(path, options = {}) {
       await reconcileStoredOperations(true);
       try {
         const result = await executeIdempotentMutation(path, { ...options, method });
-        recordOperatorLog(commandLabel(path));
+        const operatorLog = result?.operator_log;
+        recordOperatorLog(
+          operatorLog?.message || `Aktion: ${commandLabel(path, options)} · Ergebnis: Antwort erhalten · Akteur: local/unknown`,
+          'INF',
+          'commands',
+          operatorLog || {},
+        );
         return result;
       } catch (error) {
-        recordOperatorLog(`${commandLabel(path)} fehlgeschlagen: ${error.message || error}`, 'ERR');
+        const operatorLog = error?.data?.operator_log;
+        recordOperatorLog(
+          operatorLog?.message || `Aktion: ${commandLabel(path, options)} · Ergebnis: fehlgeschlagen (${error.message || error}) · Akteur: local/unknown`,
+          'ERR',
+          'errors',
+          operatorLog || {},
+        );
         throw error;
       }
     });
@@ -1135,39 +1158,6 @@ function wireConfirmationDialog() {
   });
 }
 
-function wireOperatorMenu() {
-  const button = document.getElementById('operatorMenuButton');
-  const tabs = document.getElementById('operatorTabs');
-  if (!button || !tabs) return;
-
-  const mobile = window.matchMedia('(max-width: 1100px)');
-  const setOpen = (open) => {
-    const expanded = Boolean(open);
-    tabs.classList.toggle('is-open', expanded);
-    tabs.classList.toggle('is-collapsed', !expanded);
-    button.setAttribute('aria-expanded', String(expanded));
-    button.setAttribute('aria-label', expanded ? 'Navigation schließen' : 'Navigation öffnen');
-  };
-
-  button.addEventListener('click', () => {
-    setOpen(button.getAttribute('aria-expanded') !== 'true');
-  });
-  tabs.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => setOpen(false)));
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || button.getAttribute('aria-expanded') !== 'true') return;
-    event.preventDefault();
-    setOpen(false);
-    button.focus();
-  });
-  document.addEventListener('click', (event) => {
-    if (button.getAttribute('aria-expanded') !== 'true') return;
-    if (button.contains(event.target) || tabs.contains(event.target)) return;
-    setOpen(false);
-  });
-  mobile.addEventListener?.('change', () => setOpen(!mobile.matches));
-  setOpen(!mobile.matches);
-}
-
 function syncLocalTimers(game) {
   const gameSignature = [
     Boolean(game.timer_running),
@@ -1713,10 +1703,38 @@ function renderRiddleProgress() {
   if (summary) summary.textContent = text;
 }
 
+function formatNodeUptime(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return 'unbekannt';
+  const total = Math.floor(seconds);
+  const days = String(Math.floor(total / 86400)).padStart(2, '0');
+  const hours = String(Math.floor((total % 86400) / 3600)).padStart(2, '0');
+  const minutes = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const secs = String(total % 60).padStart(2, '0');
+  return `${days}:${hours}:${minutes}:${secs}`;
+}
+
+function nodeHoverText(item, restricted = false) {
+  const age = item.last_seen_s != null && Number.isFinite(Number(item.last_seen_s))
+    ? `${Math.max(0, Math.round(Number(item.last_seen_s)))} s`
+    : 'unbekannt';
+  const lines = [
+    `Status: ${item._missing ? 'unbekannt' : (item.online ? 'online' : 'offline')}`,
+    `Online seit: ${formatNodeUptime(item.uptime_s)} (DD:HH:MM:SS)`,
+    `Letzter Kontakt: ${age}`,
+    `Firmware: ${item.firmware || 'unbekannt'}`,
+    `Fehler: ${item.error || 'keiner'}`,
+  ];
+  if (restricted) lines.push('Reboot während Vorbereitung/Live gesperrt.');
+  return lines.join('\n');
+}
+
 function renderNodes() {
   const statusBar = document.getElementById('nodeStatusBar');
   const tableBody = document.getElementById('nodeDiagnosticsBody');
   const rebootAll = document.getElementById('rebootAllNodesBtn');
+  const phase = Number(state.game.phase || 0);
+  const lockControllerRestricted = phase >= 2 && phase <= 13;
   if (!statusBar && !tableBody) return;
   if (statusBar) statusBar.innerHTML = '';
   if (tableBody) tableBody.innerHTML = '';
@@ -1745,8 +1763,10 @@ function renderNodes() {
   };
 
   if (rebootAll) {
-    rebootAll.disabled = false;
-    rebootAll.title = 'REBOOT an alle physischen Steuergeräte senden';
+    rebootAll.disabled = lockControllerRestricted;
+    rebootAll.title = lockControllerRestricted
+      ? 'Während Vorbereitung/Live gesperrt, weil der Sammelneustart die Schlosssteuerung enthält.'
+      : 'REBOOT an alle physischen Steuergeräte senden';
     rebootAll.onclick = () => rebootNode('all', rebootAll).catch(() => {});
   }
 
@@ -1775,11 +1795,13 @@ function renderNodes() {
         ? String(Math.max(0, Math.round(Number(item.last_seen_s))))
         : '?';
       const statusClass = item._missing ? 'is-unknown' : (item.online ? 'is-online' : 'is-offline');
+      const rebootRestricted = lockControllerRestricted && item.id === 'maglock';
       reboot.className = `node-status-button ${statusClass}`;
       reboot.innerHTML = `${iconSvg('refresh', 'node-status-icon')}<strong>${escapeHtml(item.label)} (${age}s)</strong>`;
       reboot.dataset.nodeLabel = item.label;
-      reboot.setAttribute('aria-label', `${item.label} (${age}s) neu starten; Status ${item._missing ? 'unbekannt' : (item.online ? 'online' : 'offline')}`);
-      reboot.disabled = false;
+      reboot.title = nodeHoverText(item, rebootRestricted);
+      reboot.setAttribute('aria-label', `${item.label}; ${nodeHoverText(item, rebootRestricted).replaceAll('\n', '; ')}`);
+      reboot.disabled = rebootRestricted;
       reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
       statusBar.appendChild(reboot);
     }
@@ -1802,10 +1824,9 @@ function renderNodes() {
     reboot.className = 'node-reboot-btn';
     reboot.textContent = 'Reboot';
     reboot.dataset.nodeLabel = item.label;
-    reboot.disabled = false;
-    reboot.title = item.online
-      ? 'REBOOT über MQTT einreihen'
-      : 'Knoten meldet sich als offline; REBOOT trotzdem über MQTT einreihen.';
+    const rebootRestricted = lockControllerRestricted && item.id === 'maglock';
+    reboot.disabled = rebootRestricted;
+    reboot.title = `${nodeHoverText(item, rebootRestricted)}\n${item.online ? 'REBOOT über MQTT einreihen' : 'REBOOT trotz Offline-Status über MQTT einreihen.'}`;
     reboot.addEventListener('click', () => rebootNode(item.id, reboot).catch(() => {}));
     actionCell.appendChild(reboot);
     row.append(labelCell, statusCell, contactCell, firmwareCell, errorCell, actionCell);
@@ -1921,9 +1942,8 @@ function renderLocks() {
 }
 
 function resolveDimValue(light) {
-  if (dimEditing[light.id]) return dimDrafts[light.id] ?? light.pct;
-  if (dimDrafts[light.id] != null) return dimDrafts[light.id];
-  return light.pct;
+  if (dimEditing[light.id]) return safeInt(dimDrafts[light.id], light.pct);
+  return safeInt(light.pct, 0);
 }
 
 function renderLights() {
@@ -1946,7 +1966,8 @@ function renderLights() {
   for (const light of lights) {
     const card = document.createElement('div');
     card.className = light.dimmable ? 'light-dimmer-card' : 'light-toggle-card';
-    const anyLightOn = Boolean(light.any_on ?? light.on);
+    const actualPct = Math.max(0, Math.min(100, safeInt(light.pct, 0)));
+    const anyLightOn = light.dimmable ? actualPct > 0 : Boolean(light.any_on ?? light.on);
     const lightState = String(light.state || (light.on ? 'on' : 'off'));
     const stateLabel = String(light.state_label || (light.on ? 'an' : 'aus'));
     const buttonClass = {
@@ -1960,20 +1981,18 @@ function renderLights() {
     const visibleStateLabel = lightState === 'unknown'
       ? 'Unbekannt'
       : (['mixed', 'partial'].includes(lightState) ? 'Teilweise' : (anyLightOn ? 'An' : 'Aus'));
-    if (Number(light.pct) > 0) dimLastNonZero[light.id] = Number(light.pct);
+    if (actualPct > 0) dimLastNonZero[light.id] = actualPct;
 
     if (light.dimmable) {
       const dimValue = resolveDimValue(light);
+      const levelAlpha = ((actualPct / 100) * 0.5).toFixed(3);
       card.innerHTML = `
-        <div class="light-dimmer-label">
-          <button class="light-bulb-button ${buttonClass}" type="button" aria-label="${escapeAttr(displayLabel)} ein- oder ausschalten">${iconSvg('bulb')}</button>
-          <strong>${escapeHtml(displayLabel)}</strong>
-        </div>
+        <button class="light-dimmer-label ${buttonClass}" type="button" style="--led-alpha:${levelAlpha}" aria-label="${escapeAttr(displayLabel)} ein- oder ausschalten; aktuell ${actualPct} Prozent"><span class="light-bulb-icon" aria-hidden="true">${iconSvg('bulb')}</span><span><strong>${escapeHtml(displayLabel)}</strong><small>${actualPct} % · ${escapeHtml(visibleStateLabel)}</small></span></button>
         <input class="dim-input" type="range" min="0" max="100" step="1" value="${escapeAttr(dimValue)}" aria-label="Helligkeit ${escapeAttr(displayLabel)}" />
         <span class="dim-value">${escapeHtml(dimValue)} %</span>
         <button class="dim-apply-button" type="button">Übernehmen</button>
       `;
-      const toggleButton = card.querySelector('.light-bulb-button');
+      const toggleButton = card.querySelector('.light-dimmer-label');
       const input = card.querySelector('.dim-input');
       const applyButton = card.querySelector('.dim-apply-button');
 
@@ -1986,16 +2005,19 @@ function renderLights() {
           `${displayLabel} wird ${action === 'on' ? `mit ${pct} % eingeschaltet` : 'ausgeschaltet'}.`,
         );
         if (!confirmed) return;
-        if (action === 'on') dimDrafts[light.id] = pct;
         await runAction(toggleButton, () => api('/api/light', {
           method: 'POST',
           body: JSON.stringify({ group: light.id, action, pct, ...actionGuard() }),
         }));
       });
 
-      input.addEventListener('focus', () => { dimEditing[light.id] = true; });
+      input.addEventListener('focus', () => {
+        dimEditing[light.id] = true;
+        dimDrafts[light.id] = input.value;
+      });
       input.addEventListener('blur', () => {
         dimEditing[light.id] = false;
+        delete dimDrafts[light.id];
         window.setTimeout(flushQueuedSnapshot, 0);
       });
       input.addEventListener('input', () => {
@@ -2011,8 +2033,9 @@ function renderLights() {
           `${displayLabel} wird auf ${pct} % gesetzt.`,
         );
         if (!confirmed) return;
-        dimDrafts[light.id] = pct;
+        if (pct > 0) dimLastNonZero[light.id] = pct;
         dimEditing[light.id] = false;
+        delete dimDrafts[light.id];
         await runAction(applyButton, () => api('/api/light', {
           method: 'POST',
           body: JSON.stringify({ group: light.id, action: 'set_pct', pct, ...actionGuard() }),
@@ -2027,7 +2050,7 @@ function renderLights() {
       });
     } else {
       card.innerHTML = `
-        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><span class="light-toggle-icon" aria-hidden="true">${iconSvg(light.id === 'star_sky' ? 'stars' : 'flame')}</span><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(visibleStateLabel)}</small></button>
+        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><strong>${escapeHtml(displayLabel)}</strong><span class="light-toggle-icon" aria-hidden="true">${iconSvg(light.id === 'star_sky' ? 'stars' : 'flame')}</span><small>${escapeHtml(visibleStateLabel)}</small></button>
       `;
       const button = card.querySelector('button');
       button.addEventListener('click', async () => {
@@ -2211,7 +2234,10 @@ function hintPanelHtml(riddle, compact = false) {
     ? `<ol class="hint-template-list">${templates.map((tip, index) => {
       const due = (tip.offer_after_total_s != null && Number(tip.offer_after_total_s) <= totalElapsed)
         || (tip.offer_after_riddle_s != null && Number(tip.offer_after_riddle_s) <= riddleElapsed);
-      return `<li class="${due ? 'hint-card-due' : ''}"><div class="hint-card-meta"><span>Tipp ${index + 1}</span>${thresholdHtml('Seit Spielstart', tip.offer_after_total_s, totalElapsed, 'total')}${thresholdHtml('Seit Rätselstart', tip.offer_after_riddle_s, riddleElapsed, 'riddle')}</div><p>${escapeHtml(tip.text)}</p></li>`;
+      const dueKey = `${dueHintRunSignature}:${riddle.id}:${index}`;
+      const newlyDue = due && !seenDueHintKeys.has(dueKey);
+      if (newlyDue) seenDueHintKeys.add(dueKey);
+      return `<li class="${due ? 'hint-card-due' : ''}${newlyDue ? ' hint-card-newly-due' : ''}" data-hint-key="${escapeAttr(dueKey)}"><div class="hint-card-meta"><span>Tipp ${index + 1}</span>${thresholdHtml('Seit Spielstart', tip.offer_after_total_s, totalElapsed, 'total')}${thresholdHtml('Seit Rätselstart', tip.offer_after_riddle_s, riddleElapsed, 'riddle')}</div><p>${escapeHtml(tip.text)}</p></li>`;
     }).join('')}</ol>`
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
   return `
@@ -2598,7 +2624,7 @@ function renderCurrentRiddles() {
   wrap.innerHTML = '';
   const phase = Number(state.game.phase || 0);
   if (phase === 1) {
-    const hiddenMaintenanceRiddles = new Set(['prison', 'wheel', 'chains', 'tangram', 'magnet']);
+    const hiddenMaintenanceRiddles = new Set(['prison', 'wheel', 'chains', 'tangram', 'magnet', 'sissi']);
     for (const riddle of state.riddles || []) {
       if (!hiddenMaintenanceRiddles.has(riddle.id)) wrap.appendChild(buildMaintenanceRiddleCard(riddle));
     }
@@ -2842,13 +2868,16 @@ function patchState(data) {
   state.start_assignment = data.start_assignment || state.start_assignment;
   state.summary_delivery = data.summary_delivery || state.summary_delivery;
   state.meta = data.meta || state.meta;
+  const nextDueHintRunSignature = String(state.game.run_id || state.game.started_at || 'no-run');
+  if (nextDueHintRunSignature !== dueHintRunSignature) {
+    dueHintRunSignature = nextDueHintRunSignature;
+    seenDueHintKeys.clear();
+  }
   updateLogArchiveDeleteAvailability();
 
   for (const light of state.lights) {
     if (light.dimmable && Number(light.pct) > 0) dimLastNonZero[light.id] = Number(light.pct);
-    if (!dimEditing[light.id] && light.dimmable && dimDrafts[light.id] == null) {
-      dimDrafts[light.id] = light.pct;
-    }
+    if (!dimEditing[light.id] && light.dimmable) delete dimDrafts[light.id];
   }
 
   if (initialRender) {
@@ -3720,21 +3749,34 @@ function updateFastTimers() {
       : '—';
   }
   if (prepareCounter) prepareCounter.textContent = '--';
-  document.querySelectorAll('[data-hint-threshold]').forEach((threshold) => {
-    if (threshold.dataset.hintThreshold === '') return;
-    const target = Number(threshold.dataset.hintThreshold);
-    if (!Number.isFinite(target)) return;
-    const riddleId = String(threshold.dataset.riddleId || '');
-    const riddle = (state.riddles || []).find((item) => item.id === riddleId);
-    const elapsed = threshold.dataset.hintClock === 'total'
-      ? Math.max(0, readLocalTimer())
-      : riddleId === state.game.current_riddle_name
-      ? Math.max(0, readLocalRiddleTimer())
-      : Math.max(0, Number(riddle?.live_time_s ?? riddle?.time_s ?? riddle?.display_time_s) || 0);
-    const due = elapsed >= target;
-    threshold.classList.toggle('hint-threshold-due', due);
-    threshold.querySelector('.hint-due-label')?.classList.toggle('hidden', !due);
-    threshold.closest('li')?.classList.toggle('hint-card-due', Boolean(threshold.closest('li')?.querySelector('.hint-threshold-due')));
+  document.querySelectorAll('.hint-template-list li[data-hint-key]').forEach((card) => {
+    let due = false;
+    card.querySelectorAll('[data-hint-threshold]').forEach((threshold) => {
+      if (threshold.dataset.hintThreshold === '') return;
+      const target = Number(threshold.dataset.hintThreshold);
+      if (!Number.isFinite(target)) return;
+      const riddleId = String(threshold.dataset.riddleId || '');
+      const riddle = (state.riddles || []).find((item) => item.id === riddleId);
+      const elapsed = threshold.dataset.hintClock === 'total'
+        ? Math.max(0, readLocalTimer())
+        : riddleId === state.game.current_riddle_name
+        ? Math.max(0, readLocalRiddleTimer())
+        : Math.max(0, Number(riddle?.live_time_s ?? riddle?.time_s ?? riddle?.display_time_s) || 0);
+      const thresholdDue = elapsed >= target;
+      due ||= thresholdDue;
+      threshold.classList.toggle('hint-threshold-due', thresholdDue);
+      threshold.querySelector('.hint-due-label')?.classList.toggle('hidden', !thresholdDue);
+    });
+    const wasDue = card.classList.contains('hint-card-due');
+    const dueKey = String(card.dataset.hintKey || '');
+    card.classList.toggle('hint-card-due', due);
+    if (due && !wasDue && !seenDueHintKeys.has(dueKey)) {
+      seenDueHintKeys.add(dueKey);
+      card.classList.add('hint-card-newly-due');
+    }
+    if (!due) {
+      card.classList.remove('hint-card-newly-due');
+    }
   });
   const now = new Date();
   const date = document.getElementById('operatorDate');
@@ -3748,7 +3790,6 @@ function updateFastTimers() {
 }
 
 installInteractionGuard();
-wireOperatorMenu();
 wireConfirmationDialog();
 wireFeedbackDismissals();
 wireTopControls();

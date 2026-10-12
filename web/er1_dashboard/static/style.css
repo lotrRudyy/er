@@ -3982,6 +3982,42 @@ body.dashboard-v6 .confirm-dialog #confirmDialogMessage { white-space: pre-line;
   body.dashboard-v6 .booking-action-row { grid-template-columns: minmax(0, 1fr); }
 }
 
+.operator-admin-navigation { position: relative; }
+.operator-admin-navigation > summary { list-style: none; cursor: pointer; }
+.operator-admin-navigation > summary::-webkit-details-marker { display: none; }
+.operator-admin-menu {
+  width: min(520px, calc(100vw - 24px));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 80;
+  padding: 10px;
+  border: 1px solid rgba(230, 171, 76, 0.4);
+  border-radius: 8px;
+  background: #100d09;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.78);
+}
+.operator-admin-link {
+  padding: 9px 11px;
+  border: 1px solid rgba(225, 203, 171, 0.1);
+  border-radius: 5px;
+  color: #d8cfc4;
+  background: rgba(255, 255, 255, 0.025);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+.operator-admin-link:hover,
+.operator-admin-link.is-active { border-color: rgba(231, 157, 39, 0.5); color: #ffe1a5; background: rgba(188, 111, 17, 0.17); }
+
+@media (max-width: 900px) {
+  .operator-admin-navigation { grid-column: 1; }
+  .operator-admin-menu { width: min(360px, calc(100vw - 18px)); grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Reference geometry: mission summary across the top, table and room controls below. */
 .operator-leading {
   min-width: 0;

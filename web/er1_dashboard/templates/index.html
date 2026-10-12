@@ -1,3 +1,4 @@
+{% from '_operator_navigation.html' import admin_menu, dashboard_tabs %}
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -7,7 +8,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261012-dashboard-v15" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261012-dashboard-v16" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -42,15 +43,11 @@
   <div class="dashboard-page-v6">
     <header class="operator-header">
       <div class="operator-leading">
-        <button id="operatorMenuButton" class="operator-menu" type="button" aria-label="Navigation öffnen" aria-controls="operatorTabs" aria-expanded="false"><span aria-hidden="true">&#9776;</span> Menü</button>
+        {{ admin_menu(website_admin_links) }}
         <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung"><svg class="operator-brand-mark ui-icon" aria-hidden="true"><use href="#icon-key"></use></svg><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
         <div class="operator-connection" aria-live="polite"><span class="connection-dot"></span><span id="connectionLabel">Verbinde...</span></div>
       </div>
-      <nav id="operatorTabs" class="operator-tabs" aria-label="Dashboard-Bereiche">
-        <a class="operator-tab{% if initial_view|default('control') == 'control' %} is-active{% endif %}" href="{{ url_for('index') }}"{% if initial_view|default('control') == 'control' %} aria-current="page"{% endif %}>Spielkontrolle</a>
-        <a class="operator-tab" href="{{ url_for('game_viewer') }}">Alle Spiele</a>
-        <a class="operator-tab{% if initial_view|default('control') == 'admin' %} is-active{% endif %}" href="{{ url_for('admin_dashboard') }}"{% if initial_view|default('control') == 'admin' %} aria-current="page"{% endif %}>Admin</a>
-      </nav>
+      {{ dashboard_tabs(initial_view|default('control')) }}
       <div class="operator-clock"><span id="operatorDate"></span><strong id="operatorTime"></strong></div>
     </header>
 
@@ -291,6 +288,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261012-dashboard-v15"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261012-dashboard-v16"></script>
 </body>
 </html>

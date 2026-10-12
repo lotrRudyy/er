@@ -459,7 +459,7 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertIn("aktualisieren", guard({"expected_phase": 10, "expected_run_id": "old-run"}))
         self.assertIn("aktualisieren", guard({}))
 
-    def test_node_reboot_is_whitelisted_available_live_and_publishes_plain_reboot(self) -> None:
+    def test_node_reboot_blocks_lock_controller_and_bulk_only_during_prepare_and_live(self) -> None:
         namespace = extracted("api_node_reboot")
         published: list[tuple[str, Any]] = []
         store = types.SimpleNamespace(lock=threading.RLock(), game_state={"phase": 0})
@@ -503,24 +503,36 @@ class DashboardMutationTests(unittest.TestCase):
         self.assertEqual(len(published), 9)
         self.assertTrue(all(topic.endswith("/sys/cmd") and payload == "REBOOT" for topic, payload in published))
 
-        store.game_state["phase"] = 3
-        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "all"})
-        response = namespace["api_node_reboot"]()
-        self.assertTrue(response["ok"])
-        self.assertEqual(response["queued_count"], 8)
-        self.assertEqual(len(published), 17)
-
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
         response = namespace["api_node_reboot"]()
         self.assertTrue(response["ok"])
-        self.assertEqual(response["queued_count"], 1)
         self.assertEqual(published[-1], ("maglock/sys/cmd", "REBOOT"))
+        phase_zero_publish_count = len(published)
+
+        store.game_state["phase"] = 3
+        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "all"})
+        response, status = namespace["api_node_reboot"]()
+        self.assertEqual(status, 409)
+        self.assertFalse(response["ok"])
+        self.assertEqual(len(published), phase_zero_publish_count)
+
+        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
+        response, status = namespace["api_node_reboot"]()
+        self.assertEqual(status, 409)
+        self.assertFalse(response["ok"])
+        self.assertEqual(len(published), phase_zero_publish_count)
 
         namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "lighting"})
         response = namespace["api_node_reboot"]()
         self.assertTrue(response["ok"])
         self.assertEqual(response["queued_count"], 1)
         self.assertEqual(published[-1], ("lighting/sys/cmd", "REBOOT"))
+
+        store.game_state["phase"] = 14
+        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
+        response = namespace["api_node_reboot"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(published[-1], ("maglock/sys/cmd", "REBOOT"))
 
     def test_service_restart_is_whitelisted_scheduled_and_requires_confirmation(self) -> None:
         helper = extracted("_schedule_service_restart")
@@ -1675,7 +1687,7 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIn("/api/riddle-time-preview", javascript)
         self.assertIn(">Speichern</button>", javascript)
         self.assertIn("riddle-time-options", javascript)
-        self.assertIn("card.querySelector('.light-bulb-button')", javascript)
+        self.assertIn("card.querySelector('.light-dimmer-label')", javascript)
         self.assertIn("fmtDurationInput(seconds)", javascript)
         self.assertNotIn("/api/riddle-time-restore", javascript)
         self.assertNotIn("riddle-time-restore", javascript)
@@ -1714,8 +1726,8 @@ class DashboardSourceContractTests(unittest.TestCase):
         delete_start = javascript.index("async function deleteLogArchiveSegment")
         delete_end = javascript.index("function readDiagnosticsFilters", delete_start)
         self.assertIn("confirmGameControlAction", javascript[node_start:node_end])
-        self.assertNotIn("phaseRestricted", javascript[node_start:node_end])
-        self.assertNotIn("phaseZero", javascript[node_start:node_end])
+        self.assertIn("lockControllerRestricted", javascript[node_start:node_end])
+        self.assertIn("item.id === 'maglock'", javascript[node_start:node_end])
         self.assertNotIn("reboot.disabled = !item.online", javascript[node_start:node_end])
         self.assertIn("confirmGameControlAction", javascript[phase_start:phase_end])
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
@@ -1756,70 +1768,25 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_responsive_menu_toggles_accessible_state_and_handles_escape(self) -> None:
+    def test_admin_menu_is_separate_from_permanent_dashboard_tabs(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         html = HTML_PATH.read_text(encoding="utf-8")
+        navigation = (HTML_PATH.parent / "_operator_navigation.html").read_text(encoding="utf-8")
+        source = APP_PATH.read_text(encoding="utf-8")
         css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
-        start = javascript.index("function wireOperatorMenu")
-        end = javascript.index("\nfunction syncLocalTimers", start)
-        menu_function = javascript[start:end]
-        self.assertIn('id="operatorMenuButton"', html)
-        self.assertIn('aria-controls="operatorTabs"', html)
-        self.assertIn('aria-expanded="false"', html)
-        self.assertIn('id="operatorTabs"', html)
-        self.assertIn(".operator-tabs.is-open", css)
-
-        script = f"""
-class Target {{
-  constructor() {{ this.listeners = new Map(); }}
-  addEventListener(type, callback) {{
-    if (!this.listeners.has(type)) this.listeners.set(type, []);
-    this.listeners.get(type).push(callback);
-  }}
-  dispatch(type, event = {{}}) {{
-    if (!event.target) event.target = this;
-    for (const callback of this.listeners.get(type) || []) callback(event);
-  }}
-  contains(target) {{ return target === this; }}
-}}
-const button = new Target();
-button.attrs = new Map([['aria-expanded', 'false']]);
-button.setAttribute = (name, value) => button.attrs.set(name, String(value));
-button.getAttribute = (name) => button.attrs.get(name);
-button.focused = false;
-button.focus = () => {{ button.focused = true; }};
-const link = new Target();
-const tabs = new Target();
-tabs.classes = new Set();
-tabs.classList = {{ toggle(name, enabled) {{ enabled ? tabs.classes.add(name) : tabs.classes.delete(name); }} }};
-tabs.querySelectorAll = () => [link];
-const document = new Target();
-document.getElementById = (id) => id === 'operatorMenuButton' ? button : (id === 'operatorTabs' ? tabs : null);
-const media = new Target();
-media.matches = true;
-const window = {{ matchMedia() {{ return media; }} }};
-{menu_function}
-wireOperatorMenu();
-button.dispatch('click');
-if (button.getAttribute('aria-expanded') !== 'true' || !tabs.classes.has('is-open')) throw new Error('menu did not open');
-let prevented = false;
-document.dispatch('keydown', {{ key: 'Escape', preventDefault() {{ prevented = true; }} }});
-if (button.getAttribute('aria-expanded') !== 'false' || tabs.classes.has('is-open') || !button.focused || !prevented) throw new Error('escape did not close and restore focus');
-button.dispatch('click');
-link.dispatch('click');
-if (button.getAttribute('aria-expanded') !== 'false') throw new Error('link did not close menu');
-button.dispatch('click');
-document.dispatch('click', {{ target: {{}} }});
-if (button.getAttribute('aria-expanded') !== 'false') throw new Error('outside click did not close menu');
-button.dispatch('click');
-media.matches = false;
-media.dispatch('change');
-if (button.getAttribute('aria-expanded') !== 'true' || !tabs.classes.has('is-open')) throw new Error('desktop viewport did not expose menu');
-button.dispatch('click');
-if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-collapsed')) throw new Error('desktop menu did not close');
-"""
-        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("wireOperatorMenu", javascript)
+        self.assertIn("admin_menu(website_admin_links)", html)
+        self.assertIn("dashboard_tabs(initial_view|default('control'))", html)
+        self.assertIn('<details class="operator-admin-navigation">', navigation)
+        self.assertIn('target="_top"', navigation)
+        self.assertIn('id="operatorTabs"', navigation)
+        self.assertIn("website_admin_navigation()", source)
+        for route in (
+            "/admin", "/admin/bookings", "/admin/vouchers", "/admin/emails", "/admin/statistiken",
+            "/admin/spielstatistiken", "/admin/game-master", "/admin/users", "/admin/rate-limits", "/admin/profile",
+        ):
+            self.assertIn(f'"{route}"', source)
+        self.assertRegex(css, r"(?s)@media \(max-width: 1100px\).*?\.operator-tabs\s*\{[^}]*display: flex;")
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1891,7 +1858,7 @@ if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-co
         self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261012-dashboard-v15", html)
+        self.assertIn("app.js') }}?v=20261012-dashboard-v16", html)
 
     def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1957,22 +1924,23 @@ if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-co
         maintenance_end = javascript.index("if (phase === 2)", maintenance_start)
         maintenance_source = javascript[maintenance_start:maintenance_end]
         self.assertIn("hiddenMaintenanceRiddles", maintenance_source)
-        for riddle in ("prison", "wheel", "chains", "tangram", "magnet"):
+        for riddle in ("prison", "wheel", "chains", "tangram", "magnet", "sissi"):
             self.assertIn(f"'{riddle}'", maintenance_source)
         self.assertNotIn("'chess'", maintenance_source)
 
     def test_control_room_layout_contract_is_present(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
+        navigation = (HTML_PATH.parent / "_operator_navigation.html").read_text(encoding="utf-8")
         javascript = JS_PATH.read_text(encoding="utf-8")
         css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261012-dashboard-v15", html)
+        self.assertIn("dashboard.css') }}?v=20261012-dashboard-v16", html)
         self.assertNotIn("filename='style.css'", html)
-        self.assertIn('class="operator-tabs"', html)
+        self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
-            self.assertIn(f">{label}</a>", html)
+            self.assertIn(f">{label}</a>", navigation)
         self.assertLess(html.index('id="phaseValue"'), html.index('id="currentRiddlesPanel"'))
         self.assertLess(html.index('id="currentRiddlesPanel"'), html.index('id="allRiddlesPanel"'))
         for action in ("standby", "maintenance", "prepare"):
@@ -1998,7 +1966,7 @@ if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-co
         self.assertNotIn("openHintTemplateDialog", javascript)
         self.assertIn('data-service-restart="game_master"', html)
         self.assertIn('data-service-restart="dashboard"', html)
-        self.assertIn("href=\"{{ url_for('game_viewer') }}\"", html)
+        self.assertIn("href=\"{{ url_for('game_viewer') }}\"", navigation)
         restart_start = javascript.index("async function restartSystemService")
         restart_end = javascript.index("async function", restart_start + 20)
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
@@ -2058,6 +2026,15 @@ if (button.getAttribute('aria-expanded') !== 'false' || !tabs.classes.has('is-co
         self.assertIn("DASHBOARD_NODE_IDS.map", node_source)
         self.assertIn("node-status-button", node_source)
         self.assertIn("(${age}s)", node_source)
+        self.assertIn("nodeHoverText", node_source)
+        self.assertIn("formatNodeUptime", javascript)
+        self.assertIn("DD:HH:MM:SS", javascript)
+
+        self.assertIn("hint-card-newly-due", javascript)
+        self.assertIn("seenDueHintKeys", javascript)
+        self.assertIn("animation: hint-due-once 900ms ease-out 1", css)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css)
+        self.assertRegex(css, r"(?s)@media \(min-width: 1101px\).*?\.riddles-table-v6 th:not\(:nth-child\(2\)\)")
 
         locks_start = javascript.index("function renderLocks")
         locks_end = javascript.index("function resolveDimValue", locks_start)

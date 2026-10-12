@@ -80,6 +80,26 @@ layout with the supplied references, and deliver the game summary reliably.
   English and Italian. Future free-text saves are not translated automatically.
 - Deleting a saved game reliably moves it to the removed-games database without
   relying on a browser-native confirmation dialog.
+- The ER1 tabs remain visible at every viewport. A separate Menu links to every
+  website `/admin` page with absolute top-level navigation, so it works both on
+  the LAN and inside the website iframe.
+- Maintenance omits Sissi from the live-riddle cards without changing Sissi in
+  the all-riddles table or its real game phase.
+- Dimmable room LEDs use controller telemetry as the displayed truth whenever an
+  operator is not actively dragging a slider. Their full icon/name button toggles
+  to real off/zero and back to the last positive percentage, while its background
+  continuously represents the actual zero-to-100-percent brightness.
+- The four upper lighting buttons show their complete labels above their icons.
+- During Preparation and Live, the lock-control node (`maglock`) cannot be
+  rebooted; the bulk action that includes it is also unavailable. Other physical
+  nodes remain rebootable.
+- Operator logs identify the concrete action, target, requested state and domain
+  result. Signed website actions include the admin actor; direct LAN actions stay
+  `local/unknown`.
+- Hint cards are larger and scroll within a bounded list when necessary. A newly
+  due hint receives one short emphasis, never a continuously repeating blink.
+- Node hover text includes device uptime as `DD:HH:MM:SS`, using heartbeat uptime,
+  and the all-riddles table is visually centered except for the riddle name.
 
 ## 3. Scope And Exclusions
 
@@ -90,9 +110,10 @@ debug streams are excluded. Authentication and automatic hint delivery are also
 excluded.
 
 No firmware change is planned. Correlated device acknowledgements are a separate
-project. The code deployment and the one-time production hint import were
-separately authorized and completed after the isolated local browser session.
-The resulting repository history is authorized for push.
+project. The earlier code deployment, one-time production hint import, and push
+were separately authorized and completed after the isolated local browser
+session. The newly approved UI/control follow-up is local until deployment and
+push receive separate authorization.
 
 ## 4. Chosen Approach
 
@@ -119,6 +140,13 @@ The resulting repository history is authorized for push.
   Persist one claim/result per run; a successful manual send satisfies the same
   claim and suppresses automatic delivery.
 - Use responsive CSS/layout changes rather than proxy-side HTML injection.
+- Build the website menu from the configured website API origin and a fixed
+  server-side route model. Use absolute `_top` links for website pages and keep
+  local ER1 tabs independent so proxy response rewriting cannot corrupt them.
+- Translate dimmable off/zero requests to physical off commands and let retained
+  controller telemetry own displayed brightness outside an active slider edit.
+- Enforce the `maglock`/bulk reboot restriction in the API and mirror it in the
+  browser; frontend disabling is never the security boundary.
 
 ## 5. Constraints
 
@@ -147,6 +175,12 @@ The resulting repository history is authorized for push.
    early-send status/retry.
 6. Synchronize current German hints/timings into English and Italian.
 7. Run focused and full tests, then the approved isolated local visual session.
+8. Separate permanent ER1 tabs from the website-wide admin menu and fix
+   Maintenance Sissi visibility.
+9. Rework light controls around authoritative telemetry and enforce the
+   lock-control reboot rule.
+10. Expand operator action taxonomy, hint readability, node uptime, and table
+    alignment, then run focused and full tests.
 
 ## 7. Success Criteria
 
@@ -169,6 +203,16 @@ The resulting repository history is authorized for push.
   failure can retry without accidental duplication.
 - Desktop/tablet/mobile layouts match the supplied hierarchy without clipped
   controls, overlapping cards, or nested-scroll traps.
+- Website admin navigation is reachable from direct and proxied ER1 views while
+  ER1 tabs always remain visible.
+- External/game-driven LED changes update button, slider and percentage; off is
+  always zero and on restores the last positive setting.
+- `maglock` and the bulk reboot are rejected in Preparation/Live while every
+  other valid individual physical node remains rebootable.
+- Command logs name the actual action/target/result and do not misattribute an
+  unsigned LAN user.
+- Hint due emphasis runs once, node uptime is readable, and table contents remain
+  centered without breaking mobile layouts.
 - Full automated test and syntax suites pass.
 
 ## 8. Decisions
@@ -190,6 +234,14 @@ The resulting repository history is authorized for push.
 - Firmware acknowledgements remain a separate project; no node firmware changes
   are part of this implementation.
 - Chess remains unchanged.
+- Direct ER1 actions remain `local/unknown`; no new local login or operator picker
+  is introduced.
+- ER1 tabs are permanent. Menu controls website-wide admin navigation instead of
+  hiding/showing those tabs.
+- Controller telemetry is authoritative for displayed LED brightness. No phase
+  scene or firmware brightness values are changed.
+- The `maglock` physical node and any bulk reboot containing it are blocked only
+  during Preparation/Live; other individual physical nodes remain available.
 
 ## 9. Ideas Parking Lot
 
@@ -221,4 +273,8 @@ The immediate rollback copy is
 with source hash `1ad31bd0ad79ba80444a08591e2a485cbaab5db8ffd78b9d0015d3139d9c2425`.
 The API, operation receipt, file permissions, service health, phase 0, empty run,
 and translated hint cardinalities were verified after import. All temporary
-servers, databases, profiles, staging files, and screenshots were removed.
+servers, databases, profiles, staging files, and screenshots were removed. The
+local follow-up covering navigation, lighting, reboot policy, detailed logs,
+hints, uptime, and table layout is implemented and passes all 170 offline tests
+plus Python/JavaScript syntax checks. It is not yet visually browser-verified,
+deployed, committed, or pushed.

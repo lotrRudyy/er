@@ -621,6 +621,36 @@ class DashboardLightSummaryTests(unittest.TestCase):
         self.assertIn("light.state_label", javascript)
         self.assertIn("mixed: 'is-mixed'", javascript)
 
+        zero = summarize(None, {
+            "r1_stuen": {"on": True, "pct": 0},
+            "r1_bild": {"on": True, "pct": 0},
+        }, {})
+        r1 = next(row for row in zero if row["id"] == "r1")
+        self.assertEqual(r1["state"], "off")
+        self.assertEqual(r1["state_label"], "aus (0%)")
+        self.assertFalse(r1["any_on"])
+        self.assertEqual(r1["pct"], 0)
+
+    def test_dimmer_display_prefers_telemetry_outside_active_editing(self) -> None:
+        source = JS_PATH.read_text(encoding="utf-8")
+        start = source.index("function resolveDimValue")
+        end = source.index("\nfunction ", start + 10)
+        function_source = source[start:end]
+        script = f"""
+const dimDrafts = {{ r1: 12 }};
+const dimEditing = {{}};
+function safeInt(value, fallback = 0) {{ const parsed = Number.parseInt(value, 10); return Number.isFinite(parsed) ? parsed : fallback; }}
+{function_source}
+const telemetry = {{ id: 'r1', pct: 68 }};
+if (resolveDimValue(telemetry) !== 68) throw new Error('telemetry not authoritative');
+dimEditing.r1 = true;
+if (resolveDimValue(telemetry) !== 12) throw new Error('active draft not preserved');
+delete dimEditing.r1;
+if (resolveDimValue({{ id: 'r1', on: false, pct: 0 }}) !== 0) throw new Error('off telemetry not rendered as zero');
+"""
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 class DashboardLockSummaryTests(unittest.TestCase):
     def test_pulse_protection_state_is_exposed_to_the_ui(self) -> None:
@@ -643,6 +673,57 @@ class DashboardLockSummaryTests(unittest.TestCase):
         self.assertIn("lock.command_blocked", javascript)
         self.assertIn("lock.boot_guard", javascript)
         self.assertIn("lock.cooldown", javascript)
+
+
+class DashboardOperatorAuditTests(unittest.TestCase):
+    def test_helpers_identify_action_target_actor_and_result(self) -> None:
+        namespace = extracted_dashboard(
+            "_bounded_log_text",
+            "_operator_action_target",
+            "_operator_requested_detail",
+            "_operator_action_label",
+            "_operator_result",
+            "_operator_target_label",
+            "_operator_result_label",
+            "_operator_audit_metadata",
+        )
+        namespace["request"] = types.SimpleNamespace(
+            path="/api/lock",
+            endpoint="api_lock",
+            view_args={},
+            get_json=lambda silent=True: {"lock": "main", "action": "open"},
+        )
+        action, target, riddle = namespace["_operator_action_target"]()
+        self.assertEqual((action, target, riddle), ("lock.open", "main", ""))
+        self.assertEqual(namespace["_operator_requested_detail"](action), {"action": "open"})
+        self.assertEqual(namespace["_operator_action_label"](action), "Schloss öffnen")
+
+        response = types.SimpleNamespace(
+            status_code=409,
+            is_json=True,
+            get_json=lambda silent=True: {"ok": False, "error": "phase_blocked"},
+        )
+        self.assertEqual(namespace["_operator_result"](response, {"ok": False, "error": "phase_blocked"}), "failed")
+
+        namespace["g"] = types.SimpleNamespace(audit_identity={
+            "actor": "local/unknown",
+            "source": "local",
+            "trusted": False,
+        })
+        response.status_code = 200
+        response.get_json = lambda silent=True: {"ok": True, "mqtt_queued": True}
+        metadata = namespace["_operator_audit_metadata"](response)
+        self.assertEqual(metadata["action"], "lock.open")
+        self.assertEqual(metadata["target"], "main")
+        self.assertEqual(metadata["requested"], {"action": "open"})
+        for fragment in (
+            "Aktion: Schloss öffnen",
+            "Ziel: main",
+            'Soll: {"action":"open"}',
+            "Ergebnis: MQTT eingereiht",
+            "Akteur: local/unknown",
+        ):
+            self.assertIn(fragment, metadata["message"])
 
 
 class DashboardMqttRouteTests(unittest.TestCase):
@@ -795,6 +876,37 @@ class DashboardMqttRouteTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(calls[1], ("star_sky/sys/cmd", "SOLVE"))
         self.assertTrue(response["partial"])
+
+    def test_light_route_publishes_turn_off_for_off_and_zero_percent(self) -> None:
+        calls: list[tuple[str, Any]] = []
+        self.namespace["mqtt_publish"] = lambda topic, payload: calls.append((topic, payload)) or True
+        guard = {"expected_phase": 3, "expected_run_id": "run-guard"}
+
+        self.set_request({"group": "r1", "action": "off", **guard})
+        response = self.namespace["api_light"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(calls, [
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "turn_off", "light": "r1_stuen"}),
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "turn_off", "light": "r1_bild"}),
+        ])
+
+        calls.clear()
+        self.set_request({"group": "r1", "action": "set_pct", "pct": 0, **guard})
+        response = self.namespace["api_light"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(calls, [
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "turn_off", "light": "r1_stuen"}),
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "turn_off", "light": "r1_bild"}),
+        ])
+
+        calls.clear()
+        self.set_request({"group": "r1", "action": "set_pct", "pct": 67, **guard})
+        response = self.namespace["api_light"]()
+        self.assertTrue(response["ok"])
+        self.assertEqual(calls, [
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "set", "light": "r1_stuen", "pct": 67}),
+            (self.namespace["TOPIC_LIGHTING_CMD"], {"cmd": "set", "light": "r1_bild", "pct": 67}),
+        ])
 
     def test_protected_pulse_lock_is_rejected_before_mqtt(self) -> None:
         calls: list[tuple[str, Any]] = []
