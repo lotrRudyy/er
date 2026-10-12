@@ -90,9 +90,9 @@ debug streams are excluded. Authentication and automatic hint delivery are also
 excluded.
 
 No firmware change is planned. Correlated device acknowledgements are a separate
-project. The code deployment was separately authorized and completed after the
-isolated local browser session. No production hint import, data migration, or push
-was authorized.
+project. The code deployment and the one-time production hint import were
+separately authorized and completed after the isolated local browser session.
+The resulting repository history is authorized for push.
 
 ## 4. Chosen Approach
 
@@ -213,6 +213,12 @@ had horizontal document overflow; the 1024-pixel ER1 layout now uses the compact
 responsive flow. Both ER1 services, Dashboard HTTP, read-only archive API, MQTT
 phase-0 state, deployed hashes, and the new summary-delivery database were
 verified after restart. The website/ER1 audit secrets match without being stored
-in Git. All temporary servers, databases, profiles, staging files, and screenshots
-were removed. The one-time hint candidate remains unapplied. The historical data
-and hint imports still require separate authorization.
+in Git. The one-time hint candidate was imported on 2026-10-12 through completed
+idempotent operation `72ec73a1-52b5-41cc-88e8-2f1db17da912`; its persisted hash is
+`24e1b2e707a828e5f6b25d11dfafdc381f192953c8dd57ce30965f8727293771`.
+The immediate rollback copy is
+`/home/rudyy/er1/deploy-backups/hint_templates.pre-import-20261012T121859Z.json`
+with source hash `1ad31bd0ad79ba80444a08591e2a485cbaab5db8ffd78b9d0015d3139d9c2425`.
+The API, operation receipt, file permissions, service health, phase 0, empty run,
+and translated hint cardinalities were verified after import. All temporary
+servers, databases, profiles, staging files, and screenshots were removed.
