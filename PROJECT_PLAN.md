@@ -110,10 +110,9 @@ debug streams are excluded. Authentication and automatic hint delivery are also
 excluded.
 
 No firmware change is planned. Correlated device acknowledgements are a separate
-project. The earlier code deployment, one-time production hint import, and push
-were separately authorized and completed after the isolated local browser
-session. The newly approved UI/control follow-up is local until deployment and
-push receive separate authorization.
+project. The earlier code deployment and one-time production hint import were
+completed after the isolated local browser session. The UI/control follow-up was
+subsequently authorized, pushed, and deployed on 2026-10-12.
 
 ## 4. Chosen Approach
 
@@ -254,9 +253,9 @@ push receive separate authorization.
 
 ## 10. Current Status And Next Step
 
-Production runs the operational files from commit `6dfa87e9`, deployed on
-2026-10-12 after confirming phase 0. The rollback archive is
-`/home/rudyy/er1/deploy-backups/pre-6dfa87e9-20261012T060819Z.tar.gz`.
+Production runs the operational dashboard files from commit `9b94c410`, deployed
+on 2026-10-12. The current rollback archive is
+`/home/rudyy/er1/deploy-backups/pre-9b94c410-20261012T135115Z.tar.gz`.
 Steps 1-7 are implemented and independently reviewed. The final ER1 suite passes
 167 tests; JavaScript syntax and diff checks pass. An
 isolated headless-Chromium review used 17 of the approved 18 renderings across
@@ -274,7 +273,10 @@ with source hash `1ad31bd0ad79ba80444a08591e2a485cbaab5db8ffd78b9d0015d3139d9c24
 The API, operation receipt, file permissions, service health, phase 0, empty run,
 and translated hint cardinalities were verified after import. All temporary
 servers, databases, profiles, staging files, and screenshots were removed. The
-local follow-up covering navigation, lighting, reboot policy, detailed logs,
-hints, uptime, and table layout is implemented and passes all 170 offline tests
-plus Python/JavaScript syntax checks. It is not yet visually browser-verified,
-deployed, committed, or pushed.
+follow-up covering navigation, lighting, reboot policy, detailed logs, hints,
+uptime, and table layout passes all 170 offline tests plus Python/JavaScript
+syntax checks. Its staging hashes matched the committed files, Python and Jinja
+syntax passed on the Pi, `er1-web.service` and `game_master.service` are active,
+and dashboard, games, and state HTTP checks return 200. The retained state after
+restart is Maintenance without an active run or timer. The follow-up is pushed
+and deployed but not yet visually browser-verified.
