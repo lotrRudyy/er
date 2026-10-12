@@ -90,8 +90,9 @@ debug streams are excluded. Authentication and automatic hint delivery are also
 excluded.
 
 No firmware change is planned. Correlated device acknowledgements are a separate
-project. This work session permits local code/tests and the specifically approved
-isolated local browser session only; no deployment, production migration, or push.
+project. The code deployment was separately authorized and completed after the
+isolated local browser session. No production hint import, data migration, or push
+was authorized.
 
 ## 4. Chosen Approach
 
@@ -201,13 +202,17 @@ isolated local browser session only; no deployment, production migration, or pus
 
 ## 10. Current Status And Next Step
 
-Production currently includes game-deletion confirmation through commit
-`47359159`. Steps 1-7 are implemented locally and independently reviewed. The
-final ER1 suite passes 167 tests; JavaScript syntax and diff checks pass. An
+Production runs the operational files from commit `6dfa87e9`, deployed on
+2026-10-12 after confirming phase 0. The rollback archive is
+`/home/rudyy/er1/deploy-backups/pre-6dfa87e9-20261012T060819Z.tar.gz`.
+Steps 1-7 are implemented and independently reviewed. The final ER1 suite passes
+167 tests; JavaScript syntax and diff checks pass. An
 isolated headless-Chromium review used 17 of the approved 18 renderings across
 desktop, tablet, 500-pixel mobile, and true 390-pixel emulation. No tested view
 had horizontal document overflow; the 1024-pixel ER1 layout now uses the compact
-responsive flow. All temporary servers, databases, profiles, and screenshots
-were removed. The one-time hint candidate is prepared but not applied. Next:
-obtain separate authorization before committing/deploying or changing production
-data; no deployment or production migration is authorized in this work session.
+responsive flow. Both ER1 services, Dashboard HTTP, read-only archive API, MQTT
+phase-0 state, deployed hashes, and the new summary-delivery database were
+verified after restart. The website/ER1 audit secrets match without being stored
+in Git. All temporary servers, databases, profiles, staging files, and screenshots
+were removed. The one-time hint candidate remains unapplied. The historical data
+and hint imports still require separate authorization.
