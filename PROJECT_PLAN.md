@@ -122,9 +122,9 @@ excluded.
 No firmware change is planned. Correlated device acknowledgements are a separate
 project. The earlier code deployment and one-time production hint import were
 completed after the isolated local browser session. The UI/control follow-up was
-subsequently authorized, pushed, and deployed on 2026-10-12. The newly approved
-layout/readability/reboot follow-up is local until a separate push, browser, and
-deployment authorization.
+subsequently authorized, pushed, and deployed on 2026-10-12. The later
+layout/readability/reboot follow-up was authorized, visually verified, pushed,
+and deployed on 2026-10-13.
 
 ## 4. Chosen Approach
 
@@ -272,9 +272,9 @@ deployment authorization.
 
 ## 10. Current Status And Next Step
 
-Production runs the operational dashboard files from commit `9b94c410`, deployed
-on 2026-10-12. The current rollback archive is
-`/home/rudyy/er1/deploy-backups/pre-9b94c410-20261012T135115Z.tar.gz`.
+Production runs the operational files from commit `fffa93a9`, deployed on
+2026-10-13. The current rollback archive is
+`/home/rudyy/er1/deploy-backups/pre-fffa93a9-20261013T005714Z.tar.gz`.
 Steps 1-7 are implemented and independently reviewed. The final ER1 suite passes
 167 tests; JavaScript syntax and diff checks pass. An
 isolated headless-Chromium review used 17 of the approved 18 renderings across
@@ -298,16 +298,17 @@ syntax checks. Its staging hashes matched the committed files, Python and Jinja
 syntax passed on the Pi, `er1-web.service` and `game_master.service` are active,
 and dashboard, games, and state HTTP checks return 200. The retained state after
 restart is Maintenance without an active run or timer. The follow-up is pushed
-and deployed but not yet visually browser-verified. A subsequent local-only
-follow-up for compact controls, action placement, readability, autoscroll, and
-removal of periodic reboot is implemented and reviewed. Its full offline suite
-passes 172 Python tests and 12 JavaScript client tests; Python/JavaScript syntax
-and diff checks pass. Light labels sit above a compact side-by-side icon/status
-row, with responsive column counts and a scrollable light-control area. Hint
-animation and automatic reboot code/configuration are removed; manual reboot
-phase-boundary tests remain green. The main dashboard views and header were
-verified in the approved local browser runs. The final bounded viewer check at
+and deployed but not yet visually browser-verified. The subsequent follow-up for
+compact controls, action placement, readability, autoscroll, and removal of
+periodic reboot passes 172 Python tests and 12 JavaScript client tests;
+Python/JavaScript syntax and diff checks pass. The final bounded viewer check at
 901, 1008, and 1016 pixels has no horizontal overflow or header collision, and
 autoscroll propagates both states between local `/` and `/admin` tabs without
-browser errors. This follow-up is uncommitted and has not been pushed or deployed;
-next: commit, push, deploy, and verify production service and HTTP health.
+browser errors. It is committed and pushed as `fffa93a9`. Before deployment, all
+seven production runtime files matched the parent commit and the game was in
+phase 0 without a timer or run. The staged and deployed hashes match the commit;
+both services are active without restarts, Dashboard `/`, `/games`, `/admin`, and
+`/api/state` return 200, persistence is not degraded, and all eight nodes are
+online. No error-priority journal entries occurred after restart, and deployment
+staging was removed. Next: normal operational monitoring; no release action is
+pending.
