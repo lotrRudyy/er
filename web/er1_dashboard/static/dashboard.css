@@ -34,6 +34,7 @@ html:has(body.dashboard-v6) {
 body.dashboard-v6 {
   width: 100%;
   min-width: 0;
+  min-height: 100svh;
   min-height: 100dvh;
   margin: 0;
   padding: 0;
@@ -118,6 +119,7 @@ textarea {
 
 .dashboard-page-v6 {
   width: 100%;
+  min-height: 100svh;
   min-height: 100dvh;
 }
 
@@ -450,7 +452,7 @@ textarea {
 .phase-action-grid-v6 {
   order: 4;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 9px;
 }
@@ -471,23 +473,6 @@ textarea {
   background: linear-gradient(180deg, #ffc044, #e69109);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.45), 0 0 10px rgba(240, 170, 36, 0.22);
   opacity: 1;
-}
-
-.dashboard-game-mode:not(.dashboard-preparation-mode) .phase-action-grid-v6 .start-game-button.is-current-phase:disabled:not(.is-busy) {
-  color: #d7f8df;
-  border-color: rgba(47, 202, 94, 0.65);
-  background: linear-gradient(180deg, rgba(26, 137, 60, 0.8), rgba(13, 78, 34, 0.9));
-}
-
-.dashboard-preparation-mode .phase-action-grid-v6 .start-game-button.is-current-phase:not(:disabled) {
-  color: #211300;
-  border-color: #ffbe38;
-  background: linear-gradient(180deg, #ffd15a, #ed9c12);
-}
-
-.dashboard-preparation-mode .phase-action-grid-v6 .start-game-button.is-current-phase:disabled {
-  filter: grayscale(0.7);
-  opacity: 0.55;
 }
 
 .mission-metrics {
@@ -933,11 +918,11 @@ textarea {
 }
 
 .current-riddle-primary-actions {
-  grid-template-columns: minmax(0, 1.2fr) minmax(92px, 0.8fr);
+  grid-template-columns: minmax(0, 35fr) minmax(92px, 65fr);
 }
 
 .current-riddle-hint-actions {
-  grid-template-columns: minmax(0, 1.25fr) minmax(90px, 0.75fr);
+  grid-template-columns: minmax(0, 35fr) minmax(90px, 65fr);
 }
 
 .current-riddle-action-section > button,
@@ -1035,6 +1020,20 @@ textarea {
   margin: 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.preparation-card {
+  align-items: stretch;
+}
+
+.preparation-start-button {
+  width: 100%;
+  min-height: 96px;
+  border-color: rgba(35, 207, 109, 0.78);
+  color: #effff5;
+  background: linear-gradient(180deg, #16995a, #075d36);
+  box-shadow: inset 0 1px rgba(230, 255, 240, 0.18), 0 0 18px rgba(24, 196, 100, 0.16);
+  font-size: 24px;
 }
 
 .current-riddles-panel.is-maintenance {
@@ -1166,26 +1165,11 @@ textarea {
   font-weight: 800;
 }
 
-.star-sign-summary,
-.star-sign-summary > span,
-.star-sign-row,
-.star-sign-attempts,
 .star-sign-attempt {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-}
-
-.star-sign-summary {
-  align-items: flex-start;
-  flex-direction: column;
-}
-
-.star-sign-solution {
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--line-soft);
-  color: #f6de86;
 }
 
 .star-sign-symbol {
@@ -1552,7 +1536,7 @@ textarea {
   grid-column: 1;
   grid-row: 1;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   container: er1-lights / inline-size;
 }
 
@@ -1571,7 +1555,7 @@ textarea {
   display: grid;
   grid-column: 1 / -1;
   grid-row: 2;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .lights-grid-v6 {
@@ -1579,8 +1563,7 @@ textarea {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .light-toggle-card {
@@ -1799,7 +1782,7 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .node-row-v6 {
@@ -3846,7 +3829,7 @@ button:disabled {
 
 .hint-template-list p {
   margin-top: 5px;
-  font-size: 14px;
+  font-size: 18px;
   line-height: 1.35;
 }
 
@@ -3855,7 +3838,7 @@ button:disabled {
 }
 
 .current-riddles-grid:has(> :nth-child(2)) .hint-template-list p {
-  font-size: 13px;
+  font-size: 17px;
 }
 
 .current-riddle-controls {
@@ -3874,11 +3857,11 @@ button:disabled {
 }
 
 .current-riddle-primary-actions {
-  grid-template-columns: minmax(0, 1.18fr) minmax(92px, 0.75fr);
+  grid-template-columns: minmax(0, 35fr) minmax(92px, 65fr);
 }
 
 .current-riddle-hint-actions {
-  grid-template-columns: minmax(0, 1.28fr) minmax(90px, 0.82fr);
+  grid-template-columns: minmax(0, 35fr) minmax(90px, 65fr);
   padding-left: 11px;
 }
 
@@ -3999,6 +3982,7 @@ button:disabled {
 
 .star-dashboard {
   width: 100%;
+  height: 100%;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(210px, 0.92fr) minmax(190px, 1.08fr);
@@ -4007,6 +3991,7 @@ button:disabled {
 
 .star-reference-table {
   width: 100%;
+  height: 100%;
   border-collapse: collapse;
   color: #d4c9ba;
   font: 500 11px/1.1 Inter, "Segoe UI", sans-serif;
@@ -4014,7 +3999,7 @@ button:disabled {
 
 .star-reference-table th,
 .star-reference-table td {
-  height: 24px;
+  height: 12.5%;
   padding: 2px 6px;
   border: 1px solid rgba(189, 182, 255, 0.12);
   text-align: left;
@@ -4034,8 +4019,8 @@ button:disabled {
 }
 
 .star-reference-table .star-sign-symbol {
-  min-width: 20px;
-  font-size: 17px;
+  min-width: 28px;
+  font-size: 26px;
 }
 
 .star-sign-summary {
@@ -4067,44 +4052,33 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.star-sign-solution,
-.star-current {
-  display: flex;
+.star-position-grid {
+  display: grid;
+  grid-template-columns: minmax(52px, auto) repeat(3, minmax(36px, 1fr));
   align-items: center;
-  gap: 8px;
-}
-
-.star-sign-solution {
+  gap: 6px;
   padding-bottom: 8px;
-  border-bottom-color: rgba(190, 184, 255, 0.16);
+  border-bottom: 1px solid rgba(190, 184, 255, 0.16);
 }
 
-.star-sign-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
+.star-main-position {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
 }
 
-.star-sign-symbol {
-  min-width: 25px;
+.star-sign-symbol.star-main-symbol {
+  min-width: 38px;
   color: #e5d98a;
-  font-size: 24px;
+  font-size: 38px;
 }
 
 .star-current-position {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  padding: 2px 4px;
   border: 1px solid rgba(190, 184, 255, 0.15);
-  border-radius: 4px;
   background: rgba(5, 4, 22, 0.32);
-}
-
-.star-current-position > b {
-  color: #837db5;
-  font-size: 8px;
 }
 
 .star-current-position.is-correct {
@@ -4113,8 +4087,7 @@ button:disabled {
   box-shadow: 0 0 8px rgba(24, 197, 103, 0.12);
 }
 
-.star-current-position.is-correct .star-sign-symbol,
-.star-current-position.is-correct > b {
+.star-current-position.is-correct .star-sign-symbol {
   color: #72eca9;
 }
 
@@ -4138,11 +4111,13 @@ button:disabled {
 
 .star-sign-attempt {
   display: inline-flex;
+  align-items: center;
+  gap: 2px;
   padding: 2px 3px;
   border: 0;
 }
 
-.star-sign-attempt .star-sign-symbol {
+.star-sign-attempt .star-attempt-symbol {
   min-width: 16px;
   font-size: 16px;
 }
@@ -4319,7 +4294,13 @@ button:disabled {
 
 .control-technical {
   grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.92fr) minmax(0, 1fr);
-  grid-template-rows: minmax(218px, 0.54fr) minmax(160px, 0.46fr);
+  grid-template-rows: minmax(220px, 0.6fr) minmax(140px, 0.4fr);
+}
+
+.lights-panel-v6,
+.locks-panel-v6,
+.nodes-panel-v6 {
+  padding: 8px;
 }
 
 .technical-heading {
@@ -4343,7 +4324,7 @@ button:disabled {
 }
 
 .light-toggle-button {
-  min-height: 48px;
+  min-height: 44px;
   grid-template-columns: 24px minmax(0, max-content);
   grid-template-rows: auto auto;
   align-items: center;
@@ -4420,7 +4401,7 @@ button:disabled {
 }
 
 .light-dimmer-card {
-  min-height: 37px;
+  min-height: 34px;
   grid-column: 1 / -1;
   grid-template-columns: minmax(130px, 0.8fr) minmax(90px, 1.45fr) 48px 76px;
   gap: 8px;
@@ -4431,13 +4412,13 @@ button:disabled {
 
 .light-dimmer-label {
   width: 100%;
-  min-height: 35px;
+  min-height: 31px;
   min-width: 0;
   display: grid;
   grid-template-columns: 27px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
-  padding: 4px 8px;
+  padding: 2px 6px;
   border-color: rgba(210, 193, 170, 0.18);
   color: #ddd3c7;
   background:
@@ -4451,16 +4432,17 @@ button:disabled {
   overflow: visible;
   color: #d6ccbf;
   font-size: 12px;
-  line-height: 1.15;
+  line-height: 1.05;
   text-overflow: clip;
   white-space: normal;
 }
 
 .light-dimmer-label small {
   display: block;
-  margin-top: 2px;
+  margin-top: 0;
   color: #b5a99b;
   font-size: 9px;
+  line-height: 1.05;
   letter-spacing: 0.035em;
   text-transform: uppercase;
 }
@@ -4564,7 +4546,7 @@ button:disabled {
 }
 
 .lock-button-v6 {
-  min-height: 76px;
+  min-height: 70px;
   gap: 4px;
   padding: 7px 4px;
   border-color: rgba(221, 188, 139, 0.19);
@@ -4614,13 +4596,13 @@ button:disabled {
 
 .node-list-v6 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(4, minmax(35px, 1fr));
-  gap: 5px;
+  grid-template-rows: repeat(4, minmax(32px, 1fr));
+  gap: 4px;
 }
 
 .node-status-button {
   min-width: 0;
-  min-height: 35px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4808,7 +4790,7 @@ button:disabled {
   }
 
   .control-technical {
-    grid-template-rows: minmax(205px, 0.54fr) minmax(150px, 0.46fr);
+    grid-template-rows: minmax(230px, 0.62fr) minmax(150px, 0.38fr);
   }
 
   .lock-button-v6 {
@@ -4818,6 +4800,16 @@ button:disabled {
   .light-dimmer-card {
     grid-template-columns: minmax(105px, 0.75fr) minmax(75px, 1.35fr) 42px 64px;
     gap: 5px;
+  }
+
+  .light-dimmer-label strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .light-dimmer-label small {
+    display: none;
   }
 }
 
@@ -5235,5 +5227,40 @@ button:disabled {
 @container er1-lights (max-width: 214px) {
   .lights-grid-v6 {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1100px) {
+  body.dashboard-v6[data-initial-view="control"] {
+    min-height: 100svh;
+    min-height: 100dvh;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .control-workspace {
+    min-height: calc(100svh - var(--header-height));
+    min-height: calc(100dvh - var(--header-height));
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .dashboard-preparation-mode .booking-card,
+  .dashboard-preparation-mode .current-riddles-panel,
+  .dashboard-preparation-mode .current-riddle-card {
+    min-height: 0;
+  }
+
+  .dashboard-preparation-mode .current-riddles-panel {
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .dashboard-preparation-mode .preparation-card {
+    padding: 0;
+  }
+
+  .current-riddle-facts {
+    overflow: visible;
   }
 }

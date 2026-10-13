@@ -1182,6 +1182,7 @@ class GameMaster:
         self._publish_json(config.TOPIC_DASHBOARD_STATE, dashboard_payload, retained=True)
 
     def _enrich_dashboard_state_payload_locked(self, payload: dict[str, Any]) -> None:
+        payload["captured_at_ms"] = int(self._utc_now().timestamp() * 1000)
         payload["recovery"] = {
             "restored": bool(self.state.recovery_restored),
             "checkpoint_saved_at": self.state.recovery_checkpoint_saved_at,

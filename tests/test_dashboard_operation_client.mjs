@@ -28,6 +28,26 @@ const hintPanelSource = source.slice(
   source.indexOf('function hintPanelHtml('),
   source.indexOf('\nfunction formatHintOfferTime('),
 );
+const timerFormatSource = source.slice(
+  source.indexOf('function fmtTime('),
+  source.indexOf('\nfunction fmtEditableTime('),
+);
+const timerSource = source.slice(
+  source.indexOf('function syncLocalTimers('),
+  source.indexOf('\nfunction normalizeHintLanguage('),
+);
+const fingerprintSource = source.slice(
+  source.indexOf('function riddleRenderFingerprint('),
+  source.indexOf('\nfunction anyRiddleTimeEditing('),
+);
+const rankingUpdateSource = source.slice(
+  source.indexOf('function updateRankingDisplays('),
+  source.indexOf('\nasync function refreshRankingPreview('),
+);
+const starSummarySource = source.slice(
+  source.indexOf('function renderStarSliderSummary('),
+  source.indexOf('\nfunction renderCandlesSummary('),
+);
 
 function response(status, data) {
   return {
@@ -511,4 +531,133 @@ test('due hint rendering is static across repeated renders', () => {
   assert.match(first, /<li class="hint-card-due">/);
   assert.match(first, /hint-threshold hint-threshold-due/);
   assert.doesNotMatch(first, /newly-due|data-hint-key|animation/i);
+});
+
+test('signed countdown bases continue with performance time across polls and page recreation', () => {
+  const createTimers = (initialNow = 0) => {
+    let now = initialNow;
+    const context = vm.createContext({
+      performance: { now: () => now },
+    });
+    vm.runInContext(`
+      const state = { game: {} };
+      let localTimerBaseElapsed = 0;
+      let localTimerSyncedAt = null;
+      let localRiddleTimerBaseElapsed = 0;
+      let localRiddleTimerSyncedAt = null;
+      let lastGameTimerSignature = '';
+      let lastRiddleTimerSignature = '';
+      ${timerFormatSource}
+      ${timerSource}
+      globalThis.timers = {
+        state,
+        sync: syncLocalTimers,
+        total: readLocalTimer,
+        riddle: readLocalRiddleTimer,
+        display: fmtGameTime,
+      };
+    `, context);
+    return { timers: context.timers, setNow: (value) => { now = value; } };
+  };
+
+  const page = createTimers();
+  const countdown = {
+    phase: 3,
+    timer_running: true,
+    started_at: 'run-1',
+    elapsed_s: -5,
+    current_riddle_name: 'images',
+    current_riddle_elapsed_s: -5,
+    last_riddle_solved_at: '',
+  };
+  page.timers.state.game = countdown;
+  page.timers.sync(countdown);
+  page.setNow(2000);
+  assert.equal(page.timers.total(), -3);
+  assert.equal(page.timers.riddle(), -3);
+  assert.equal(page.timers.display(page.timers.total()), '00:00');
+
+  const refreshed = createTimers(50);
+  const freshState = { ...countdown, elapsed_s: 8, current_riddle_elapsed_s: 4 };
+  refreshed.timers.state.game = freshState;
+  refreshed.timers.sync(freshState);
+  refreshed.setNow(1550);
+  assert.equal(refreshed.timers.total(), 9);
+  assert.equal(refreshed.timers.riddle(), 5);
+});
+
+test('elapsed and heartbeat-only riddle updates keep structure stable while ranking updates in place', () => {
+  const context = vm.createContext({ JSON });
+  vm.runInContext(`
+    function stableStringify(value) { return JSON.stringify(value); }
+    ${fingerprintSource}
+    globalThis.fingerprint = riddleRenderFingerprint;
+  `, context);
+  const before = [{ id: 'images', phase_state: 'active', display_time_s: 2, live_time_s: 2, solve_time_s: 0, node_status: 'online (10s)', info: 'ready' }];
+  const volatile = [{ ...before[0], display_time_s: 4, live_time_s: 4, solve_time_s: 1, node_status: 'online (12s)' }];
+  assert.equal(context.fingerprint(before), context.fingerprint(volatile));
+  assert.notEqual(context.fingerprint(before), context.fingerprint([{ ...before[0], info: 'changed' }]));
+
+  const cell = { textContent: '' };
+  const rankingContext = vm.createContext({
+    CSS: { escape: (value) => value },
+    document: { querySelector: () => cell },
+  });
+  vm.runInContext(`
+    const state = { riddles: [{ id: 'images', phase_state: 'active' }] };
+    const rankingState = { riddles: new Map([['images', { rank: 3 }]]) };
+    ${rankingUpdateSource}
+    updateRankingDisplays();
+  `, rankingContext);
+  assert.equal(cell.textContent, '#3');
+});
+
+test('phase changes invalidate current-riddle content when its fingerprint is unchanged', () => {
+  assert.match(source, /const riddleViewChanged = riddleViewInvalidated\(data\);[\s\S]*if \(riddleViewChanged \|\| languageChanged\) \{\s*rerenderRiddleViews\(\);/);
+  const context = vm.createContext({ JSON });
+  vm.runInContext(`
+    function stableStringify(value) { return JSON.stringify(value); }
+    let lastSnapshot = null;
+    ${fingerprintSource}
+    globalThis.view = {
+      invalidated: riddleViewInvalidated,
+      snapshot(value) { lastSnapshot = value; },
+    };
+  `, context);
+  const riddles = [{ id: 'images', phase_state: 'pending', display_time_s: 0 }];
+  context.view.snapshot({ game: { phase: 0 }, riddles });
+  assert.equal(context.view.invalidated({ game: { phase: 2 }, riddles }), true);
+  context.view.snapshot({ game: { phase: 2 }, riddles });
+  assert.equal(context.view.invalidated({ game: { phase: 0 }, riddles }), true);
+  context.view.snapshot({ game: { phase: 0 }, riddles });
+  assert.equal(context.view.invalidated({ game: { phase: 0 }, riddles }), false);
+});
+
+test('Stars renders sorted fixed rows and canonical numbered attempts', () => {
+  assert.doesNotMatch(source, /riddle\.id === 'star_slider'/);
+  const context = vm.createContext({});
+  vm.runInContext(`
+    const STAR_SIGN_SYMBOLS = { scorpio: 'S', aquarius: 'A', libra: 'L', gemini: 'G', leo: 'O', sagittarius: 'T', pisces: 'P', none: '-' };
+    function escapeAttr(value) { return String(value); }
+    function escapeHtml(value) { return String(value); }
+    ${starSummarySource}
+    globalThis.renderStars = renderStarSliderSummary;
+  `, context);
+  const html = context.renderStars({
+    current: { number: 2, values: ['scorpio', 'aquarius', 'libra'] },
+    attempts: [
+      { number: 1, values: ['gemini', 'leo', 'pisces'] },
+      { number: 2, values: ['scorpio', 'aquarius', 'libra'] },
+    ],
+  });
+  const orderedNames = ['Gemini', 'Libra', 'Leo', 'Sagittarius', 'Scorpio', 'Aquarius', 'Pisces'];
+  for (let index = 1; index < orderedNames.length; index += 1) {
+    assert.ok(html.indexOf(orderedNames[index - 1]) < html.indexOf(orderedNames[index]));
+  }
+  assert.match(html, /star-position-grid[\s\S]*Lösung[\s\S]*Aktuell/);
+  assert.match(html, /star-sign-attempt"><b>1\.<\/b>/);
+  assert.match(html, /star-sign-attempt"><b>2\.<\/b>/);
+  assert.equal((html.match(/star-attempt-separator/g) || []).length, 1);
+  assert.match(html, /star-attempt-separator" aria-hidden="true">,<\/span>/);
+  assert.match(html, /star-attempt-symbol/);
 });

@@ -141,9 +141,9 @@ const stateConnection = {
 };
 
 let localTimerBaseElapsed = 0;
-let localTimerSyncedAt = 0;
+let localTimerSyncedAt = null;
 let localRiddleTimerBaseElapsed = 0;
-let localRiddleTimerSyncedAt = 0;
+let localRiddleTimerSyncedAt = null;
 let lastGameTimerSignature = '';
 let lastRiddleTimerSignature = '';
 
@@ -644,13 +644,11 @@ function fmtTime(totalSeconds) {
 }
 
 function fmtGameTime(totalSeconds) {
-  const numeric = Number(totalSeconds) || 0;
-  const sign = numeric < 0 ? '-' : '';
-  const total = Math.floor(Math.abs(numeric));
+  const total = Math.max(0, Math.floor(Number(totalSeconds) || 0));
   const hours = Math.floor(total / 3600);
   const minutes = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const seconds = String(total % 60).padStart(2, '0');
-  return hours > 0 ? `${sign}${hours}:${minutes}:${seconds}` : `${sign}${minutes}:${seconds}`;
+  return hours > 0 ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`;
 }
 
 function fmtEditableTime(totalSeconds) {
@@ -811,6 +809,8 @@ function riddleRenderFingerprint(riddles) {
     delete stable.display_time_s;
     delete stable.live_time_s;
     delete stable.time_s;
+    delete stable.solve_time_s;
+    delete stable.node_status;
     return stable;
   }));
 }
@@ -818,6 +818,12 @@ function riddleRenderFingerprint(riddles) {
 function riddleStructureChanged(nextData) {
   if (!lastSnapshot) return true;
   return riddleRenderFingerprint(lastSnapshot.riddles) !== riddleRenderFingerprint(nextData.riddles);
+}
+
+function riddleViewInvalidated(nextData) {
+  if (!lastSnapshot) return true;
+  return Number(lastSnapshot.game?.phase || 0) !== Number(nextData.game?.phase || 0)
+    || riddleStructureChanged(nextData);
 }
 
 function anyRiddleTimeEditing() {
@@ -1203,7 +1209,7 @@ function syncLocalTimers(game) {
   if (gameSignature !== lastGameTimerSignature) {
     lastGameTimerSignature = gameSignature;
     localTimerBaseElapsed = Number(game.elapsed_s || 0);
-    localTimerSyncedAt = Date.now();
+    localTimerSyncedAt = performance.now();
   }
 
   const riddleSignature = [
@@ -1216,21 +1222,21 @@ function syncLocalTimers(game) {
 
   if (riddleSignature !== lastRiddleTimerSignature) {
     lastRiddleTimerSignature = riddleSignature;
-    localRiddleTimerBaseElapsed = Math.max(0, Number(game.current_riddle_elapsed_s || 0));
-    localRiddleTimerSyncedAt = Date.now();
+    localRiddleTimerBaseElapsed = Number(game.current_riddle_elapsed_s || 0);
+    localRiddleTimerSyncedAt = performance.now();
   }
 }
 
 function readLocalTimer() {
-  if (!state.game.timer_running || !localTimerSyncedAt) return Math.floor(localTimerBaseElapsed || 0);
-  return Math.floor(localTimerBaseElapsed + ((Date.now() - localTimerSyncedAt) / 1000));
+  if (!state.game.timer_running || localTimerSyncedAt == null) return Math.floor(localTimerBaseElapsed || 0);
+  return Math.floor(localTimerBaseElapsed + ((performance.now() - localTimerSyncedAt) / 1000));
 }
 
 function readLocalRiddleTimer() {
-  if (!state.game.timer_running || !state.game.current_riddle_name || !localRiddleTimerSyncedAt) {
+  if (!state.game.timer_running || !state.game.current_riddle_name || localRiddleTimerSyncedAt == null) {
     return Math.floor(localRiddleTimerBaseElapsed || 0);
   }
-  return Math.max(0, Math.floor(localRiddleTimerBaseElapsed + ((Date.now() - localRiddleTimerSyncedAt) / 1000)));
+  return Math.floor(localRiddleTimerBaseElapsed + ((performance.now() - localRiddleTimerSyncedAt) / 1000));
 }
 
 function normalizeHintLanguage(value) {
@@ -1635,6 +1641,15 @@ function renderRanking() {
   if (statusNode) statusNode.textContent = rankingState.unavailable ? 'Rang derzeit nicht verfügbar' : '';
 }
 
+function updateRankingDisplays() {
+  for (const riddle of state.riddles || []) {
+    const cell = document.querySelector(`#riddlesBody tr[data-riddle-id="${CSS.escape(riddle.id)}"] .riddle-rank`);
+    if (!cell) continue;
+    const ranking = rankingState.riddles.get(riddle.id);
+    cell.textContent = riddle.phase_state === 'skipped' ? '--' : (ranking?.rank ? `#${ranking.rank}` : '--');
+  }
+}
+
 async function refreshRankingPreview() {
   const signature = rankingRequestSignature();
   if (!signature) {
@@ -1654,13 +1669,13 @@ async function refreshRankingPreview() {
         unavailable: false,
       };
       renderRanking();
-      rerenderRiddleViews();
+      updateRankingDisplays();
     })
     .catch(() => {
       if (signature !== rankingRequestSignature()) return;
       rankingState = { overall: null, riddles: new Map(), unavailable: true };
       renderRanking();
-      rerenderRiddleViews();
+      updateRankingDisplays();
     })
     .finally(() => { rankingRequest = null; });
   await rankingRequest;
@@ -1672,7 +1687,7 @@ function renderTop() {
   const timerValue = document.getElementById('timerValue');
   const riddleTimerValue = document.getElementById('riddleTimerValue');
   const prepareCounterWrap = document.getElementById('prepareCounterWrap');
-  const startButton = document.getElementById('startGameBtn');
+  const startButton = document.querySelector('.preparation-start-button');
 
   const phase = Number(state.game.phase || 0);
   const phaseLabel = String(state.game.phase_name_pretty || state.game.phase_name || '').trim();
@@ -1689,14 +1704,9 @@ function renderTop() {
       : '—';
   }
 
-  const preparedRunReady = phase === 2 && Boolean(currentRunId());
   prepareCounterWrap?.classList.toggle('hidden', phase !== 2);
   if (startButton) {
-    startButton.textContent = phase >= 14 || state.game.ended_at
-      ? 'Spiel beendet'
-      : (phase >= 3 ? 'Spiel läuft' : 'Spiel starten');
-    startButton.disabled = !preparedRunReady || bookingSaveBusy || startInFlight || Boolean(state.start_assignment?.active);
-    startButton.classList.toggle('is-current-phase', phase >= 2);
+    startButton.disabled = !currentRunId() || bookingSaveBusy || startInFlight || Boolean(state.start_assignment?.active);
   }
 
   const currentAction = phase === 0 ? 'standby' : (phase === 1 ? 'maintenance' : (phase === 2 ? 'prepare' : 'start'));
@@ -1816,11 +1826,6 @@ function renderNodes() {
       _missing: true,
     };
   });
-  const diagnosticOnlineCount = diagnosticNodes.filter((item) => item.online).length;
-  const diagnosticHealthText = `${diagnosticOnlineCount} online · ${diagnosticNodes.length - diagnosticOnlineCount} offline`;
-  const diagnosticsSummary = document.getElementById('nodeDiagnosticsSummary');
-  if (diagnosticsSummary) diagnosticsSummary.textContent = diagnosticHealthText;
-
   for (const item of diagnosticNodes) {
     if (statusBar) {
       const reboot = document.createElement('button');
@@ -2161,12 +2166,12 @@ function renderKnockingSummary(summary) {
 function renderStarSliderSummary(summary) {
   if (!summary) return '';
   const signs = [
-    ['Libra', 'libra', 7],
-    ['Aquarius', 'aquarius', 13],
-    ['Scorpio', 'scorpio', 10],
     ['Gemini', 'gemini', 7],
-    ['Sagittarius', 'sagittarius', 10],
+    ['Libra', 'libra', 7],
     ['Leo', 'leo', 10],
+    ['Sagittarius', 'sagittarius', 10],
+    ['Scorpio', 'scorpio', 10],
+    ['Aquarius', 'aquarius', 13],
     ['Pisces', 'pisces', 13],
   ];
   const symbol = (value, extraClass = '') => {
@@ -2174,16 +2179,15 @@ function renderStarSliderSummary(summary) {
     const glyph = STAR_SIGN_SYMBOLS[key] || '?';
     return `<span class="star-sign-symbol ${extraClass}" title="${escapeAttr(key)}" aria-label="${escapeAttr(key)}">${glyph}</span>`;
   };
-  const expected = ['libra', 'aquarius', 'scorpio'];
-  const current = (summary.current || []).map((value, index) => {
+  const expected = ['scorpio', 'aquarius', 'libra'];
+  const current = (summary.current?.values || []).map((value, index) => {
     const key = String(value || 'none').trim().toLowerCase();
     const correct = key === expected[index];
-    return `<span class="star-current-position ${correct ? 'is-correct' : ''}"><b>${index + 1}</b>${symbol(key)}</span>`;
+    return `<span class="star-main-position star-current-position ${correct ? 'is-correct' : ''}">${symbol(key, 'star-main-symbol')}</span>`;
   }).join('');
   const attempts = (summary.attempts || []).map((item) => {
-    const values = Array.isArray(item) ? item : [item];
-    return `<span class="star-sign-attempt">${values.map((value) => symbol(value)).join('')}</span>`;
-  }).join('<span class="star-attempt-separator">,</span>');
+    return `<span class="star-sign-attempt"><b>${escapeHtml(item.number)}.</b>${item.values.map((value) => symbol(value, 'star-attempt-symbol')).join('')}</span>`;
+  }).join('<span class="star-attempt-separator" aria-hidden="true">,</span>');
   return `
     <div class="star-dashboard">
       <table class="star-reference-table" aria-label="Sternzeichen und Anzahl der Sterne">
@@ -2191,8 +2195,10 @@ function renderStarSliderSummary(summary) {
         <tbody>${signs.map(([name, key, count]) => `<tr><td>${name}</td><td>${symbol(key)}</td><td>${count}</td></tr>`).join('')}</tbody>
       </table>
       <div class="star-sign-summary">
-        <div class="star-sign-solution"><b>Lösung:</b><span class="star-sign-row">${expected.map((key) => symbol(key)).join('')}</span></div>
-        <div class="star-current"><b>Aktuell:</b><span class="star-sign-row">${current || '—'}</span></div>
+        <div class="star-position-grid">
+          <b>Lösung</b>${expected.map((key) => `<span class="star-main-position">${symbol(key, 'star-main-symbol')}</span>`).join('')}
+          <b>Aktuell</b>${current || '<span class="star-main-empty">—</span>'}
+        </div>
         <div class="star-attempts-block"><b>Versuche:</b><div class="star-attempts-scroll" tabindex="0" aria-label="Bisherige Sternzeichen-Versuche">${attempts || '—'}</div></div>
       </div>
     </div>
@@ -2223,7 +2229,7 @@ function renderRiddleInfo(riddle) {
   if (riddle.id === 'chess') return renderChessSlots(riddle.chess_slots);
   if (riddle.id === 'knocking') return renderKnockingSummary(riddle.attempts_summary);
   if (riddle.id === 'candles') return renderCandlesSummary(riddle.attempts_summary);
-  if (riddle.id === 'stars' || riddle.id === 'star_slider') return renderStarSliderSummary(riddle.star_slider_summary);
+  if (riddle.id === 'stars') return renderStarSliderSummary(riddle.star_slider_summary);
   return riddle.info ? `<span>${escapeHtml(riddle.info)}</span>` : '<span class="muted-info">Keine Live-Daten.</span>';
 }
 
@@ -2668,12 +2674,10 @@ function renderCurrentRiddles() {
   if (phase === 2) {
     const preparation = document.createElement('article');
     preparation.className = 'current-riddle-card preparation-card';
-    preparation.innerHTML = `
-      <div>
-        <h2>Raum und Buchung prüfen</h2>
-        <p>Die passende Buchung wurde vorausgewählt, sofern sie im Zeitfenster liegt. Bestätige Buchung, Spieleranzahl und Tipp-Sprache vor dem Start.</p>
-      </div>
-    `;
+    const startDisabled = !currentRunId() || bookingSaveBusy || startInFlight || Boolean(state.start_assignment?.active);
+    preparation.innerHTML = `<button id="startGameBtn" class="preparation-start-button" type="button" ${startDisabled ? 'disabled' : ''}>Spiel starten</button>`;
+    const startButton = preparation.querySelector('#startGameBtn');
+    startButton?.addEventListener('click', () => handleStart(startButton));
     wrap.appendChild(preparation);
     return;
   }
@@ -2886,7 +2890,7 @@ function patchState(data) {
   const rerenderLocks = sectionChanged(data, 'locks');
   const rerenderLights = sectionChanged(data, 'lights');
   const riddlesChanged = sectionChanged(data, 'riddles');
-  const riddlesStructurallyChanged = riddleStructureChanged(data);
+  const riddleViewChanged = riddleViewInvalidated(data);
   const hintTemplatesChanged = sectionChanged(data, 'hint_templates');
   const previousLanguage = normalizeHintLanguage(state.booking?.language);
   const nextBooking = normalizeBooking(data.booking || state.booking);
@@ -2922,7 +2926,7 @@ function patchState(data) {
     if (rerenderNodes) renderNodes();
     if (rerenderLocks) renderLocks();
     if (rerenderLights) renderLights();
-    if (riddlesStructurallyChanged || languageChanged) {
+    if (riddleViewChanged || languageChanged) {
       rerenderRiddleViews();
     } else if (riddlesChanged) {
       updateRiddleTimeDisplays();
@@ -3067,9 +3071,6 @@ function wireTopControls() {
   document.querySelectorAll('[data-phase-action]').forEach((button) => {
     button.addEventListener('click', () => handlePhaseAction(button.dataset.phaseAction, button));
   });
-
-  const startButton = document.getElementById('startGameBtn');
-  startButton?.addEventListener('click', () => handleStart(startButton));
 
   const sendButton = document.getElementById('sendSummaryEmailBtn');
   sendButton?.addEventListener('click', () => sendSummaryEmail(sendButton));

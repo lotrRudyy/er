@@ -1984,6 +1984,8 @@ class DashboardStore:
     local_booking_override_phase: int | None = field(default_factory=load_selected_booking_override_phase)
     selected_booking: dict[str, Any] = field(default_factory=load_selected_booking)
     game_state_revision: int = 0
+    game_state_received_monotonic: float | None = None
+    game_state_source_age_s: float = 0.0
     start_assignment: dict[str, Any] = field(default_factory=load_start_assignment)
     persistence_degraded: bool = field(default_factory=lambda: _START_ASSIGNMENT_LOAD_DURABILITY_DEGRADED)
     last_start_assignment_directory_synced: bool = True
@@ -2095,6 +2097,19 @@ class DashboardStore:
             previous_run = self.game_state.get("run") if isinstance(self.game_state.get("run"), dict) else {}
             previous_run_id = str(previous_run.get("run_id") or previous_run.get("id") or self.game_state.get("run_id") or "").strip()
             incoming = dict(payload or {})
+            captured_at_ms = incoming.get("captured_at_ms")
+            try:
+                captured_at_ms = float(captured_at_ms)
+            except (TypeError, ValueError):
+                captured_at_ms = None
+            if captured_at_ms is not None and not math.isfinite(captured_at_ms):
+                captured_at_ms = None
+            if not merge or captured_at_ms is not None or self.game_state_received_monotonic is None:
+                self.game_state_received_monotonic = time.monotonic()
+                self.game_state_source_age_s = (
+                    max(0.0, ((time.time() * 1000.0) - captured_at_ms) / 1000.0)
+                    if captured_at_ms is not None else 0.0
+                )
             if merge:
                 next_payload = dict(self.game_state or {})
                 next_payload.update(incoming)
@@ -2305,16 +2320,20 @@ class DashboardStore:
         self.node_states[node_id] = {"hb": hb} if hb is not None else {}
 
     def _reset_riddle_display_state_locked(self) -> None:
-        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
+        for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider"]:
             self._clear_node_payload_locked(node_id)
         self.riddle_states["images"] = {"id": "images", "buttons": {}}
         self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
         self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
         self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
         self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-        empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
-        self.riddle_states["stars"] = dict(empty_stars_state)
-        self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
+        self.riddle_states["stars"] = {
+            "id": "stars",
+            "star_slider_summary": {
+                "current": {"number": 0, "values": ["none", "none", "none"]},
+                "attempts": [],
+            },
+        }
         self.local_hint_counts = {}
         save_hint_store(self.local_hint_counts)
 
@@ -2354,24 +2373,48 @@ class DashboardStore:
                     self.riddle_states["piano"] = merged
                     return
 
-            riddle_id = str(payload.get("id", "")).strip()
+            riddle_id = _canonical_riddle_name(payload.get("id") or node_id)
             if riddle_id:
                 prev = self.riddle_states.get(riddle_id, {}) if isinstance(self.riddle_states.get(riddle_id), dict) else {}
                 merged = dict(prev)
                 merged.update(payload)
+                merged["id"] = riddle_id
                 if riddle_id in {"knocking", "candles"}:
                     attempts = list(merged.get("attempted_sequences") or [])
                     last_attempt = str(payload.get("last_attempt") or "").strip()
                     if last_attempt and (not attempts or attempts[-1] != last_attempt):
                         attempts.append(last_attempt)
                     merged["attempted_sequences"] = attempts
-                elif riddle_id == "star_slider":
-                    attempts = list(merged.get("attempted_star_signs") or [])
+                elif riddle_id == "stars":
+                    previous_summary = prev.get("star_slider_summary") if isinstance(prev.get("star_slider_summary"), dict) else {}
+                    current = self._star_position_dto(payload.get("attempts"), payload.get("reader_positions"))
+                    if current is None:
+                        current = previous_summary.get("current") or {"number": 0, "values": ["none", "none", "none"]}
+                    attempts = list(previous_summary.get("attempts") or [])
                     last_positions = payload.get("last_attempt_positions")
-                    if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
-                        attempts.append(last_positions)
-                    merged["attempted_star_signs"] = attempts
+                    attempt = self._star_position_dto(
+                        last_positions.get("attempt") if isinstance(last_positions, dict) else None,
+                        last_positions.get("positions") if isinstance(last_positions, dict) else None,
+                    )
+                    if attempt is not None and (not attempts or attempts[-1] != attempt):
+                        attempts.append(attempt)
+                    merged = {
+                        "id": "stars",
+                        "star_slider_summary": {"current": current, "attempts": attempts},
+                    }
                 self.riddle_states[riddle_id] = merged
+
+    @staticmethod
+    def _star_position_dto(number: Any, positions: Any) -> dict[str, Any] | None:
+        if type(number) is not int or not isinstance(positions, dict):
+            return None
+        values = []
+        for key in ("r0", "r1", "r2"):
+            value = positions.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append(value.strip().lower())
+        return {"number": number, "values": values}
 
     @staticmethod
     def _is_images_payload(payload: dict[str, Any]) -> bool:
@@ -2406,13 +2449,14 @@ class DashboardStore:
             node_last_hb = dict(self.node_last_hb)
             local_hint_counts = dict(self.local_hint_counts)
             start_assignment = json.loads(json.dumps(self.start_assignment))
+            timer_advance_s = self._timer_advance_s(game)
 
         return {
-            "game": self._build_game_summary(game),
+            "game": self._build_game_summary(game, timer_advance_s),
             "nodes": self._build_node_summary(node_last_hb, node_states),
             "locks": self._build_lock_summary(locks),
             "lights": self._build_light_summary(lights, node_states),
-            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts),
+            "riddles": self._build_riddle_summary(game, node_states, riddle_states, node_last_hb, local_hint_counts, timer_advance_s),
             "booking": self.get_selected_booking(),
             "hint_templates": get_hint_templates(),
             "start_assignment": start_assignment,
@@ -2424,7 +2468,14 @@ class DashboardStore:
             },
         }
 
-    def _build_game_summary(self, game: dict[str, Any]) -> dict[str, Any]:
+    def _timer_advance_s(self, game: dict[str, Any]) -> float:
+        received_monotonic = self.game_state_received_monotonic
+        if not game.get("timer_running") or received_monotonic is None:
+            return 0.0
+        receipt_age_s = max(0.0, time.monotonic() - received_monotonic)
+        return max(0.0, self.game_state_source_age_s) + receipt_age_s
+
+    def _build_game_summary(self, game: dict[str, Any], timer_advance_s: float = 0.0) -> dict[str, Any]:
         phase = int(game.get("phase", 1))
         last_phase = game.get("last_phase")
         phase_meta = PHASE_META.get(phase, {"name": f"phase_{phase}", "active": (), "solved": ()})
@@ -2503,7 +2554,14 @@ class DashboardStore:
         if recovery_restored:
             phase_display += " (nach Neustart wiederhergestellt)"
 
-        elapsed_s = live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0)
+        elapsed_s = live_elapsed + timer_advance_s if live_elapsed is not None and timer_running else (
+            live_elapsed if live_elapsed is not None else (_seconds_since(started_at) if timer_running else 0)
+        )
+        current_riddle_elapsed_s = (
+            current_elapsed + timer_advance_s if current_elapsed is not None and timer_running
+            else current_elapsed if current_elapsed is not None
+            else (_seconds_since(current_riddle_started_at) if timer_running else 0)
+        )
 
         return {
             "phase": phase,
@@ -2519,7 +2577,7 @@ class DashboardStore:
             "game_countdown_s": GAME_COUNTDOWN_S,
             "started_at": started_at,
             "last_riddle_solved_at": last_riddle_solved_at,
-            "current_riddle_elapsed_s": current_elapsed if current_elapsed is not None else (_seconds_since(current_riddle_started_at) if timer_running else 0),
+            "current_riddle_elapsed_s": current_riddle_elapsed_s,
             "current_riddle_name": current_riddle_name,
             "current_riddle_started_at": current_riddle_started_at,
             "run_id": run.get("run_id") or run.get("id") or "",
@@ -2697,7 +2755,7 @@ class DashboardStore:
             })
         return out
 
-    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hint_counts: dict[str, int]) -> list[dict[str, Any]]:
+    def _build_riddle_summary(self, game: dict[str, Any], node_states: dict[str, dict[str, Any]], riddle_states: dict[str, dict[str, Any]], node_last_hb: dict[str, float], local_hint_counts: dict[str, int], timer_advance_s: float = 0.0) -> list[dict[str, Any]]:
         phase = int(game.get("phase", 1))
         meta = PHASE_META.get(phase, {"active": (), "solved": ()})
         active = {_canonical_riddle_name(item) for item in (meta.get("active", ()) or ())}
@@ -2761,7 +2819,7 @@ class DashboardStore:
                     try:
                         seconds = float(value)
                         if math.isfinite(seconds):
-                            return round(max(0.0, seconds), 3)
+                            return round(seconds, 3)
                     except Exception:
                         continue
                 return 0.0
@@ -2771,6 +2829,10 @@ class DashboardStore:
                 timing.get("live_time_s"),
                 timing.get("solve_time_s"),
             )
+            live_seconds = _first_seconds(timing.get("live_time_s"), display_seconds)
+            if phase_state == "active" and game.get("timer_running"):
+                display_seconds = round(display_seconds + timer_advance_s, 3)
+                live_seconds = round(live_seconds + timer_advance_s, 3)
             hint_count = int(timing.get("hint_count") if timing.get("hint_count") is not None else local_hint_counts.get(riddle_id, 0) or 0)
             phase_state_label = {
                 "solved": "Gelöst",
@@ -2800,7 +2862,7 @@ class DashboardStore:
                 "time_s": display_seconds,
                 "display_time_s": display_seconds,
                 "solve_time_s": _first_seconds(timing.get("solve_time_s")),
-                "live_time_s": _first_seconds(timing.get("live_time_s")),
+                "live_time_s": live_seconds,
                 "skipped": skipped,
                 "not_solved": not_solved,
                 "can_solve": phase_state == "active",
@@ -2948,34 +3010,12 @@ class DashboardStore:
                     current_sequence.append(sensor)
         return {"tries": tries, "attempts": attempts, "sequence_current": current_sequence}
 
-    @classmethod
-    def _extract_star_slider_values(cls, value: Any) -> list[str]:
-        order = ["r2", "r1", "r0"]
-        if isinstance(value, dict):
-            return [str(value.get(key, "none") or "none").strip() for key in order]
-        if isinstance(value, (list, tuple)):
-            raw = [str(x).strip() or "none" for x in list(value)[:3]]
-            while len(raw) < 3:
-                raw.append("none")
-            return [raw[2], raw[1], raw[0]]
-        return []
-
-    @classmethod
-    def _extract_star_slider_summary(cls, riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
-        if riddle_id != "star_slider" or not state_payload:
+    @staticmethod
+    def _extract_star_slider_summary(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
+        if riddle_id != "stars" or not state_payload:
             return None
-        positions = state_payload.get("reader_positions") or {}
-        current = cls._extract_star_slider_values(positions)
-        if not current:
-            current = cls._extract_star_slider_values(state_payload.get("reader_labels"))
-        attempts = []
-        for item in state_payload.get("attempted_star_signs") or []:
-            if not isinstance(item, dict):
-                continue
-            vals = cls._extract_star_slider_values(item.get("positions") or item)
-            if vals:
-                attempts.append(vals)
-        return {"current": current, "attempts": attempts}
+        summary = state_payload.get("star_slider_summary")
+        return summary if isinstance(summary, dict) else None
 
     @staticmethod
     def _extract_piano_summary(riddle_id: str, state_payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -2996,7 +3036,7 @@ class DashboardStore:
 
     @staticmethod
     def _extract_info(riddle_id: str, state_payload: dict[str, Any]) -> str:
-        if not state_payload or riddle_id in {"images", "piano", "chess", "knocking", "candles", "star_slider"}:
+        if not state_payload or riddle_id in {"images", "piano", "chess", "knocking", "candles", "stars"}:
             return ""
         generic = []
         for key, value in state_payload.items():
@@ -7868,96 +7908,6 @@ def update_db_row(table_name: str, rowid: int, updates: dict[str, Any]) -> None:
             return
         raise ValueError(f"Die Tabelle {table_name} kann nicht bearbeitet werden.")
 
-
-def _reset_riddle_display_state_locked_v2(self):
-    for node_id in ["images_piano", "chess", "knocking", "candles", "star_slider", "stars"]:
-        self._clear_node_payload_locked(node_id)
-    self.riddle_states["images"] = {"id": "images", "buttons": {}}
-    self.riddle_states["piano"] = {"id": "piano", "played_notes": []}
-    self.riddle_states["chess"] = {"id": "chess", "reader_labels": {}}
-    self.riddle_states["knocking"] = {"id": "knocking", "tries": 0, "attempted_sequences": []}
-    self.riddle_states["candles"] = {"id": "candles", "tries": 0, "attempted_sequences": []}
-    empty_stars_state = {"id": "stars", "tries": 0, "attempted_star_signs": [], "reader_positions": {}}
-    self.riddle_states["stars"] = dict(empty_stars_state)
-    self.riddle_states["star_slider"] = {**empty_stars_state, "id": "star_slider"}
-    self.local_hint_counts = {}
-    save_hint_store(self.local_hint_counts)
-
-
-def _update_node_state_v2(self, node_id: str, payload: dict[str, Any]) -> None:
-    with self.lock:
-        previous_node = self.node_states.get(node_id, {}) if isinstance(self.node_states.get(node_id), dict) else {}
-        merged_node = dict(previous_node)
-        merged_node.update(payload)
-        self.node_states[node_id] = merged_node
-        if node_id == 'images_piano':
-            if self._is_images_payload(payload):
-                prev = self.riddle_states.get('images', {}) if isinstance(self.riddle_states.get('images'), dict) else {}
-                merged = dict(prev); merged.update(payload); merged['id'] = 'images'; self.riddle_states['images'] = merged; return
-            if self._is_piano_payload(payload):
-                prev = self.riddle_states.get('piano', {}) if isinstance(self.riddle_states.get('piano'), dict) else {}
-                merged = dict(prev); merged.update(payload); merged['id'] = 'piano'
-                played_notes = list(prev.get('played_notes') or [])
-                encoded = str(payload.get('encoded') or '').strip()
-                if encoded:
-                    played_notes.append({'encoded': encoded, 'accepted': bool(payload.get('accepted', False))})
-                merged['played_notes'] = played_notes[-40:]
-                self.riddle_states['piano'] = merged; return
-        riddle_id = _canonical_riddle_name(payload.get('id') or node_id)
-        if riddle_id:
-            prev = self.riddle_states.get(riddle_id, {}) if isinstance(self.riddle_states.get(riddle_id), dict) else {}
-            merged = dict(prev); merged.update(payload); merged['id'] = riddle_id
-            if riddle_id in {'knocking', 'candles'}:
-                attempts = list(merged.get('attempted_sequences') or [])
-                last_attempt = str(payload.get('last_attempt') or '').strip()
-                if last_attempt and (not attempts or attempts[-1] != last_attempt):
-                    attempts.append(last_attempt)
-                merged['attempted_sequences'] = attempts
-            elif riddle_id in {'stars', 'star_slider'}:
-                attempts = list(merged.get('attempted_star_signs') or [])
-                last_positions = payload.get('last_attempt_positions')
-                if isinstance(last_positions, dict) and (not attempts or attempts[-1] != last_positions):
-                    attempts.append(last_positions)
-                merged['attempted_star_signs'] = attempts
-            self.riddle_states[riddle_id] = merged
-
-
-DashboardStore._reset_riddle_display_state_locked = _reset_riddle_display_state_locked_v2
-DashboardStore.update_node_state = _update_node_state_v2
-
-@classmethod
-def _extract_star_slider_summary_any(cls, riddle_id: str, state_payload: dict[str, Any]):
-    if riddle_id not in {'stars', 'star_slider'} or not state_payload:
-        return None
-    positions = state_payload.get('reader_positions') or {}
-    current = cls._extract_star_slider_values(positions)
-    if not current:
-        current = cls._extract_star_slider_values(state_payload.get('reader_labels'))
-    attempts = []
-    for item in state_payload.get('attempted_star_signs') or []:
-        if not isinstance(item, dict):
-            continue
-        vals = cls._extract_star_slider_values(item.get('positions') or item)
-        if vals:
-            attempts.append(vals)
-    return {'current': current, 'attempts': attempts}
-DashboardStore._extract_star_slider_summary = _extract_star_slider_summary_any
-
-@staticmethod
-def _extract_info_any(riddle_id: str, state_payload: dict[str, Any]) -> str:
-    if not state_payload or riddle_id in {'images', 'piano', 'chess', 'knocking', 'candles', 'stars', 'star_slider'}:
-        return ''
-    generic = []
-    for key, value in state_payload.items():
-        if key in {'id', 'fw', 'up', 'ts', 'time_valid', 'buttons'}:
-            continue
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value, ensure_ascii=False)
-        generic.append(f"{key}: {value}")
-        if len(generic) >= 4:
-            break
-    return '   '.join(generic)
-DashboardStore._extract_info = _extract_info_any
 
 _original_dashboard_snapshot = DashboardStore.snapshot
 

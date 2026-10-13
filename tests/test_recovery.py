@@ -914,6 +914,7 @@ class RecoveryTestCase(unittest.TestCase):
         ))
         payload = gm.state.to_game_state_payload()
         gm._enrich_dashboard_state_payload_locked(payload)
+        self.assertEqual(payload["captured_at_ms"], int(clock.wall.timestamp() * 1000))
         self.assertAlmostEqual(payload["timer_elapsed_s"], -5.0)
         self.assertAlmostEqual(payload["run"]["live_duration_s"], -5.0)
         self.assertAlmostEqual(payload["current_riddle_elapsed_s"], -5.0)
@@ -1720,6 +1721,8 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
             "Any": Any,
             "json": json,
             "LOG": logging.getLogger("dashboard_method_test"),
+            "math": math,
+            "time": time,
         }
         for name in method_names:
             method = copy.deepcopy(methods[name])
@@ -3105,6 +3108,8 @@ class DashboardAssignmentSourceTest(unittest.TestCase):
                 self.lock = threading.RLock()
                 self.game_state = {"phase": 0}
                 self.game_state_revision = 0
+                self.game_state_received_monotonic = None
+                self.game_state_source_age_s = 0.0
                 self.local_players_count_override = None
                 self.local_booking_override_phase = None
                 self.selected_booking = {"id": "old-booking", "kind": "booking", "players": 2}

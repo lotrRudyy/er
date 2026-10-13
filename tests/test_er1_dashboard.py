@@ -87,6 +87,7 @@ def extracted_method(class_name: str, method_name: str) -> tuple[Any, dict[str, 
         "Any": Any,
         "datetime": datetime,
         "math": math,
+        "time": time,
         "timezone": timezone,
     }
     exec(
@@ -1612,6 +1613,103 @@ class DashboardPreviewTests(unittest.TestCase):
         self.assertIn("read-only GET", idempotent_block)
 
 
+class LiveStateAdapterTests(unittest.TestCase):
+    def test_stars_uses_only_the_firmware_position_shape_and_keeps_attempt_order(self) -> None:
+        adapter, _adapter_namespace = extracted_method("DashboardStore", "_star_position_dto")
+        update, namespace = extracted_method("DashboardStore", "update_node_state")
+        namespace["_canonical_riddle_name"] = lambda value: "stars" if str(value) == "star_slider" else str(value)
+
+        def make_store() -> types.SimpleNamespace:
+            return types.SimpleNamespace(
+                lock=threading.RLock(),
+                node_states={},
+                riddle_states={},
+                _star_position_dto=adapter,
+                _is_images_payload=lambda _payload: False,
+                _is_piano_payload=lambda _payload: False,
+            )
+
+        store = make_store()
+        payload = {
+            "id": "star_slider",
+            "attempts": 1,
+            "reader_positions": {"r0": "scorpio", "r1": "aquarius", "r2": "libra"},
+            "last_attempt_positions": {
+                "attempt": 1,
+                "positions": {"r0": "gemini", "r1": "leo", "r2": "pisces"},
+            },
+        }
+        update(store, "star_slider", payload)
+        update(store, "star_slider", payload)
+        payload["attempts"] = 2
+        payload["last_attempt_positions"] = {
+            "attempt": 2,
+            "positions": {"r0": "scorpio", "r1": "aquarius", "r2": "libra"},
+        }
+        update(store, "star_slider", payload)
+
+        summary = store.riddle_states["stars"]["star_slider_summary"]
+        self.assertEqual(summary["current"], {
+            "number": 2,
+            "values": ["scorpio", "aquarius", "libra"],
+        })
+        self.assertEqual([attempt["number"] for attempt in summary["attempts"]], [1, 2])
+        self.assertEqual(summary["attempts"][0]["values"], ["gemini", "leo", "pisces"])
+
+        speculative = make_store()
+        update(speculative, "star_slider", {
+            "id": "star_slider",
+            "attempts": 1,
+            "reader_labels": ["scorpio", "aquarius", "libra"],
+            "last_attempt_positions": {"attempt": 1, "r0": "scorpio", "r1": "aquarius", "r2": "libra"},
+        })
+        self.assertEqual(speculative.riddle_states["stars"]["star_slider_summary"], {
+            "current": {"number": 0, "values": ["none", "none", "none"]},
+            "attempts": [],
+        })
+
+    def test_source_age_and_phase_8_parallel_riddles_advance_without_mutating_payload(self) -> None:
+        advance, advance_namespace = extracted_method("DashboardStore", "_timer_advance_s")
+        advance_namespace["time"] = types.SimpleNamespace(monotonic=lambda: 105.0)
+        store = types.SimpleNamespace(game_state_received_monotonic=100.0, game_state_source_age_s=1.5)
+        self.assertEqual(advance(store, {"timer_running": True}), 6.5)
+        self.assertEqual(advance(store, {"timer_running": False}), 0.0)
+
+        summarize, namespace = extracted_method("DashboardStore", "_build_riddle_summary")
+        namespace.update({
+            "PHASE_META": {8: {"active": ("tangram", "magnet"), "solved": ()}},
+            "RIDDLES": [
+                {"id": "tangram", "label": "Tangram", "node_id": None, "manual": True},
+                {"id": "magnet", "label": "Magnet", "node_id": None, "manual": True},
+            ],
+            "_canonical_riddle_name": lambda value: str(value or ""),
+        })
+        extractor = types.SimpleNamespace(
+            _extract_tries=lambda _payload: "",
+            _extract_info=lambda _riddle, _payload: "",
+            _extract_images_buttons=lambda _riddle, _payload: None,
+            _extract_chess_slots=lambda _riddle, _payload: None,
+            _extract_attempts_summary=lambda _riddle, _payload: None,
+            _extract_star_slider_summary=lambda _riddle, _payload: None,
+            _extract_piano_summary=lambda _riddle, _payload: None,
+        )
+        game = {
+            "phase": 8,
+            "timer_running": True,
+            "run": {"riddle_timings": {
+                "tangram": {"status": "active", "display_time_s": 10.0, "live_time_s": 10.0},
+                "magnet": {"status": "active", "display_time_s": 20.0, "live_time_s": 20.0},
+            }},
+        }
+        original = copy.deepcopy(game)
+        rows = summarize(extractor, game, {}, {}, {}, {}, 2.5)
+        self.assertEqual([(row["id"], row["display_time_s"], row["live_time_s"]) for row in rows], [
+            ("tangram", 12.5, 12.5),
+            ("magnet", 22.5, 22.5),
+        ])
+        self.assertEqual(game, original)
+
+
 class DashboardSourceContractTests(unittest.TestCase):
     def test_summary_delivery_database_and_sidecars_are_ignored(self) -> None:
         patterns = {
@@ -1847,7 +1945,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
             "_canonical_riddle_name": lambda name: str(name or ""),
             "GAME_COUNTDOWN_S": 5,
         })
-        summary = build_summary(None, {
+        game_payload = {
             "phase": 3,
             "timer_running": True,
             "current_riddle_name": "images",
@@ -1856,9 +1954,11 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
                 "live_duration_s": -5.0,
                 "riddle_timings": {"images": {"status": "active", "live_time_s": -5.0}},
             },
-        })
-        self.assertEqual(summary["elapsed_s"], -5)
-        self.assertEqual(summary["current_riddle_elapsed_s"], -5)
+        }
+        summary = build_summary(None, game_payload, 2.0)
+        self.assertEqual(summary["elapsed_s"], -3)
+        self.assertEqual(summary["current_riddle_elapsed_s"], -3)
+        self.assertEqual(game_payload["run"]["live_duration_s"], -5)
 
     def test_state_polling_recovers_quickly_and_phase_actions_require_fresh_state(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1879,7 +1979,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261013-dashboard-v20", html)
+        self.assertIn("app.js') }}?v=20261013-dashboard-v21", html)
 
     def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1896,7 +1996,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
             "['Pisces', 'pisces', 13]",
         ):
             self.assertIn(row, javascript)
-        self.assertIn("const expected = ['libra', 'aquarius', 'scorpio'];", javascript)
+        self.assertIn("const expected = ['scorpio', 'aquarius', 'libra'];", javascript)
         self.assertIn('class="star-attempts-scroll" tabindex="0"', javascript)
         self.assertIn("correct ? 'is-correct'", javascript)
         self.assertIn('<div class="candles-solution"><b>Lösung:</b><strong>2413</strong>', javascript)
@@ -1957,7 +2057,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261013-dashboard-v20", html)
+        self.assertIn("dashboard.css') }}?v=20261013-dashboard-v21", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -1966,13 +2066,14 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertLess(html.index('id="currentRiddlesPanel"'), html.index('id="allRiddlesPanel"'))
         for action in ("standby", "maintenance", "prepare"):
             self.assertIn(f'data-phase-action="{action}"', html)
-        self.assertIn('id="startGameBtn"', html)
+        self.assertNotIn('id="startGameBtn"', html)
         self.assertNotIn("Phase, Zeit und Buchung", html)
         self.assertIn('<h1 id="phaseValue" class="phase-current">Phase 0 - Aus</h1>', html)
         self.assertNotIn('class="eyebrow"', html)
         self.assertIn('class="operator-log-toolbar"', html)
         phase_actions = html[html.index('class="phase-action-grid-v6"'):html.index('class="previous-phase"')]
-        self.assertIn('id="startGameBtn"', phase_actions)
+        self.assertNotIn('id="startGameBtn"', phase_actions)
+        self.assertIn('preparation.innerHTML = `<button id="startGameBtn"', javascript)
         for panel_id in ("bookingDetails", "allRiddlesPanel", "diagnosticsDetails", "maintenanceHintEditor"):
             self.assertIn(f'id="{panel_id}"', html)
 
@@ -2075,7 +2176,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertRegex(css, rf"(?s)\.current-riddle-body\s*\{{[^}}]*{re.escape(aligned_columns)}")
         self.assertRegex(css, rf"(?s)\.riddle-actions-card\s*\{{[^}}]*{re.escape(aligned_columns)}")
 
-        self.assertRegex(css, r"(?s)\.hint-template-list p\s*\{[^}]*font-size: 14px;")
+        self.assertRegex(css, r"(?s)\.hint-template-list p\s*\{[^}]*font-size: 18px;")
         self.assertRegex(css, r"(?s)\.hint-card-meta span\s*\{[^}]*font-size: 10px;")
         self.assertRegex(css, r"(?s)\.riddles-table-v6\s*\{[^}]*font-size: 13px;")
         self.assertRegex(css, r"(?s)\.riddles-table-v6 th\s*\{[^}]*font-size: 11px;")
@@ -2105,8 +2206,8 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         )
         self.assertIn("grid-template-columns: repeat(4, minmax(104px, 1fr));", css)
         self.assertIn("grid-template-columns: 24px minmax(0, max-content);", css)
-        self.assertRegex(css, r"(?s)\.light-toggle-button\s*\{[^}]*min-height: 48px;[^}]*grid-template-rows: auto auto;")
-        self.assertRegex(css, r"(?s)\.lights-panel-v6\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);")
+        self.assertRegex(css, r"(?s)\.light-toggle-button\s*\{[^}]*min-height: 44px;[^}]*grid-template-rows: auto auto;")
+        self.assertRegex(css, r"(?s)\.lights-panel-v6\s*\{[^}]*grid-template-rows: minmax\(0, 1fr\);")
         self.assertGreaterEqual(css.count("overflow-wrap: anywhere;"), 2)
         self.assertRegex(
             css,

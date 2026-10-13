@@ -8,7 +8,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261013-dashboard-v20" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261013-dashboard-v21" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -74,7 +74,6 @@
                 <button data-phase-action="standby" type="button">Aus</button>
                 <button data-phase-action="maintenance" type="button">Wartung</button>
                 <button data-phase-action="prepare" type="button">Vorbereitung</button>
-                <button id="startGameBtn" class="start-game-button" type="button" disabled>Spiel starten</button>
               </div>
               <div class="previous-phase">Vorherige Phase: <span id="lastPhaseValue">--</span></div>
               <div id="prepareCounterWrap" class="prepare-countdown hidden"><span>Start in</span><strong id="prepareCounterValue">--</strong></div>
@@ -115,18 +114,15 @@
       </div>
 
       <aside class="control-technical" aria-label="Raumsteuerung">
-        <section class="panel-v6 technical-panel lights-panel-v6">
-          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-bulb"></use></svg><h2>Lichtsteuerung</h2></div>
+        <section class="panel-v6 technical-panel lights-panel-v6" aria-label="Lichtsteuerung">
           <div id="lightsGrid" class="lights-grid-v6"></div>
         </section>
 
-        <section class="panel-v6 technical-panel locks-panel-v6">
-          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-lock"></use></svg><h2>Schlosssteuerung</h2></div>
+        <section class="panel-v6 technical-panel locks-panel-v6" aria-label="Schlosssteuerung">
           <div id="locksGrid" class="locks-grid-v6"></div>
         </section>
 
-        <section class="panel-v6 technical-panel nodes-panel-v6">
-          <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-nodes"></use></svg><h2>Nodes</h2><span id="nodeDiagnosticsSummary" class="technical-summary">Status wird geladen</span></div>
+        <section class="panel-v6 technical-panel nodes-panel-v6" aria-label="Nodes">
           <div id="nodeStatusBar" class="node-list-v6"></div>
         </section>
 
@@ -288,6 +284,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261013-dashboard-v20"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261013-dashboard-v21"></script>
 </body>
 </html>

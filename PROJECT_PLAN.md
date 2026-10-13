@@ -283,9 +283,28 @@ and deployed on 2026-10-13.
 
 ## 10. Current Status And Next Step
 
-Production runs the operational files from commit `fffa93a9`, deployed on
-2026-10-13. The current rollback archive is
-`/home/rudyy/er1/deploy-backups/pre-fffa93a9-20261013T005714Z.tar.gz`.
+Production deployment record (`2026-10-13`, commit `205ef385`):
+
+- Bootstrap scope was intentionally limited to the deployed
+  `scripts/game_master/fresh_state.py`, the Game Master update-lock guard, and
+  the user-service `er1 update` helper.
+- Pre-bootstrap parity was proven against the parent commit for all 24 managed
+  runtime files; ER1 was idle in phase 0 with no timer/run.
+- Rollback archive:
+  `/home/rudyy/er1/deploy-backups/pre-205ef385-bootstrap-20261013T024142Z.tar.gz`.
+- Post-bootstrap verification proved both services active with one start each,
+  Dashboard `/`, `/games`, `/admin`, and `/api/state` HTTP 200, persistence
+  healthy, phase 0, no active run/timer, all 8 nodes online, zero error-priority
+  journal entries, exact helper/staged/deployed hashes, and no retained
+  update-lock/fresh-state residue.
+- Full `er1 update --dry-run` after bootstrap reported all 24 managed files
+  unchanged and no deployment required.
+- Production source marker now records `205ef385`; backup retention is 3/3 and
+  staging was removed.
+
+Current deployed target: commit `205ef385`, bootstrapped on 2026-10-13. The
+current rollback archive is
+`/home/rudyy/er1/deploy-backups/pre-205ef385-bootstrap-20261013T024142Z.tar.gz`.
 Steps 1-7 are implemented and independently reviewed. The final ER1 suite passes
 167 tests; JavaScript syntax and diff checks pass. An
 isolated headless-Chromium review used 17 of the approved 18 renderings across
@@ -324,9 +343,22 @@ online. No error-priority journal entries occurred after restart, and deployment
 staging was removed. Next: normal operational monitoring; no release action is
 pending. A follow-up adds the safe `er1 update` helper and replaces obsolete
 `er1 deploy`, `pi-runtime`, and `er1-runtime.service` documentation. It is
-committed and pushed but has not been initialized on the Pi or used for deployment.
-Its one-time production bootstrap must first install the Game Master update-lock
-guard and fresh-state command through the established file-scoped staging process
-while ER1 is idle; normal updates are unavailable until that verified bootstrap.
-The local follow-up passes all 184 Python tests and 12 JavaScript client tests;
-Python, JavaScript, PowerShell, and diff syntax checks pass.
+committed and pushed as `205ef385`. All 24 managed operational files match that
+commit, and the production source marker is initialized. The local follow-up
+passes all 184 Python tests and 12 JavaScript client tests; Python, JavaScript,
+PowerShell, and diff syntax checks pass. Latest verified server health after
+bootstrap: both services active, phase 0, no timer/run, all 8 nodes online,
+Dashboard endpoints HTTP 200, and no error-priority journal entries. Next: normal
+operational monitoring; use `er1 update --dry-run` before any future update.
+
+Local Dashboard follow-up (`2026-10-13`, not committed, pushed, or deployed):
+live timers now remain fresh across retained state, polling, and phase-8 parallel
+riddles; Stars uses the exact firmware position DTO; and the approved control-room,
+Preparation, Stars, readability, and mobile layout changes are implemented. All
+186 Python tests and 16 JavaScript client tests pass, along with Python/JavaScript
+syntax and diff checks. An isolated local headless-Chrome review covered
+Preparation and Stars at 1440x900 and 393x659, timer refresh, scrolling, and the
+final lighting geometry. It found no remaining clipping, overlap, document
+overflow, browser error, failed request, or external request. All owned browser,
+server, profile, database, runner, and screenshot artifacts were removed. Next:
+commit, push, deploy, and verify production health through the safe update flow.
