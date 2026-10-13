@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
 
@@ -174,7 +173,6 @@ class GameMaster:
         db_path: str | Path | None = None,
         runs_dir: str | Path | None = None,
         checkpoint_path: str | Path | None = None,
-        auto_reboot_state_path: str | Path | None = None,
         mqtt_client: Any | None = None,
         monotonic_fn: Callable[[], float] | None = None,
         utc_now_fn: Callable[[], datetime] | None = None,
@@ -187,16 +185,6 @@ class GameMaster:
         _ensure_directory_durable(self.runs_dir)
         self.checkpoint_path = Path(checkpoint_path or config.ACTIVE_RUN_CHECKPOINT_PATH)
         self._checkpoint_interval_s = max(1.0, float(config.ACTIVE_RUN_CHECKPOINT_INTERVAL_S))
-        self.auto_reboot_state_path = Path(auto_reboot_state_path or config.AUTO_NODE_REBOOT_STATE_PATH)
-        self._auto_reboot_interval_s = max(1.0, float(config.AUTO_NODE_REBOOT_INTERVAL_S))
-        self._auto_reboot_interval_days = max(1, round(self._auto_reboot_interval_s / (24 * 60 * 60)))
-        self._auto_reboot_retry_s = max(1.0, float(config.AUTO_NODE_REBOOT_RETRY_S))
-        self._auto_reboot_timezone = ZoneInfo(str(config.AUTO_NODE_REBOOT_TIMEZONE))
-        self._auto_reboot_local_hour = max(0, min(23, int(config.AUTO_NODE_REBOOT_LOCAL_HOUR)))
-        self._last_auto_reboot_at = self._utc_timestamp()
-        self._last_auto_reboot_attempt_at: float | None = None
-        self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
-        self._load_auto_reboot_state()
 
         self._client = mqtt_client or mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="game-master")
         self._client.enable_logger(LOG)
@@ -220,147 +208,6 @@ class GameMaster:
         self._bootstrapped = False
         self._restored_checkpoint = self._load_active_checkpoint()
         self._scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
-
-    def _utc_timestamp(self) -> float:
-        now = self._utc_now()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        return now.timestamp()
-
-    def _next_auto_reboot_after(self, anchor_ts: float) -> float:
-        anchor = datetime.fromtimestamp(anchor_ts, tz=self._auto_reboot_timezone)
-        next_date = anchor.date() + timedelta(days=self._auto_reboot_interval_days)
-        due = datetime(
-            next_date.year,
-            next_date.month,
-            next_date.day,
-            self._auto_reboot_local_hour,
-            tzinfo=self._auto_reboot_timezone,
-        )
-        return due.timestamp()
-
-    def _auto_reboot_state_payload(self) -> dict[str, Any]:
-        return {
-            "version": 1,
-            "interval_days": self._auto_reboot_interval_days,
-            "timezone": str(config.AUTO_NODE_REBOOT_TIMEZONE),
-            "local_hour": self._auto_reboot_local_hour,
-            "last_completed_at": datetime.fromtimestamp(
-                self._last_auto_reboot_at, tz=timezone.utc
-            ).isoformat(timespec="seconds"),
-            "last_attempt_at": (
-                datetime.fromtimestamp(self._last_auto_reboot_attempt_at, tz=timezone.utc).isoformat(timespec="seconds")
-                if self._last_auto_reboot_attempt_at is not None
-                else None
-            ),
-            "next_due_at": datetime.fromtimestamp(
-                self._next_auto_reboot_at, tz=self._auto_reboot_timezone
-            ).isoformat(timespec="seconds"),
-        }
-
-    def _save_auto_reboot_state(self) -> bool:
-        try:
-            return _atomic_write_json(self.auto_reboot_state_path, self._auto_reboot_state_payload())
-        except Exception:
-            LOG.exception("Automatic node-reboot state could not be saved path=%s", self.auto_reboot_state_path)
-            return False
-
-    def _load_auto_reboot_state(self) -> None:
-        if not self.auto_reboot_state_path.exists():
-            self._save_auto_reboot_state()
-            return
-        try:
-            payload = json.loads(self.auto_reboot_state_path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or int(payload.get("version", 0)) != 1:
-                raise ValueError("unsupported automatic node-reboot state")
-            completed = datetime.fromisoformat(str(payload["last_completed_at"]))
-            if completed.tzinfo is None:
-                completed = completed.replace(tzinfo=timezone.utc)
-            completed_ts = completed.timestamp()
-            if not math.isfinite(completed_ts) or completed_ts <= 0:
-                raise ValueError("invalid automatic node-reboot completion time")
-            now_ts = self._utc_timestamp()
-            self._last_auto_reboot_at = min(completed_ts, now_ts)
-            next_due_raw = payload.get("next_due_at")
-            if next_due_raw:
-                next_due = datetime.fromisoformat(str(next_due_raw))
-                if next_due.tzinfo is None:
-                    next_due = next_due.replace(tzinfo=self._auto_reboot_timezone)
-                next_due_ts = next_due.timestamp()
-                if not math.isfinite(next_due_ts) or next_due_ts <= self._last_auto_reboot_at:
-                    raise ValueError("invalid automatic node-reboot due time")
-                self._next_auto_reboot_at = next_due_ts
-            else:
-                self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
-            attempt_raw = payload.get("last_attempt_at")
-            if attempt_raw:
-                attempt = datetime.fromisoformat(str(attempt_raw))
-                if attempt.tzinfo is None:
-                    attempt = attempt.replace(tzinfo=timezone.utc)
-                attempt_ts = attempt.timestamp()
-                if math.isfinite(attempt_ts) and 0 < attempt_ts <= now_ts:
-                    self._last_auto_reboot_attempt_at = attempt_ts
-        except Exception:
-            LOG.exception(
-                "Automatic node-reboot state is invalid; starting a new interval path=%s",
-                self.auto_reboot_state_path,
-            )
-            self._last_auto_reboot_at = self._utc_timestamp()
-            self._last_auto_reboot_attempt_at = None
-            self._next_auto_reboot_at = self._next_auto_reboot_after(self._last_auto_reboot_at)
-            self._save_auto_reboot_state()
-
-    def _automatic_node_reboot_if_due(self) -> None:
-        with self._checkpoint_io_lock:
-            self._automatic_node_reboot_if_due_locked()
-
-    def _automatic_node_reboot_if_due_locked(self) -> None:
-        if self._shutting_down.is_set() or self._hardware_effects_blocked:
-            return
-        now_ts = self._utc_timestamp()
-        if now_ts < self._next_auto_reboot_at:
-            return
-        if (
-            self._last_auto_reboot_attempt_at is not None
-            and now_ts - self._last_auto_reboot_attempt_at < self._auto_reboot_retry_s
-        ):
-            return
-        with self._lock:
-            if self.state.phase != 0:
-                return
-
-        # Persist the attempt before emitting commands so a process crash cannot
-        # create a tight reboot loop. Failed batches are retried after the cooldown.
-        self._last_auto_reboot_attempt_at = now_ts
-        if not self._save_auto_reboot_state():
-            return
-
-        queued_nodes: list[str] = []
-        failed_nodes: list[str] = []
-        success_code = int(getattr(mqtt, "MQTT_ERR_SUCCESS", 0))
-        for node_id in config.PHYSICAL_NODE_IDS:
-            try:
-                info = self._client.publish(f"{node_id}/sys/cmd", "REBOOT", qos=0, retain=False)
-                queued = int(getattr(info, "rc", -1)) == success_code
-            except Exception:
-                queued = False
-                LOG.exception("Automatic node reboot publish failed node=%s", node_id)
-            (queued_nodes if queued else failed_nodes).append(node_id)
-
-        if failed_nodes:
-            LOG.error(
-                "Automatic node reboot batch was incomplete queued=%s failed=%s",
-                queued_nodes,
-                failed_nodes,
-            )
-            return
-
-        self._last_auto_reboot_at = now_ts
-        while self._next_auto_reboot_at <= now_ts:
-            self._next_auto_reboot_at = self._next_auto_reboot_after(self._next_auto_reboot_at)
-        if not self._save_auto_reboot_state():
-            LOG.error("Automatic node reboot completed, but its completion timestamp is not crash-durable")
-        LOG.info("Automatic node reboot queued for all physical nodes nodes=%s", queued_nodes)
 
     def start(self) -> None:
         with self._checkpoint_io_lock:
@@ -2237,7 +2084,6 @@ class GameMaster:
                 self._run_due_actions()
                 if not self._shutting_down.is_set():
                     self._checkpoint_if_due()
-                    self._automatic_node_reboot_if_due()
             except Exception:
                 LOG.exception("Scheduler iteration failed")
             self._stop.wait(config.SCHEDULER_TICK_MS / 1000.0)

@@ -8,7 +8,7 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261012-dashboard-v16" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261013-dashboard-v20" />
 </head>
 <body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -141,7 +141,7 @@
             </div>
             <div class="log-display-controls">
               <label><span class="visually-hidden">Logs durchsuchen</span><input id="controlDiagnosticsSearchInput" class="diagnostics-search-input" type="search" maxlength="256" placeholder="Log suchen" /></label>
-              <label class="log-autoscroll-toggle"><input id="controlDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" /> Auto-Scroll</label>
+              <label class="log-autoscroll-toggle"><input id="controlDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" checked /> Auto-Scroll</label>
             </div>
             <span id="diagnosticsCount" class="technical-summary">0 Einträge</span>
           </div>
@@ -189,7 +189,7 @@
           <div class="technical-heading"><svg class="ui-icon" aria-hidden="true"><use href="#icon-log"></use></svg><h2 id="adminLogHeading">Diagnose-Log</h2><span id="adminDiagnosticsCount" class="technical-summary">0 Einträge</span></div>
           <div class="log-display-controls admin-log-display-controls">
             <label><span class="visually-hidden">Logs durchsuchen</span><input id="adminDiagnosticsSearchInput" class="diagnostics-search-input" type="search" maxlength="256" placeholder="Log durchsuchen" /></label>
-            <label class="log-autoscroll-toggle"><input id="adminDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" /> Auto-Scroll</label>
+            <label class="log-autoscroll-toggle"><input id="adminDiagnosticsAutoscroll" class="diagnostics-autoscroll" type="checkbox" checked /> Auto-Scroll</label>
           </div>
           <div id="adminDiagnosticsStatus" class="diagnostics-status" aria-live="polite"></div>
           <div id="adminDiagnosticsLogList" class="diagnostics-log-list operator-log-list" role="log" aria-label="Dashboard-Logs" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
@@ -288,6 +288,6 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261012-dashboard-v16"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20261013-dashboard-v20"></script>
 </body>
 </html>

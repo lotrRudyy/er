@@ -507,32 +507,29 @@ class DashboardMutationTests(unittest.TestCase):
         response = namespace["api_node_reboot"]()
         self.assertTrue(response["ok"])
         self.assertEqual(published[-1], ("maglock/sys/cmd", "REBOOT"))
-        phase_zero_publish_count = len(published)
 
-        store.game_state["phase"] = 3
-        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "all"})
-        response, status = namespace["api_node_reboot"]()
-        self.assertEqual(status, 409)
-        self.assertFalse(response["ok"])
-        self.assertEqual(len(published), phase_zero_publish_count)
+        for allowed_phase in (1, 14):
+            store.game_state["phase"] = allowed_phase
+            for target in ("all", "maglock"):
+                namespace["request"] = types.SimpleNamespace(get_json=lambda force, node=target: {"node": node})
+                response = namespace["api_node_reboot"]()
+                self.assertTrue(response["ok"], (allowed_phase, target))
 
-        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
-        response, status = namespace["api_node_reboot"]()
-        self.assertEqual(status, 409)
-        self.assertFalse(response["ok"])
-        self.assertEqual(len(published), phase_zero_publish_count)
+        for blocked_phase in (2, 13):
+            store.game_state["phase"] = blocked_phase
+            blocked_publish_count = len(published)
+            for target in ("all", "maglock"):
+                namespace["request"] = types.SimpleNamespace(get_json=lambda force, node=target: {"node": node})
+                response, status = namespace["api_node_reboot"]()
+                self.assertEqual(status, 409, (blocked_phase, target))
+                self.assertFalse(response["ok"])
+                self.assertEqual(len(published), blocked_publish_count)
 
-        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "lighting"})
-        response = namespace["api_node_reboot"]()
-        self.assertTrue(response["ok"])
-        self.assertEqual(response["queued_count"], 1)
-        self.assertEqual(published[-1], ("lighting/sys/cmd", "REBOOT"))
-
-        store.game_state["phase"] = 14
-        namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "maglock"})
-        response = namespace["api_node_reboot"]()
-        self.assertTrue(response["ok"])
-        self.assertEqual(published[-1], ("maglock/sys/cmd", "REBOOT"))
+            namespace["request"] = types.SimpleNamespace(get_json=lambda force: {"node": "lighting"})
+            response = namespace["api_node_reboot"]()
+            self.assertTrue(response["ok"], blocked_phase)
+            self.assertEqual(response["queued_count"], 1)
+            self.assertEqual(published[-1], ("lighting/sys/cmd", "REBOOT"))
 
     def test_service_restart_is_whitelisted_scheduled_and_requires_confirmation(self) -> None:
         helper = extracted("_schedule_service_restart")
@@ -1663,15 +1660,6 @@ class DashboardSourceContractTests(unittest.TestCase):
         self.assertIsInstance(reboot_assignment.value, ast.Call)
         self.assertEqual(set(ast.literal_eval(reboot_assignment.value.args[0])), set(active_nodes))
 
-        config_tree = ast.parse((GAME_MASTER_DIR / "config.py").read_text(encoding="utf-8"))
-        physical_nodes = ast.literal_eval(next(
-            node.value
-            for node in config_tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "PHYSICAL_NODE_IDS" for target in node.targets)
-        ))
-        self.assertEqual(list(physical_nodes), active_nodes)
-
     def test_custom_confirmation_and_action_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
         html = HTML_PATH.read_text(encoding="utf-8")
@@ -1787,6 +1775,39 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         ):
             self.assertIn(f'"{route}"', source)
         self.assertRegex(css, r"(?s)@media \(max-width: 1100px\).*?\.operator-tabs\s*\{[^}]*display: flex;")
+        self.assertRegex(
+            css,
+            r"(?s)@media \(min-width: 1101px\) and \(max-width: 1550px\).*?"
+            r"\.operator-header\s*\{[^}]*grid-template-columns:\s*"
+            r"minmax\(380px, 1\.4fr\) auto minmax\(190px, 0\.6fr\);",
+        )
+        self.assertRegex(css, r"(?s)\.operator-brand\s*\{[^}]*overflow:\s*hidden;")
+
+    def test_game_viewer_header_is_responsive_at_compact_desktop_widths(self) -> None:
+        css = CSS_PATH.read_text(encoding="utf-8")
+        html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn("style.css') }}?v=20261013-dashboard-v10", html)
+        self.assertRegex(
+            css,
+            r"(?s)@media \(min-width: 901px\) and \(max-width: 1016px\).*?"
+            r"body\.game-viewer-body \.operator-header\s*\{[^}]*grid-template-columns:\s*"
+            r"minmax\(0, 1\.4fr\) auto minmax\(0, 0\.6fr\);",
+        )
+        self.assertRegex(
+            css,
+            r"(?s)@media \(min-width: 901px\) and \(max-width: 1016px\).*?"
+            r"body\.game-viewer-body \.operator-brand\s*\{[^}]*overflow:\s*hidden;",
+        )
+
+    def test_release_review_documentation_matches_static_hints_and_reboot_boundaries(self) -> None:
+        project_plan = (ROOT / "PROJECT_PLAN.md").read_text(encoding="utf-8")
+        mqtt_commands = (ROOT / "docs" / "mqtt_commands.md").read_text(encoding="utf-8")
+        self.assertNotIn("one short emphasis", project_plan)
+        self.assertNotIn("Hint due emphasis runs once", project_plan)
+        self.assertGreaterEqual(project_plan.count("statically marked without animation"), 2)
+        self.assertIn("physical nodes other than maglock in every phase", mqtt_commands)
+        self.assertIn("phases 2-13", mqtt_commands)
+        self.assertIn("standby (0), maintenance (1), and finished (14)", mqtt_commands)
 
     def test_backend_routes_have_stale_guards_and_no_reset_or_clear_outcomes(self) -> None:
         source = APP_PATH.read_text(encoding="utf-8")
@@ -1858,7 +1879,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261012-dashboard-v16", html)
+        self.assertIn("app.js') }}?v=20261013-dashboard-v20", html)
 
     def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1919,7 +1940,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         actions_source = javascript[actions_start:actions_end]
         self.assertIn("riddleMutationsAvailable()", actions_source)
         self.assertIn(" Gelöst</button>", actions_source)
-        self.assertIn("canSkip ?", actions_source)
+        self.assertIn("const skipButton = canSkip", actions_source)
         maintenance_start = javascript.index("if (phase === 1)", javascript.index("function renderCurrentRiddles"))
         maintenance_end = javascript.index("if (phase === 2)", maintenance_start)
         maintenance_source = javascript[maintenance_start:maintenance_end]
@@ -1936,7 +1957,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261012-dashboard-v16", html)
+        self.assertIn("dashboard.css') }}?v=20261013-dashboard-v20", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -2016,6 +2037,8 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         actions_source = javascript[actions_start:actions_end]
         self.assertIn('class="current-riddle-identity"', actions_source)
         self.assertIn("iconSvg('puzzle')", actions_source)
+        self.assertIn('class="current-riddle-action-section current-riddle-primary-actions"', actions_source)
+        self.assertIn('current-riddle-hint-actions${canSkip', actions_source)
         card_start = javascript.index("function buildCurrentRiddleCard")
         card_end = javascript.index("function buildMaintenanceRiddleCard", card_start)
         self.assertNotIn("current-riddle-card-head", javascript[card_start:card_end])
@@ -2030,17 +2053,67 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertIn("formatNodeUptime", javascript)
         self.assertIn("DD:HH:MM:SS", javascript)
 
-        self.assertIn("hint-card-newly-due", javascript)
-        self.assertIn("seenDueHintKeys", javascript)
-        self.assertIn("animation: hint-due-once 900ms ease-out 1", css)
-        self.assertIn("@media (prefers-reduced-motion: reduce)", css)
+        self.assertNotIn("hint-card-newly-due", javascript + css)
+        self.assertNotIn("seenDueHintKeys", javascript)
+        self.assertNotIn("hint-due-once", css)
         self.assertRegex(css, r"(?s)@media \(min-width: 1101px\).*?\.riddles-table-v6 th:not\(:nth-child\(2\)\)")
+
+        lights_start = javascript.index("function renderLights")
+        lights_end = javascript.index("function renderImagesButtons", lights_start)
+        lights_source = javascript[lights_start:lights_end]
+        for light_id, label in (
+            ("entrance", "Eingang"),
+            ("r2_torch", "Raum 2"),
+            ("r3_torch", "Raum 3"),
+            ("star_sky", "Sterne"),
+        ):
+            self.assertIn(f"{light_id}: '{label}'", lights_source)
+        self.assertNotIn("Eingang-Fackeln", lights_source)
+        self.assertIn('aria-label="${escapeAttr(displayLabel)}: ${escapeAttr(visibleStateLabel)}"', lights_source)
+
+        aligned_columns = "grid-template-columns: minmax(0, 1.08fr) minmax(240px, 0.92fr);"
+        self.assertRegex(css, rf"(?s)\.current-riddle-body\s*\{{[^}}]*{re.escape(aligned_columns)}")
+        self.assertRegex(css, rf"(?s)\.riddle-actions-card\s*\{{[^}}]*{re.escape(aligned_columns)}")
+
+        self.assertRegex(css, r"(?s)\.hint-template-list p\s*\{[^}]*font-size: 14px;")
+        self.assertRegex(css, r"(?s)\.hint-card-meta span\s*\{[^}]*font-size: 10px;")
+        self.assertRegex(css, r"(?s)\.riddles-table-v6\s*\{[^}]*font-size: 13px;")
+        self.assertRegex(css, r"(?s)\.riddles-table-v6 th\s*\{[^}]*font-size: 11px;")
+        self.assertRegex(css, r"(?s)\.node-status-button\s*\{[^}]*font-size: 12px;")
 
         locks_start = javascript.index("function renderLocks")
         locks_end = javascript.index("function resolveDimValue", locks_start)
         locks_source = javascript[locks_start:locks_end]
         self.assertIn("open ? 'Schließen' : (closed ? 'Öffnen' : 'Unbekannt')", locks_source)
         self.assertIn("'is-unknown'", locks_source)
+
+    def test_compact_lights_and_non_skippable_footer_have_responsive_contracts(self) -> None:
+        javascript = JS_PATH.read_text(encoding="utf-8")
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            css,
+            r"(?s)\.lights-panel-v6\s*\{[^}]*container: er1-lights / inline-size;",
+        )
+        self.assertRegex(
+            css,
+            r"(?s)@container er1-lights \(max-width: 434px\)\s*\{\s*\.lights-grid-v6\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(104px, 1fr\)\);",
+        )
+        self.assertRegex(
+            css,
+            r"(?s)@container er1-lights \(max-width: 214px\)\s*\{\s*\.lights-grid-v6\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);",
+        )
+        self.assertIn("grid-template-columns: repeat(4, minmax(104px, 1fr));", css)
+        self.assertIn("grid-template-columns: 24px minmax(0, max-content);", css)
+        self.assertRegex(css, r"(?s)\.light-toggle-button\s*\{[^}]*min-height: 48px;[^}]*grid-template-rows: auto auto;")
+        self.assertRegex(css, r"(?s)\.lights-panel-v6\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);")
+        self.assertGreaterEqual(css.count("overflow-wrap: anywhere;"), 2)
+        self.assertRegex(
+            css,
+            r"(?s)\.current-riddle-hint-actions\.is-hint-only\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);",
+        )
+        self.assertIn("current-riddle-hint-actions${canSkip ? '' : ' is-hint-only'}", javascript)
+        self.assertIn("${hintControl}${canSkip ? skipButton : ''}", javascript)
 
     def test_preview_dashboard_gets_a_distinct_default_mqtt_client_id(self) -> None:
         helper = extracted("_default_dashboard_mqtt_client_id")["_default_dashboard_mqtt_client_id"]

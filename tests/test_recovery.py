@@ -183,61 +183,52 @@ class RecoveryTestCase(unittest.TestCase):
             db=db or self.db,
             runs_dir=self.runs_dir,
             checkpoint_path=self.checkpoint,
-            auto_reboot_state_path=self.root / "auto_node_reboot.json",
             mqtt_client=client or FakeMqttClient(),
             monotonic_fn=clock.monotonic,
             utc_now_fn=clock.utc_now,
         )
 
-    def test_automatic_node_reboot_waits_for_phase_zero_and_persists_completion(self) -> None:
-        clock = FakeClock(100.0)
-        client = FakeMqttClient()
-        gm = self.make_game_master(clock, client=client)
-        client.published.clear()
+    def test_periodic_node_reboot_scheduler_is_absent(self) -> None:
+        config_source = (GAME_MASTER_DIR / "config.py").read_text(encoding="utf-8")
+        game_master_source = (GAME_MASTER_DIR / "game_master.py").read_text(encoding="utf-8")
+        dashboard_readme = (ROOT / "web" / "er1_dashboard" / "README.md").read_text(encoding="utf-8")
+        mqtt_commands = (ROOT / "docs" / "mqtt_commands.md").read_text(encoding="utf-8")
+        for removed_name in (
+            "AUTO_NODE_REBOOT",
+            "PHYSICAL_NODE_IDS",
+            "auto_reboot_state_path",
+            "auto_node_reboot.json",
+            "_automatic_node_reboot",
+        ):
+            self.assertNotIn(removed_name, config_source + game_master_source)
 
-        state_path = self.root / "auto_node_reboot.json"
-        initial_state = json.loads(state_path.read_text(encoding="utf-8"))
-        due_at = datetime.fromisoformat(initial_state["next_due_at"])
-        self.assertEqual(due_at.hour, 4)
-        self.assertEqual(initial_state["timezone"], "Europe/Rome")
-
-        clock.advance(due_at.timestamp() - clock.wall.timestamp() - 1)
-        gm.state.phase = 0
-        gm._automatic_node_reboot_if_due()
-        self.assertEqual(client.published, [])
-
-        clock.advance(1)
-        gm.state.phase = 3
-        gm._automatic_node_reboot_if_due()
-        self.assertEqual(client.published, [])
-
-        gm.state.phase = 0
-        gm._automatic_node_reboot_if_due()
-        reboot_messages = [item for item in client.published if item[0].endswith("/sys/cmd")]
-        self.assertEqual(
-            reboot_messages,
-            [(f"{node_id}/sys/cmd", "REBOOT", False) for node_id in config.PHYSICAL_NODE_IDS],
+        tree = ast.parse(game_master_source)
+        game_master_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "GameMaster"
         )
+        scheduler = next(
+            node for node in game_master_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_scheduler_loop"
+        )
+        scheduler_source = ast.get_source_segment(game_master_source, scheduler) or ""
+        self.assertIn("self._run_due_actions()", scheduler_source)
+        self.assertIn("self._checkpoint_if_due()", scheduler_source)
+        self.assertNotIn("reboot", scheduler_source.lower())
 
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(state["version"], 1)
-        self.assertIsNotNone(state["last_completed_at"])
-        next_due_at = datetime.fromisoformat(state["next_due_at"])
-        self.assertEqual(next_due_at.hour, 4)
-        self.assertEqual(next_due_at.date(), due_at.date() + timedelta(days=14))
-
-        client.published.clear()
-        restored = self.make_game_master(clock, client=client)
-        restored._automatic_node_reboot_if_due()
-        self.assertEqual(client.published, [])
-
-    def test_automatic_node_reboot_keeps_four_oclock_across_dst(self) -> None:
-        clock = FakeClock(100.0, datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc))
-        self.make_game_master(clock)
-        state = json.loads((self.root / "auto_node_reboot.json").read_text(encoding="utf-8"))
-        due_at = datetime.fromisoformat(state["next_due_at"])
-        self.assertEqual(due_at.hour, 4)
-        self.assertEqual(due_at.utcoffset(), timedelta(hours=2))
+        documentation = f"{dashboard_readme}\n{mqtt_commands}".lower()
+        for removed_claim in (
+            "every 14 days",
+            "04:00 europe/rome",
+            "schedules the all-node restart",
+            "schedules the same command",
+            "deferring a due restart",
+            "restricted to phase 0",
+        ):
+            self.assertNotIn(removed_claim, documentation)
+        self.assertIn("node restarts are operator-triggered only", documentation)
+        self.assertIn("blocked only in phases 2-13", documentation)
+        self.assertIn("standby (0), maintenance (1), and finished (14)", documentation)
 
     @staticmethod
     def live_riddle_seconds(gm: GameMaster, riddle: str) -> float:

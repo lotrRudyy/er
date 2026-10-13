@@ -4101,6 +4101,21 @@ body.dashboard-v6.dashboard-game-mode #bookingDetails .booking-selected-info { m
   body.dashboard-v6.dashboard-preparation-mode .mission-grid { grid-column: 1; grid-row: 1; grid-template-columns: minmax(380px, 28%) minmax(0, 1fr); }
 }
 
+@media (min-width: 901px) and (max-width: 1016px) {
+  body.game-viewer-body .operator-header {
+    grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 0.6fr);
+  }
+
+  body.game-viewer-body .operator-leading,
+  body.game-viewer-body .operator-brand {
+    min-width: 0;
+  }
+
+  body.game-viewer-body .operator-brand {
+    overflow: hidden;
+  }
+}
+
 @media (min-width: 901px) and (max-width: 1550px), (min-width: 901px) and (max-height: 940px) {
   .operator-header { height: 52px; }
   body.dashboard-v6 .control-workspace { height: calc(100dvh - 52px); grid-template-rows: 370px minmax(0, 1fr); }

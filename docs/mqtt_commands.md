@@ -39,8 +39,8 @@ Replace `<id>` with one of the canonical lock IDs.
 - Topic: `<node>/sys/cmd`
 - Payload: `REBOOT`
 - The command invokes `ESP.restart()` through the shared firmware core; it does not start OTA.
-- After operator confirmation, the dashboard can restart individual puzzle nodes in active phases. Restarting all nodes or the maglock controller is restricted to phase 0.
-- The Game Master schedules the all-node restart every 14 days at 04:00 Europe/Rome, deferring a due restart until phase 0.
+- The dashboard can manually restart physical nodes other than maglock in every phase. Bulk and maglock restarts are blocked only during preparation or a live game (phases 2-13), and are allowed in standby (0), maintenance (1), and finished (14).
+- Node restarts are operator-triggered only; the Game Master does not schedule periodic node restarts.
 
 ```bash
 mosquitto_pub -h 127.0.0.1 -t 'images_piano/sys/cmd' -m 'REBOOT'

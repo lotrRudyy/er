@@ -96,10 +96,20 @@ layout with the supplied references, and deliver the game summary reliably.
 - Operator logs identify the concrete action, target, requested state and domain
   result. Signed website actions include the admin actor; direct LAN actions stay
   `local/unknown`.
-- Hint cards are larger and scroll within a bounded list when necessary. A newly
-  due hint receives one short emphasis, never a continuously repeating blink.
+- Hint cards are larger and scroll within a bounded list when necessary. Due
+  hints remain statically marked without animation.
 - Node hover text includes device uptime as `DD:HH:MM:SS`, using heartbeat uptime,
   and the all-riddles table is visually centered except for the riddle name.
+- The compact lighting row uses the labels `Eingang`, `Raum 2`, `Raum 3`, and
+  `Sterne`, with icon and state beside one another to preserve vertical space.
+- Current-riddle actions follow the two live-content columns: riddle name and
+  solved action below live data, hint controls and skip below hint suggestions.
+- Hint due state is static without animation. Node names, all-riddles content,
+  and hint suggestions use larger operationally readable type.
+- Log autoscroll starts enabled, keeps both controls synchronized, and remembers
+  an explicit local operator preference.
+- The unconditional 14-day automatic node reboot is removed. Manual reboot and
+  real offline/error reporting remain available.
 
 ## 3. Scope And Exclusions
 
@@ -112,7 +122,9 @@ excluded.
 No firmware change is planned. Correlated device acknowledgements are a separate
 project. The earlier code deployment and one-time production hint import were
 completed after the isolated local browser session. The UI/control follow-up was
-subsequently authorized, pushed, and deployed on 2026-10-12.
+subsequently authorized, pushed, and deployed on 2026-10-12. The newly approved
+layout/readability/reboot follow-up is local until a separate push, browser, and
+deployment authorization.
 
 ## 4. Chosen Approach
 
@@ -180,6 +192,9 @@ subsequently authorized, pushed, and deployed on 2026-10-12.
    lock-control reboot rule.
 10. Expand operator action taxonomy, hint readability, node uptime, and table
     alignment, then run focused and full tests.
+11. Compact the light controls, realign current-riddle actions, remove hint
+    animation, enlarge operational text, enable synchronized autoscroll, and
+    remove the unconditional 14-day reboot scheduler.
 
 ## 7. Success Criteria
 
@@ -210,8 +225,8 @@ subsequently authorized, pushed, and deployed on 2026-10-12.
   other valid individual physical node remains rebootable.
 - Command logs name the actual action/target/result and do not misattribute an
   unsigned LAN user.
-- Hint due emphasis runs once, node uptime is readable, and table contents remain
-  centered without breaking mobile layouts.
+- Hint due state remains statically marked without animation, node uptime is
+  readable, and table contents remain centered without breaking mobile layouts.
 - Full automated test and syntax suites pass.
 
 ## 8. Decisions
@@ -241,6 +256,10 @@ subsequently authorized, pushed, and deployed on 2026-10-12.
   scene or firmware brightness values are changed.
 - The `maglock` physical node and any bulk reboot containing it are blocked only
   during Preparation/Live; other individual physical nodes remain available.
+- ESP32 uptime alone is not treated as a fault. Remove periodic reboot rather
+  than replacing it with a non-actionable 14-day warning.
+- Due hints remain visually marked but never animate.
+- Autoscroll defaults on; an explicit browser-local choice may override it.
 
 ## 9. Ideas Parking Lot
 
@@ -279,4 +298,16 @@ syntax checks. Its staging hashes matched the committed files, Python and Jinja
 syntax passed on the Pi, `er1-web.service` and `game_master.service` are active,
 and dashboard, games, and state HTTP checks return 200. The retained state after
 restart is Maintenance without an active run or timer. The follow-up is pushed
-and deployed but not yet visually browser-verified.
+and deployed but not yet visually browser-verified. A subsequent local-only
+follow-up for compact controls, action placement, readability, autoscroll, and
+removal of periodic reboot is implemented and reviewed. Its full offline suite
+passes 172 Python tests and 12 JavaScript client tests; Python/JavaScript syntax
+and diff checks pass. Light labels sit above a compact side-by-side icon/status
+row, with responsive column counts and a scrollable light-control area. Hint
+animation and automatic reboot code/configuration are removed; manual reboot
+phase-boundary tests remain green. The main dashboard views and header were
+verified in the approved local browser runs. The final bounded viewer check at
+901, 1008, and 1016 pixels has no horizontal overflow or header collision, and
+autoscroll propagates both states between local `/` and `/admin` tabs without
+browser errors. This follow-up is uncommitted and has not been pushed or deployed;
+next: commit, push, deploy, and verify production service and HTTP health.

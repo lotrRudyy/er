@@ -79,6 +79,7 @@ const MUTATION_ATTEMPT_TIMEOUT_MS = 1500;
 const MUTATION_RESOLUTION_TIMEOUT_MS = 10000;
 const OPERATION_STATUS_TIMEOUT_MS = 1000;
 const PENDING_OPERATIONS_KEY = 'er1-dashboard-pending-operations-v1';
+const DIAGNOSTICS_AUTOSCROLL_KEY = 'er1-dashboard-diagnostics-autoscroll-v1';
 const diagnostics = {
   after: 0,
   newestSeq: 0,
@@ -94,7 +95,7 @@ const diagnostics = {
   timer: null,
   requestController: null,
   searchText: '',
-  autoScroll: false,
+  autoScroll: true,
 };
 const operatorLogEntries = [];
 let operatorLogView = 'all';
@@ -149,10 +150,43 @@ let lastRiddleTimerSignature = '';
 const dimDrafts = {};
 const dimEditing = {};
 const dimLastNonZero = {};
-const seenDueHintKeys = new Set();
-let dueHintRunSignature = '';
 const riddleTimeDrafts = {};
 const riddleTimeEditing = {};
+
+function readDiagnosticsAutoScrollPreference() {
+  try {
+    const stored = window.localStorage.getItem(DIAGNOSTICS_AUTOSCROLL_KEY);
+    if (stored === 'true') return true;
+    if (stored === 'false') return false;
+  } catch (_error) {
+    // Keep the safe default when browser storage is unavailable.
+  }
+  return true;
+}
+
+function syncDiagnosticsAutoScrollControls() {
+  document.querySelectorAll('.diagnostics-autoscroll').forEach((input) => {
+    input.checked = diagnostics.autoScroll;
+  });
+}
+
+function setDiagnosticsAutoScroll(enabled) {
+  diagnostics.autoScroll = enabled === true;
+  syncDiagnosticsAutoScrollControls();
+  try {
+    window.localStorage.setItem(DIAGNOSTICS_AUTOSCROLL_KEY, String(diagnostics.autoScroll));
+  } catch (_error) {
+    // Auto-scroll still works for this page load without persistent storage.
+  }
+  if (diagnostics.autoScroll) replaceDiagnosticsLogs();
+}
+
+function handleDiagnosticsAutoScrollStorage(event) {
+  if (event.key !== DIAGNOSTICS_AUTOSCROLL_KEY) return;
+  diagnostics.autoScroll = event.newValue !== 'false';
+  syncDiagnosticsAutoScrollControls();
+  if (diagnostics.autoScroll) replaceDiagnosticsLogs();
+}
 
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -1952,10 +1986,10 @@ function renderLights() {
   wrap.innerHTML = '';
 
   const labels = {
-    entrance: 'Eingang-Fackeln',
-    r2_torch: 'Raum 2-Fackeln',
-    r3_torch: 'Raum 3-Fackeln',
-    star_sky: 'Sternenhimmel',
+    entrance: 'Eingang',
+    r2_torch: 'Raum 2',
+    r3_torch: 'Raum 3',
+    star_sky: 'Sterne',
     r1: 'Raum 1 LED',
     r2_main: 'Raum 2 LED',
     r3_main: 'Raum 3 LED',
@@ -2050,7 +2084,7 @@ function renderLights() {
       });
     } else {
       card.innerHTML = `
-        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}"><strong>${escapeHtml(displayLabel)}</strong><span class="light-toggle-icon" aria-hidden="true">${iconSvg(light.id === 'star_sky' ? 'stars' : 'flame')}</span><small>${escapeHtml(visibleStateLabel)}</small></button>
+        <button class="light-toggle-button ${buttonClass} ${light.id === 'star_sky' ? 'is-star-light' : 'is-torch-light'}" type="button" title="${escapeAttr(stateLabel)}" aria-label="${escapeAttr(displayLabel)}: ${escapeAttr(visibleStateLabel)}"><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(visibleStateLabel)}</small><span class="light-toggle-icon" aria-hidden="true">${iconSvg(light.id === 'star_sky' ? 'stars' : 'flame')}</span></button>
       `;
       const button = card.querySelector('button');
       button.addEventListener('click', async () => {
@@ -2234,10 +2268,7 @@ function hintPanelHtml(riddle, compact = false) {
     ? `<ol class="hint-template-list">${templates.map((tip, index) => {
       const due = (tip.offer_after_total_s != null && Number(tip.offer_after_total_s) <= totalElapsed)
         || (tip.offer_after_riddle_s != null && Number(tip.offer_after_riddle_s) <= riddleElapsed);
-      const dueKey = `${dueHintRunSignature}:${riddle.id}:${index}`;
-      const newlyDue = due && !seenDueHintKeys.has(dueKey);
-      if (newlyDue) seenDueHintKeys.add(dueKey);
-      return `<li class="${due ? 'hint-card-due' : ''}${newlyDue ? ' hint-card-newly-due' : ''}" data-hint-key="${escapeAttr(dueKey)}"><div class="hint-card-meta"><span>Tipp ${index + 1}</span>${thresholdHtml('Seit Spielstart', tip.offer_after_total_s, totalElapsed, 'total')}${thresholdHtml('Seit Rätselstart', tip.offer_after_riddle_s, riddleElapsed, 'riddle')}</div><p>${escapeHtml(tip.text)}</p></li>`;
+      return `<li class="${due ? 'hint-card-due' : ''}"><div class="hint-card-meta"><span>Tipp ${index + 1}</span>${thresholdHtml('Seit Spielstart', tip.offer_after_total_s, totalElapsed, 'total')}${thresholdHtml('Seit Rätselstart', tip.offer_after_riddle_s, riddleElapsed, 'riddle')}</div><p>${escapeHtml(tip.text)}</p></li>`;
     }).join('')}</ol>`
     : `<p class="hint-template-empty">${escapeHtml(NO_HINT_TEMPLATE_TEXT[language])}</p>`;
   return `
@@ -2267,11 +2298,15 @@ function riddleActionsHtml(riddle, compact = false) {
 
   const count = Math.max(0, safeInt(riddle.hint_count, 0));
   const canMutateHints = riddleMutationsAvailable();
-  return `<div class="riddle-actions ${compact ? 'riddle-actions-card' : ''}">
-    ${compact ? `<div class="current-riddle-identity">${iconSvg('puzzle')}<h2>${escapeHtml(riddle.label)}</h2></div>` : ''}
-    <button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}><span aria-hidden="true">&#10003;</span> Gelöst</button>
-    <div class="current-hint-control"><button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippanzahl verringern" ${!canMutateHints || count === 0 ? 'disabled' : ''}>−</button><span><small>Tippanzahl</small><strong>${count}</strong></span><button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippanzahl erhöhen" ${canMutateHints ? '' : 'disabled'}>+</button></div>
-    ${canSkip ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button"><span aria-hidden="true">&#9654;</span> Überspringen</button>` : '<span class="riddle-action-spacer" aria-hidden="true"></span>'}
+  const solveButton = `<button class="solve-btn ${canSolve ? 'active' : 'inactive'}" type="button" ${canSolve ? '' : 'disabled'}><span aria-hidden="true">&#10003;</span> Gelöst</button>`;
+  const hintControl = `<div class="current-hint-control"><button class="hint-counter-btn" type="button" data-delta="-1" aria-label="Tippanzahl verringern" ${!canMutateHints || count === 0 ? 'disabled' : ''}>−</button><span><small>Tippanzahl</small><strong>${count}</strong></span><button class="hint-counter-btn" type="button" data-delta="1" aria-label="Tippanzahl erhöhen" ${canMutateHints ? '' : 'disabled'}>+</button></div>`;
+  const skipButton = canSkip
+    ? `<button class="skip-btn ${riddle.skipped ? 'is-toggled' : ''}" type="button"><span aria-hidden="true">&#9654;</span> Überspringen</button>`
+    : '<span class="riddle-action-spacer" aria-hidden="true"></span>';
+  if (!compact) return `<div class="riddle-actions">${solveButton}${hintControl}${skipButton}</div>`;
+  return `<div class="riddle-actions riddle-actions-card">
+    <div class="current-riddle-action-section current-riddle-primary-actions"><div class="current-riddle-identity">${iconSvg('puzzle')}<h2>${escapeHtml(riddle.label)}</h2></div>${solveButton}</div>
+    <div class="current-riddle-action-section current-riddle-hint-actions${canSkip ? '' : ' is-hint-only'}">${hintControl}${canSkip ? skipButton : ''}</div>
   </div>`;
 }
 
@@ -2868,11 +2903,6 @@ function patchState(data) {
   state.start_assignment = data.start_assignment || state.start_assignment;
   state.summary_delivery = data.summary_delivery || state.summary_delivery;
   state.meta = data.meta || state.meta;
-  const nextDueHintRunSignature = String(state.game.run_id || state.game.started_at || 'no-run');
-  if (nextDueHintRunSignature !== dueHintRunSignature) {
-    dueHintRunSignature = nextDueHintRunSignature;
-    seenDueHintKeys.clear();
-  }
   updateLogArchiveDeleteAvailability();
 
   for (const light of state.lights) {
@@ -3675,6 +3705,9 @@ async function requestDiagnosticLogLevel(row, button) {
 
 function wireDiagnostics() {
   const details = document.getElementById('diagnosticsDetails');
+  diagnostics.autoScroll = readDiagnosticsAutoScrollPreference();
+  syncDiagnosticsAutoScrollControls();
+  window.addEventListener('storage', handleDiagnosticsAutoScrollStorage);
   readDiagnosticsFilters();
   replaceDiagnosticsLogs();
   startDiagnosticsPolling();
@@ -3723,9 +3756,8 @@ function wireDiagnostics() {
     diagnostics.searchText = String(event.target.value || '');
     replaceDiagnosticsLogs();
   });
-  document.querySelector('.diagnostics-autoscroll')?.addEventListener('change', (event) => {
-    diagnostics.autoScroll = event.target.checked === true;
-    if (diagnostics.autoScroll) replaceDiagnosticsLogs();
+  document.querySelectorAll('.diagnostics-autoscroll').forEach((input) => {
+    input.addEventListener('change', (event) => setDiagnosticsAutoScroll(event.target.checked === true));
   });
   document.getElementById('logArchiveRefreshBtn')?.addEventListener('click', () => loadLogArchive());
   document.getElementById('logArchiveSearchBtn')?.addEventListener('click', () => searchLogArchive());
@@ -3749,7 +3781,7 @@ function updateFastTimers() {
       : '—';
   }
   if (prepareCounter) prepareCounter.textContent = '--';
-  document.querySelectorAll('.hint-template-list li[data-hint-key]').forEach((card) => {
+  document.querySelectorAll('.hint-template-list li').forEach((card) => {
     let due = false;
     card.querySelectorAll('[data-hint-threshold]').forEach((threshold) => {
       if (threshold.dataset.hintThreshold === '') return;
@@ -3767,16 +3799,7 @@ function updateFastTimers() {
       threshold.classList.toggle('hint-threshold-due', thresholdDue);
       threshold.querySelector('.hint-due-label')?.classList.toggle('hidden', !thresholdDue);
     });
-    const wasDue = card.classList.contains('hint-card-due');
-    const dueKey = String(card.dataset.hintKey || '');
     card.classList.toggle('hint-card-due', due);
-    if (due && !wasDue && !seenDueHintKeys.has(dueKey)) {
-      seenDueHintKeys.add(dueKey);
-      card.classList.add('hint-card-newly-due');
-    }
-    if (!due) {
-      card.classList.remove('hint-card-newly-due');
-    }
   });
   const now = new Date();
   const date = document.getElementById('operatorDate');

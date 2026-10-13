@@ -219,6 +219,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
   color: var(--text);
   text-decoration: none;
   white-space: nowrap;
@@ -231,6 +232,7 @@ textarea {
 }
 
 .operator-brand strong {
+  min-width: 0;
   overflow: hidden;
   font: 600 22px/1 Georgia, "Times New Roman", serif;
   text-overflow: ellipsis;
@@ -896,20 +898,6 @@ textarea {
   background: rgba(240, 170, 36, 0.08);
 }
 
-.hint-template-list li.hint-card-newly-due {
-  animation: hint-due-once 900ms ease-out 1;
-}
-
-@keyframes hint-due-once {
-  0% { box-shadow: 0 0 0 0 rgba(255, 190, 67, 0); transform: translateY(0); }
-  38% { box-shadow: 0 0 0 4px rgba(255, 190, 67, 0.32), 0 0 28px rgba(240, 151, 28, 0.28); transform: translateY(-2px); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 190, 67, 0); transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hint-template-list li.hint-card-newly-due { animation: none; }
-}
-
 .hint-card-meta .hint-threshold-due {
   color: #201300;
   background: var(--gold-light);
@@ -933,18 +921,34 @@ textarea {
 
 .riddle-actions-card {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.05fr) minmax(230px, 0.95fr);
   gap: 8px;
 }
 
-.riddle-actions-card > button,
-.riddle-actions-card > .current-hint-control,
-.riddle-actions-card > .riddle-action-spacer {
+.current-riddle-action-section {
+  min-width: 0;
+  display: grid;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.current-riddle-primary-actions {
+  grid-template-columns: minmax(0, 1.2fr) minmax(92px, 0.8fr);
+}
+
+.current-riddle-hint-actions {
+  grid-template-columns: minmax(0, 1.25fr) minmax(90px, 0.75fr);
+}
+
+.current-riddle-action-section > button,
+.current-riddle-action-section > .current-hint-control,
+.current-riddle-action-section > .riddle-action-spacer,
+.current-riddle-identity {
   min-width: 0;
   min-height: 48px;
 }
 
-.riddle-actions-card > button {
+.current-riddle-action-section > button {
   width: 100%;
 }
 
@@ -1547,6 +1551,9 @@ textarea {
 .lights-panel-v6 {
   grid-column: 1;
   grid-row: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  container: er1-lights / inline-size;
 }
 
 .locks-panel-v6 {
@@ -3839,12 +3846,16 @@ button:disabled {
 
 .hint-template-list p {
   margin-top: 5px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.35;
 }
 
 .hint-card-meta span {
-  font-size: 9px;
+  font-size: 10px;
+}
+
+.current-riddles-grid:has(> :nth-child(2)) .hint-template-list p {
+  font-size: 13px;
 }
 
 .current-riddle-controls {
@@ -3853,14 +3864,31 @@ button:disabled {
 }
 
 .riddle-actions-card {
-  grid-template-columns: minmax(150px, 1.18fr) minmax(92px, 0.75fr) minmax(190px, 1.28fr) minmax(112px, 0.82fr);
+  grid-template-columns: minmax(0, 1.08fr) minmax(240px, 0.92fr);
   align-items: stretch;
+  gap: 11px;
+}
+
+.current-riddle-action-section {
   gap: 7px;
 }
 
-.riddle-actions-card > button,
-.riddle-actions-card > .current-hint-control,
-.riddle-actions-card > .riddle-action-spacer,
+.current-riddle-primary-actions {
+  grid-template-columns: minmax(0, 1.18fr) minmax(92px, 0.75fr);
+}
+
+.current-riddle-hint-actions {
+  grid-template-columns: minmax(0, 1.28fr) minmax(90px, 0.82fr);
+  padding-left: 11px;
+}
+
+.current-riddle-hint-actions.is-hint-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.current-riddle-action-section > button,
+.current-riddle-action-section > .current-hint-control,
+.current-riddle-action-section > .riddle-action-spacer,
 .current-riddle-identity {
   min-height: 52px;
 }
@@ -3895,7 +3923,7 @@ button:disabled {
   white-space: nowrap;
 }
 
-.riddle-actions-card > button {
+.current-riddle-action-section > button {
   border-color: rgba(225, 194, 148, 0.2);
   font-size: 12px;
   letter-spacing: 0.02em;
@@ -3918,12 +3946,12 @@ button:disabled {
 }
 
 .current-hint-control {
-  grid-template-columns: 48px minmax(86px, 1fr) 48px;
+  grid-template-columns: 30px minmax(54px, 1fr) 30px;
   gap: 4px;
 }
 
 .current-riddles-grid:has(> :nth-child(2)) .current-hint-control {
-  grid-template-columns: 34px minmax(64px, 1fr) 34px;
+  grid-template-columns: 30px minmax(54px, 1fr) 30px;
 }
 
 .current-hint-control button {
@@ -4147,23 +4175,23 @@ button:disabled {
 .table-progress,
 .technical-summary {
   color: #aa8957;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.025em;
 }
 
 .riddles-table-v6 {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .riddles-table-v6 th {
-  height: 24px;
+  height: 26px;
   color: #998d80;
   background: linear-gradient(180deg, rgba(94, 63, 28, 0.17), rgba(255, 255, 255, 0.018));
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .riddles-table-v6 td {
-  height: 27px;
+  height: 30px;
   color: #ccc2b5;
   background: rgba(3, 3, 3, 0.14);
 }
@@ -4179,19 +4207,19 @@ button:disabled {
 
 .table-status,
 .status-correction {
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .status-correction {
-  min-height: 21px;
+  min-height: 23px;
   padding: 2px 6px;
 }
 
 .table-hint-button,
 .riddle-time-toggle {
-  width: 20px;
-  min-height: 20px;
-  font-size: 13px;
+  width: 22px;
+  min-height: 22px;
+  font-size: 15px;
 }
 
 .riddle-time-editor {
@@ -4309,18 +4337,20 @@ button:disabled {
 }
 
 .lights-grid-v6 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(104px, 1fr));
   align-content: start;
   gap: 6px;
 }
 
 .light-toggle-button {
-  min-height: 68px;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(27px, 1fr) auto;
+  min-height: 48px;
+  grid-template-columns: 24px minmax(0, max-content);
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: center;
   justify-items: center;
-  row-gap: 5px;
-  padding: 9px 7px 7px;
+  gap: 2px 6px;
+  padding: 4px 6px;
   border-color: rgba(218, 187, 139, 0.17);
   background:
     linear-gradient(150deg, rgba(255, 255, 255, 0.025), transparent 55%),
@@ -4328,29 +4358,40 @@ button:disabled {
 }
 
 .light-toggle-icon {
+  grid-column: 1;
   grid-row: 2;
-  font-size: 25px;
+  font-size: 21px;
 }
 
 .light-toggle-icon .ui-icon {
-  width: 27px;
-  height: 27px;
+  width: 22px;
+  height: 22px;
 }
 
 .light-toggle-button strong {
+  grid-column: 1 / -1;
   grid-row: 1;
+  min-width: 0;
   overflow: visible;
   font-size: 13px;
   line-height: 1.15;
   text-align: center;
   text-overflow: clip;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 
 .light-toggle-button small {
-  grid-row: 3;
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
   font-size: 10px;
   letter-spacing: 0.06em;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  text-align: right;
+  white-space: normal;
 }
 
 .light-toggle-button.is-on.is-torch-light {
@@ -4586,7 +4627,7 @@ button:disabled {
   gap: 6px;
   padding: 5px 7px;
   border-color: rgba(218, 187, 139, 0.18);
-  font-size: 10px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -4595,6 +4636,7 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
 .node-status-icon {
@@ -4711,13 +4753,13 @@ button:disabled {
   opacity: 0.72;
 }
 
-@media (min-width: 1101px) and (max-width: 1500px) {
+@media (min-width: 1101px) and (max-width: 1550px) {
   :root {
     --control-rail-width: minmax(430px, 36%);
   }
 
   .operator-header {
-    grid-template-columns: minmax(380px, 1fr) auto minmax(190px, 1fr);
+    grid-template-columns: minmax(380px, 1.4fr) auto minmax(190px, 0.6fr);
   }
 
   .control-workspace {
@@ -4745,8 +4787,16 @@ button:disabled {
   }
 
   .riddle-actions-card {
-    grid-template-columns: minmax(120px, 1fr) minmax(75px, 0.72fr) minmax(145px, 1.15fr) minmax(90px, 0.78fr);
-    gap: 5px;
+    grid-template-columns: minmax(0, 1.08fr) minmax(240px, 0.92fr);
+    gap: 11px;
+  }
+
+  .current-riddle-primary-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(75px, 0.68fr);
+  }
+
+  .current-riddle-hint-actions {
+    grid-template-columns: minmax(0, 1.15fr) minmax(90px, 0.78fr);
   }
 
   .current-riddle-identity {
@@ -4761,7 +4811,6 @@ button:disabled {
     grid-template-rows: minmax(205px, 0.54fr) minmax(150px, 0.46fr);
   }
 
-  .light-toggle-button,
   .lock-button-v6 {
     min-height: 62px;
   }
@@ -4935,7 +4984,11 @@ button:disabled {
   }
 
   .riddle-actions-card {
-    grid-template-columns: minmax(140px, 1.05fr) minmax(90px, 0.75fr) minmax(180px, 1.2fr) minmax(110px, 0.8fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .current-riddle-hint-actions {
+    padding-left: 0;
   }
 
   .current-riddles-grid:has(> :nth-child(2)) {
@@ -5029,11 +5082,7 @@ button:disabled {
   }
 
   .riddle-actions-card {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.25fr);
-  }
-
-  .current-riddle-identity {
-    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .riddle-action-spacer {
@@ -5130,6 +5179,10 @@ button:disabled {
     grid-column: 1;
   }
 
+  .current-riddle-action-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .lights-grid-v6 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -5153,7 +5206,11 @@ button:disabled {
 
   .node-status-button {
     padding-inline: 4px;
-    font-size: 9px;
+    font-size: 10px;
+  }
+
+  .node-status-button strong {
+    font-size: 10px;
   }
 
   .operator-log-toolbar {
@@ -5166,5 +5223,17 @@ button:disabled {
 
   #diagnosticsCount {
     grid-column: 2;
+  }
+}
+
+@container er1-lights (max-width: 434px) {
+  .lights-grid-v6 {
+    grid-template-columns: repeat(2, minmax(104px, 1fr));
+  }
+}
+
+@container er1-lights (max-width: 214px) {
+  .lights-grid-v6 {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

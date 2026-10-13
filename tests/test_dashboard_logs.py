@@ -1165,9 +1165,15 @@ class DashboardDiagnosticsSourceTests(unittest.TestCase):
         html = HTML_PATH.read_text(encoding="utf-8")
         self.assertEqual(html.count('class="diagnostics-search-input"'), 2)
         self.assertEqual(html.count('class="diagnostics-autoscroll"'), 2)
+        self.assertEqual(len(re.findall(r'class="diagnostics-autoscroll"[^>]*\bchecked\b', html)), 2)
         self.assertIn('id="logArchiveResultCount"', html)
         self.assertIn("diagnostics.searchText", source)
         self.assertIn("if (diagnostics.autoScroll) list.scrollTop = list.scrollHeight", source)
+        self.assertIn("const DIAGNOSTICS_AUTOSCROLL_KEY = 'er1-dashboard-diagnostics-autoscroll-v1'", source)
+        self.assertIn("autoScroll: true", source)
+        self.assertIn("readDiagnosticsAutoScrollPreference()", source)
+        self.assertIn("document.querySelectorAll('.diagnostics-autoscroll')", source)
+        self.assertIn("window.localStorage.setItem(DIAGNOSTICS_AUTOSCROLL_KEY", source)
         self.assertIn("`${visible} / ${total} Einträge`", source)
 
     def test_dirty_log_level_draft_survives_blur_and_hydration_until_success(self) -> None:

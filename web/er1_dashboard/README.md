@@ -13,7 +13,7 @@ Single-page Flask dashboard for ER1.
 - Immediate solve, confirmed skip, and minimum-one-second riddle time corrections with a previewed transfer to the adjacent previous or next stage
 - Maintenance-only hint-template editor backed by atomic local persistence
 - Whitelisted physical-node restart controls using `<node>/sys/cmd` with the plain `REBOOT` payload
-- Confirmed manual bulk restart in phase 0; individual physical nodes remain restartable in other phases except for the maglock controller. The Game Master also schedules the same command every 14 days at 04:00 Europe/Rome and waits for phase 0 if necessary
+- Confirmed manual bulk and maglock restarts in standby (phase 0), maintenance (phase 1), and finished (phase 14). Both are blocked only during preparation or a live game (phases 2-13); other individual physical nodes remain restartable in every phase
 - Single-flight server-side booking assignment when an accepted game start creates the active run
 - MQTT state polling backend
 
@@ -82,7 +82,7 @@ The dashboard now reads `.env` from the project folder or its parent. Copy `.env
 - Uses `star_sky/sys/cmd` plus `lighting/cmd` for the `star sky` row.
 - Reset and clear controls are intentionally omitted from the live dashboard.
 - In maintenance, riddle rows expose only immediate Solve; skip, time, and hint-count mutations require a started or completed run. Hint-template editing remains available in maintenance.
-- Restarting all nodes or the maglock controller is restricted to phase 0. Other individual physical nodes can still be restarted in later phases.
+- Restarting all nodes or the maglock controller is blocked only in phases 2-13. Both are available in phases 0, 1, and 14; other individual physical nodes are available in every phase.
 - Lock, light, and diagnostics commands report local MQTT queue failures and possible partial batches; QoS 0 still provides no physical-device acknowledgment.
 - Live control POSTs require an `Idempotency-Key`. The browser first durably reserves that ID with the exact request fingerprint, and only then sends the command. A delayed original and every retry atomically claim the same reservation, so only one request can execute. The dashboard replays the recorded result after a lost HTTP response instead of executing the same click twice.
 - Pending IDs remain in the tab until their result is surfaced. A missing receipt is never treated as proof that a delayed command cannot arrive. A dashboard restart during a side effect marks the result uncertain and requires explicit operator inspection and acknowledgement before that tab sends another command.
