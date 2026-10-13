@@ -1195,6 +1195,41 @@ class RecoveryTestCase(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Unknown riddle outcome"):
                     gm.set_riddle_outcome("images", outcome)
 
+    def test_get_state_command_publishes_fresh_retained_state(self) -> None:
+        client = FakeMqttClient()
+        gm = self.make_game_master(FakeClock(100.0), client=client)
+
+        gm.handle_game_cmd({"cmd": "get_state"})
+
+        self.assertEqual(
+            [topic for topic, _payload, retained in client.published if retained],
+            [config.TOPIC_GAME_STATE, config.TOPIC_DASHBOARD_STATE],
+        )
+
+    def test_deployment_lock_rejects_phase_commands(self) -> None:
+        client = FakeMqttClient()
+        gm = self.make_game_master(FakeClock(100.0), client=client)
+        deployment_lock = self.root / ".update-lock"
+        deployment_lock.mkdir()
+
+        with mock.patch.object(config, "DEPLOYMENT_LOCK_PATH", deployment_lock):
+            for payload in (
+                {"cmd": "set_phase", "phase": 2},
+                {"cmd": "mode", "mode": "prepare"},
+                {"cmd": "start"},
+            ):
+                with self.subTest(payload=payload):
+                    client.published.clear()
+                    gm.handle_game_cmd(payload)
+                    self.assertEqual(gm.state.phase, 0)
+                    self.assertEqual(len(client.published), 1)
+                    topic, debug, retained = client.published[0]
+                    self.assertEqual(topic, config.TOPIC_GAME_MASTER_DEBUG)
+                    self.assertEqual(
+                        debug["msg"], "OPERATOR_COMMAND_IGNORED_DEPLOYMENT_LOCK"
+                    )
+                    self.assertFalse(retained)
+
     def test_mqtt_hint_count_accepts_only_plus_or_minus_one_and_persists(self) -> None:
         clock = FakeClock(100.0)
         gm = self.make_game_master(clock)

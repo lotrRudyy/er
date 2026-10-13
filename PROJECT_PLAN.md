@@ -110,6 +110,11 @@ layout with the supplied references, and deliver the game summary reliably.
   an explicit local operator preference.
 - The unconditional 14-day automatic node reboot is removed. Manual reboot and
   real offline/error reporting remain available.
+- A committed `er1 update` helper deploys only managed Game Master and Dashboard
+  files from a clean, pushed `main` checkout. It requires exact remote hashes and
+  idle state, stages and validates changes, creates a file-scoped backup,
+  fences the normal start path, restarts both Python services, verifies health,
+  and records the source commit.
 
 ## 3. Scope And Exclusions
 
@@ -195,6 +200,8 @@ and deployed on 2026-10-13.
 11. Compact the light controls, realign current-riddle actions, remove hint
     animation, enlarge operational text, enable synchronized autoscroll, and
     remove the unconditional 14-day reboot scheduler.
+12. Replace obsolete `er1 deploy` documentation with a safe, drift-detecting
+    `er1 update` workflow for the current Game Master and Dashboard paths.
 
 ## 7. Success Criteria
 
@@ -228,6 +235,8 @@ and deployed on 2026-10-13.
 - Hint due state remains statically marked without animation, node uptime is
   readable, and table contents remain centered without breaking mobile layouts.
 - Full automated test and syntax suites pass.
+- Runtime updates refuse active games, dirty or unpushed sources, remote drift,
+  secrets/state/dependency changes, and unhealthy post-restart results.
 
 ## 8. Decisions
 
@@ -260,6 +269,8 @@ and deployed on 2026-10-13.
   than replacing it with a non-actionable 14-day warning.
 - Due hints remain visually marked but never animate.
 - Autoscroll defaults on; an explicit browser-local choice may override it.
+- Runtime updates use a managed-file manifest and remote commit marker rather
+  than restoring the obsolete whole-tree `pi-runtime` synchronization.
 
 ## 9. Ideas Parking Lot
 
@@ -311,4 +322,11 @@ both services are active without restarts, Dashboard `/`, `/games`, `/admin`, an
 `/api/state` return 200, persistence is not degraded, and all eight nodes are
 online. No error-priority journal entries occurred after restart, and deployment
 staging was removed. Next: normal operational monitoring; no release action is
-pending.
+pending. A follow-up adds the safe `er1 update` helper and replaces obsolete
+`er1 deploy`, `pi-runtime`, and `er1-runtime.service` documentation. It is
+committed and pushed but has not been initialized on the Pi or used for deployment.
+Its one-time production bootstrap must first install the Game Master update-lock
+guard and fresh-state command through the established file-scoped staging process
+while ER1 is idle; normal updates are unavailable until that verified bootstrap.
+The local follow-up passes all 184 Python tests and 12 JavaScript client tests;
+Python, JavaScript, PowerShell, and diff syntax checks pass.

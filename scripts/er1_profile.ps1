@@ -86,6 +86,7 @@ $er1Commands = [ordered]@{
     "log"    = "Tail logs (today/errors/live), tag markers, or extract slices"
     "logs"   = "Pi-side MQTT view (pretty dashboard)"
     "ota"    = "Upload firmware to a device via ota.ps1"
+    "update" = "Safely update the ER1 Game Master and Dashboard runtimes"
     "lock"   = "Control locks: er1 lock <id> open|close OR er1 lock all open|close"
     "light"  = "Control lights: er1 light <light...> on|off|25%"
     "mode"   = "Set game mode: er1 mode maintenance|ingame|prepare|standby"
@@ -186,6 +187,32 @@ function Invoke-Er1Push {
     }
     finally {
         Pop-Location
+    }
+}
+
+function Invoke-Er1Update {
+    param(
+        [switch]$Initialize,
+        [switch]$DryRun
+    )
+
+    $updateScript = Join-Path $erRepoRoot "scripts\update_er1.py"
+    if (-not (Test-Path -LiteralPath $updateScript)) {
+        throw "ER1 update script not found: $updateScript"
+    }
+
+    $updateArgs = @(
+        "-3",
+        $updateScript,
+        "--repo-root", $erRepoRoot,
+        "--target", $er1Pi
+    )
+    if ($Initialize) { $updateArgs += "--initialize" }
+    if ($DryRun) { $updateArgs += "--dry-run" }
+
+    & py @updateArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "ER1 update failed (exit $LASTEXITCODE)."
     }
 }
 
@@ -675,9 +702,11 @@ function er1 {
         [Parameter(Position=1, ValueFromRemainingArguments=$true)]
         [string[]]$cmdArgs,
 
-        # Log-only switches
+        # Log/update switches
         [switch]$live,
         [switch]$errors,
+        [switch]$Initialize,
+        [switch]$DryRun,
         [int]$n = 200
     )
 
@@ -706,6 +735,12 @@ function er1 {
 
             Write-Host "`nOTA examples:" -ForegroundColor Cyan
             Write-Host "  er1 ota images_piano"
+
+            Write-Host "`nUpdate examples:" -ForegroundColor Cyan
+            Write-Host "  er1 update -Initialize -DryRun"
+            Write-Host "  er1 update -Initialize"
+            Write-Host "  er1 update -DryRun"
+            Write-Host "  er1 update"
 
             Write-Host "`nMQTT examples:" -ForegroundColor Cyan
             Write-Host "  er1 mqtt status"
@@ -748,6 +783,13 @@ function er1 {
             & pwsh -NoProfile -File $otaScript -Target $targetArg
 
             if ($LASTEXITCODE -ne 0) { throw "ota.ps1 failed (exit $LASTEXITCODE)." }
+            return
+        }
+        "update" {
+            if ($cmdArgs -and $cmdArgs.Count -gt 0) {
+                throw "Usage: er1 update [-Initialize] [-DryRun]"
+            }
+            Invoke-Er1Update -Initialize:$Initialize -DryRun:$DryRun
             return
         }
         "lock" {

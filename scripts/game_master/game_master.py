@@ -1641,6 +1641,13 @@ class GameMaster:
         cmd = str(payload.get("cmd", "")).strip().lower()
         if not cmd:
             raise ValueError("game/cmd requires cmd")
+        if cmd == "get_state":
+            self.publish_game_state()
+            return
+        phase_commands = {"set_phase", "phase", "set_mode", "mode", "start", "start_game"}
+        if cmd in phase_commands and config.DEPLOYMENT_LOCK_PATH.is_dir():
+            self.publish_debug("OPERATOR_COMMAND_IGNORED_DEPLOYMENT_LOCK", {"cmd": cmd})
+            return
         if not self._operator_guard_matches(payload, cmd):
             return
         if cmd in {"set_phase", "phase"}:

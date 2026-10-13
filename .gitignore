@@ -16,9 +16,7 @@ __pycache__/
 .pio/
 er1/firmware/.pio/
 
-# ---- Pi runtime: logs and local secrets stay on the Pi ----
-er1/pi-runtime/logs/
-er1/pi-runtime/config/local.env
+# ---- Pi/runtime secrets stay local ----
 web/er1_dashboard/.env
 
 # --- Tools: commit code, ignore outputs ---
@@ -27,13 +25,6 @@ er1/tools/out/
 #er1/tools/**/*.png
 #er1/tools/**/*.log
 
-
-# Skeleton placeholders for future rooms
-# (ignore their runtime logs/config if created)
-er2/pi-runtime/logs/
-er2/pi-runtime/config/local.env
-er3/pi-runtime/logs/
-er3/pi-runtime/config/local.env
 
 # ---- Data runtime logs & temporary dumps ----
 er1/logs/**
@@ -45,8 +36,6 @@ web/er1_dashboard/data/summary_deliveries.sqlite3*
 web/er1_dashboard/data/log_archive/
 er1/data/**/*.log.*
 
-# ---- Local helper scripts not tracked in repo ----
-deploy.sh
 er1/firmware/.vscode/c_cpp_properties.json
 er1/firmware/.vscode/c_cpp_properties.json
 

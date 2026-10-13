@@ -44,8 +44,9 @@ alias l='ls -CF'
 # Quick jump to runtime
 alias er='cd ~/er1'
 
-# Tail live system log
-alias er-log='sudo journalctl -fu er1-runtime.service'
+# Tail the active Python runtime logs
+alias er-game-log='sudo journalctl -fu game_master.service'
+alias er-web-log='sudo journalctl -fu er1-web.service'
 ```
 
 ---
@@ -56,8 +57,6 @@ alias er-log='sudo journalctl -fu er1-runtime.service'
 # Live MQTT logs with timestamps
 alias er-mqtt='~/er1/scripts/mqtt_logs.sh live'
 
-# Lock events
-alias er-locks='~/er1/scripts/mqtt_locks.sh'
 ```
 
 ---
@@ -84,16 +83,20 @@ These enable better monitoring and container isolation (future use).
 watch -n1 'ethtool eth0 | grep -E "Link detected|Speed"'
 ```
 
-### 5.2 Restart ER1 runtime
+### 5.2 Restart ER1 Python runtimes
+
+Normal source updates must use `er1 update` from the development machine. For a
+diagnostic manual restart, first confirm phase 0 with no timer or active run:
 
 ```bash
-sudo systemctl restart er1-runtime.service
+curl -fsS http://127.0.0.1:8080/api/state
+sudo systemctl restart game_master.service er1-web.service
 ```
 
 ### 5.3 Check runtime status
 
 ```bash
-systemctl status er1-runtime.service
+systemctl status game_master.service er1-web.service
 ```
 
 ---

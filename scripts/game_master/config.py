@@ -26,6 +26,7 @@ DB_PATH = DATA_DIR / "game_master.sqlite3"
 RUNS_DIR = DATA_DIR / "game_runs"
 ACTIVE_RUN_CHECKPOINT_PATH = DATA_DIR / "active_run_checkpoint.json"
 ACTIVE_RUN_CHECKPOINT_INTERVAL_S = 5.0
+DEPLOYMENT_LOCK_PATH = Path("/home/rudyy/er1/.update-lock")
 
 RIDDLES = [
     "images",

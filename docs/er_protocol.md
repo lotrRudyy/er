@@ -79,7 +79,7 @@ Deployment and tooling live under:
 
 scripts/
 
-scripts/er1_profile.ps1 defines the canonical developer commands (`er1 deploy`, `er1 ota`, `er1 push`).
+scripts/er1_profile.ps1 defines the canonical developer commands (`er1 update`, `er1 ota`, `er1 push`).
 scripts/ is the only supported location; legacy folders have been removed.
 
 Scripts are ER-wide unless explicitly ERx-specific

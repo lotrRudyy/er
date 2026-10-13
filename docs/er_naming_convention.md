@@ -27,7 +27,6 @@ Use kebab-case for all folders at every level.
 ```
 docs/
 scripts/
-pi-runtime/
 firmware/
 web/
 er1/

@@ -69,7 +69,33 @@ This loads all development commands for both PC and laptop.
 er1 push "message"
 ```
 
-The OTA workflow is now the canonical path for Pi runtime updates; use `er1 ota <Dev>`.
+Review the working tree first because this helper stages all changes.
+
+## Game Master and Dashboard update
+
+```powershell
+er1 update -DryRun
+er1 update
+```
+
+The first use requires an exact production baseline:
+
+```powershell
+er1 update -Initialize -DryRun
+er1 update -Initialize
+```
+
+Before that first initialization, the Game Master's update-lock guard and fresh
+state command need one final file-scoped bootstrap deployment as documented in
+`docs/workflow.md`. The helper will not weaken its state checks to bootstrap
+itself.
+
+`er1 update` deploys only committed Game Master and Dashboard runtime files. It
+checks remote drift and idle state, stages and validates files, creates a rollback
+archive, fences the operator start path, restarts both Python services, and runs
+production health checks. It does not deploy firmware, secrets, databases, logs,
+virtual environments, or dependency changes. See `docs/workflow.md` for the
+safety boundaries.
 
 ---
 
@@ -176,20 +202,21 @@ Both files should always reflect the canonical commands defined in `scripts/er1_
 ```
 er/
   docs/
-    er/
   er1/
     firmware/
-    pi-runtime/
-      scripts/
-      systemd/
-      logs/
-      config/
+    data/
+    tools/
   er2/
   er3/
   scripts/
     er1_profile.ps1
-    codex-commit.ps1
+    update_er1.py
+    game_master/
+    mqtt_logs.sh
+    ota_publish.py
+  tests/
   web/
+    er1_dashboard/
 ```
 
 ---
@@ -200,7 +227,7 @@ This README + workflow + protocol now form the **complete documentation triad**.
 
 - PC & laptop workflows unified
 - OTA usage standardized (`pwsh ota.ps1 -Target <Dev>`)
-- Deployment documented
+- Safe Game Master/Dashboard updates standardized (`er1 update`)
 - Logging documented
 - Lock IDs + behavior standardized
 - Protocol contradictions resolved

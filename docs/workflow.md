@@ -1,402 +1,242 @@
-# ER System – Full Developer Workflow
+# ER System Developer Workflow
 
-This document describes the complete development, deployment, and maintenance workflow for the Escape Room control system.
-It matches the canonical ER1 Protocol and defines the workflow used on both the PC and laptop development environments.
+This document describes the current ER1 development, runtime update, firmware
+OTA, and maintenance workflow. The checked-out repository is the source of truth.
 
----
+## 1. Repository Structure
 
-# 1. Repository Structure
-
-```
+```text
 er/
-  docs/
-    er/
-
-  scripts/             # PowerShell and deployment tooling (PC + laptop)
-    er1_profile.ps1
-    codex-commit.ps1
-
-  er1/                 # PlatformIO firmware for ER1 devices
-    firmware/
-    pi-runtime/
-      scripts/
-      systemd/
-      logs/
-      config/
-
-  er2/
-    firmware/
-    pi-runtime/
-
-  er3/
-    firmware/
-    pi-runtime/
+  docs/                     # Protocol and operational documentation
+  er1/
+    firmware/               # PlatformIO firmware and OTA entrypoint
+    data/                   # Local calibration and diagnostic data
+    tools/                  # ER1 development tools
+  scripts/
+    er1_profile.ps1         # Developer command profile
+    update_er1.py           # Safe Game Master/Dashboard updater
+    game_master/            # Game Master runtime source
+    mqtt_logs.sh            # MQTT logging utility
+    ota_publish.py          # Pi-side OTA publisher source
+  tests/                    # Python and JavaScript regression tests
+  web/
+    er1_dashboard/          # Dashboard runtime source
 ```
 
-scripts/ is the single source of truth for all developer-side tools.
+The production Pi is not a Git checkout. Runtime files are copied from a clean,
+pushed local `main` checkout to `/home/rudyy/er1`.
 
----
+## 2. Development Machine Setup
 
-# 2. Development Machine Setup
+PowerShell 7, Git, Python 3, and SSH access to `rudyy@100.108.1.80` are required.
+The PowerShell profile loads:
 
-## PowerShell 7
-Required.
-VS Code must use:
-
-```
-C:\Program Files\PowerShell\7\pwsh.exe
+```powershell
+. "$HOME\Documents\Escape Room\er\scripts\er1_profile.ps1"
 ```
 
-## VS Code Profile
+Supported repo roots are:
 
-File:
+- PC: `C:\Users\rudol\Documents\Escape Room\er`
+- Laptop: `$HOME\Documents\er`
 
+Run `er1 help` to list the profile commands. There is no `er1 deploy` command and
+no active `er1/pi-runtime` tree.
+
+## 3. Source Control
+
+`er1 push "message"` stages, commits, and pushes from the repository root.
+Review `git status` and the diff first because the command stages all changes.
+
+Runtime updates accept only:
+
+- branch `main`
+- a clean working tree
+- `HEAD` equal to its configured upstream
+- a remote baseline marker that is an ancestor of `HEAD`
+
+## 4. Game Master And Dashboard Updates
+
+### 4.1 First-Time Baseline
+
+The updater tracks the last verified source commit in
+`/home/rudyy/er1/.deploy-source-commit`. Initialize it only when the deployed
+managed files already match the current commit exactly:
+
+The initial rollout of this updater is a one-time bootstrap exception: the new
+Game Master `get_state` command and deployment-lock guard must first be copied by
+the existing reviewed, file-scoped staging procedure while ER1 is idle. Restart
+and verify both services, then initialize the marker. The updater intentionally
+does not fall back to stale retained state or bypass its own guard to deploy that
+guard. After this bootstrap, all later runtime changes use `er1 update`.
+
+```powershell
+er1 update -Initialize -DryRun
+er1 update -Initialize
 ```
-$HOME\Documents\PowerShell\Microsoft.VSCode_profile.ps1
+
+The dry run is mandatory operational practice. Initialization does not copy or
+restart runtime files; it only writes the marker after exact hash and idle-state
+verification.
+
+### 4.2 Normal Update
+
+```powershell
+er1 update -DryRun
+er1 update
 ```
 
-It loads `er1_profile.ps1` from one of two repo roots:
+The updater:
 
-- **PC:** `C:\Users\rudol\Documents\Escape Room\er`
-- **Laptop:** `C:\Users\Rudy\Documents\er`
+1. Requires a clean, pushed `main` checkout.
+2. Confirms Dashboard `/api/state` is complete and healthy, then requests a fresh
+   `game/dashboard_state` response from the Game Master. Both must report phase
+   0, no timer, no live run, and healthy persistence.
+3. Reads the remote source marker and refuses non-ancestor updates.
+4. Compares every managed production file with its expected Git blob and stops
+   on missing files or manual remote drift.
+5. Computes only the managed runtime changes between the marker and `HEAD`.
+6. Stages changed files under `/home/rudyy/er1/deploy-staging/`.
+7. Verifies staged Git hashes, Python syntax, and JavaScript syntax.
+8. Rechecks both state sources and creates a file-scoped rollback archive under
+   `/home/rudyy/er1/deploy-backups/`.
+9. Stops the Dashboard to close the normal operator start path, rechecks the
+   fresh authoritative Game Master state, then stops the Game Master.
+10. Installs or removes only the committed managed files and starts Game Master
+    before the Dashboard.
+11. Verifies both services, Dashboard HTTP routes, state, persistence, deployed
+    hashes, deletions, and error-priority journals.
+12. Advances the marker and removes staging only after all checks pass.
 
-The profile provides all ER commands (`er1 push`, `er1 deploy`, `er1 ota`, etc.).
+Actual updates use an exclusive remote lock so two development machines cannot
+interleave deployments. While that lock exists, the Game Master rejects all
+phase/start commands, including direct MQTT/profile commands. If post-restart
+verification fails, rollback first stops
+the Dashboard and proceeds only when authoritative Game Master state is idle. It
+restores both files and the old source marker, restarts both services, and verifies
+the old hashes and state. Unverifiable failures preserve staging and the rollback
+archive instead of forcing another disruptive action.
 
----
+### 4.3 Managed Files
 
-# 3. Commands Defined in `er1_profile.ps1`
+Game Master mappings:
 
-## 3.1 `er1 push`
-Stages → commits → pushes from the repo root. Prints the current branch and
-upstream, sets the upstream to `origin/<branch>` if missing, and refuses to run
-outside the repo.
+- `scripts/game_master/**/*.py` -> `/home/rudyy/er1/scripts/game_master/`
+- `scripts/game_master/requirements.txt` -> the same remote component
 
-```
-er1 push "updated chess fsm"
-```
+Dashboard mappings:
 
-## 3.2 `er1 deploy`
-Deploys the Pi runtime (`er1/pi-runtime`) to `/home/rudyy/er1`.
+- `web/er1_dashboard/app.py`, `log_archive.py`,
+  `hint_templates.defaults.json`, and `requirements.txt` ->
+  `/home/rudyy/er1/web/`
+- tracked `static/` and `templates/` files -> matching directories below
+  `/home/rudyy/er1/web/`
 
-```
-er1 deploy           # runtime mode (scripts/systemd/docs/config template)
-er1 deploy full      # mirror the whole pi-runtime tree
-```
+The updater deliberately excludes `.env`, databases, logs, hint/operator state,
+virtual environments, backups, `.bak`/`.orig` files, firmware, and unrelated Pi
+scripts. It never performs a whole-tree `rsync --delete`.
 
-### Deployment behavior
+Changes to either `requirements.txt` are refused. Dependency or virtual-
+environment migrations need a separate reviewed procedure because a file
+rollback cannot safely undo installed packages.
 
-- Uses `rsync -avz --delete` if available, `scp -r` fallback otherwise.
-- Syncs scripts/, systemd/, docs/, and config/ (skipping `config/local.env`).
-- Leaves `/home/rudyy/er1/logs/` untouched.
-- Re-applies execute bits on the remote runtime tree.
-- Prints each rsync/scp command before running it so you know what will happen.
-- Follow deployment with `er1 push "<msg>"` so Pi + Git stay aligned.
+### 4.4 Services And Health Endpoints
 
----
+| Component | Source | Production path | Service |
+| --- | --- | --- | --- |
+| Game Master | `scripts/game_master/` | `/home/rudyy/er1/scripts/game_master/` | `game_master.service` |
+| Dashboard | `web/er1_dashboard/` | `/home/rudyy/er1/web/` | `er1-web.service` |
 
-## 3.3 `er1 ota`
-Triggers OTA update for a deployment target using the canonical OTA map inside `er1/firmware/ota.ps1`.
+The Dashboard listens on port `8080`. Read-only health routes are `/`, `/games`,
+`/admin`, and `/api/state`.
 
-```
+## 5. Firmware OTA
+
+Firmware OTA is separate from `er1 update`:
+
+```powershell
 er1 ota <target>
 ```
 
 Examples:
 
-- `er1 ota images_piano` (publishes UPDATE to `images_piano/sys/cmd`)
-- `er1 ota maglock` (canonical file `/node_firmware/maglock.bin`)
-
-The map aligns PlatformIO env, firmware filename, MQTT command topic, and verifier nodes. OTA artifact lives on the Pi at `/home/rudyy/er1/node_firmware/<FirmwareName>`.
-
----
-
-## 3.4 Logging Commands
-
-### Live log stream
-```
-er1 log -live
+```powershell
+er1 ota images_piano
+er1 ota maglock
 ```
 
-### Filter for device
-```
+The canonical target map lives in `er1/firmware/ota.ps1`. It builds the selected
+PlatformIO environment, uploads the firmware to
+`/home/rudyy/er1/node_firmware/`, publishes through
+`/home/rudyy/er1/scripts/ota_publish.py`, and verifies the expected nodes.
+Increment `FW_VERSION` for every firmware release.
+
+## 6. Logs And Diagnostics
+
+Common commands:
+
+```powershell
+er1 log
 er1 log chess
+er1 log -live
+er1 log -errors
+er1 log chess --save
+er1 logs pretty
+er1 mqtt status
 ```
 
-### All logs through Pi’s logging system
-All logs originate from `/home/rudyy/er1/scripts/mqtt_logs.sh`.
+Production MQTT logs are stored as
+`/home/rudyy/er1/logs/er1-DD.MM.YYYY.log`. The active logging service is
+`mqtt-log.service`. `scripts/mqtt_logs.sh` is not part of `er1 update`; changes
+to the logger or its systemd unit require a separate reviewed deployment.
 
----
+## 7. Troubleshooting
 
-## 3.5 Lock Commands
-High-level helpers that publish to:
+### `er1 update` says the marker is missing
 
-```
-maglock/lock/<id>/cmd
-```
+Run `er1 update -Initialize -DryRun`. If hashes differ, do not initialize or
+overwrite files. Resolve the reported drift first.
 
-Available lock IDs:
+### Remote runtime drift
 
-- `images`
-- `r2`
-- `r3`
-- `slider`
-- `knocking`
+The updater prints every mismatching path with expected and actual Git hashes.
+Determine whether the Pi file is an intentional hotfix before replacing it.
 
-Commands:
+### Update lock already exists
 
-```
-er1-lock-images
-er1-lock-r2
-er1-lock-r3
-er1-lock-slider
-er1-lock-knocking
-```
+Another update is running or a previous updater terminated unexpectedly. Verify
+that no update process is active and inspect `/home/rudyy/er1/.update-lock/owner`
+before manually removing the stale lock.
 
-Legacy IDs `door_to_r2` and `door_to_r3` are deprecated.
+### Game is not idle
 
----
+Wait until phase 0 with no timer and no run. Do not bypass the gate or restart
+services during Preparation or Live.
 
-# 4. Deployment Workflow in Detail
+### `requirements.txt` changed
 
-## 4.1 What gets deployed
+Review the package change and plan the virtual-environment migration separately.
+Do not force it through the file updater.
 
-Pi runtime directory after deploy:
+### Failed post-restart health check
 
-```
-/home/rudyy/er1/
-  scripts/
-  systemd/
-  node_firmware/
-  docs/
-  config/local.env      # preserved
-  logs/                 # preserved
-```
+Read the updater output. If it could prove idle state, it attempts file rollback
+and service restart. Otherwise leave the game untouched and diagnose using the
+retained staging directory, rollback archive, `systemctl status`, and
+`journalctl`.
 
-`er1 deploy` (runtime mode) replaces only files under:
+### OTA failure
 
-- `/scripts/`
-- `/systemd/`
-- `/docs/`
-- `config/local.env.example`
+Check the target name, built firmware, Pi firmware file, ESP connectivity, and
+the OTA publisher output. Do not use `er1 update` for firmware.
 
-It does **not** delete logs or overwrite `config/local.env`.
+## 8. Operating Rules
 
----
-
-## 4.2 Deploy Command (`er1 deploy`)
-
-Deploy steps:
-
-1. Detect correct repo root (PC or laptop) and Pi target via `$er1Pi`.
-2. Validate the Pi is reachable (`ssh $er1Pi`).
-3. Sync runtime using `rsync -avz --delete` (or `scp -r` fallback when rsync is missing).
-4. Re-apply execute bits on `~/er1/er1` and scripts/.
-5. Print a reminder to commit+push so Git matches what was deployed.
-
-Run deploy before using OTA, because Pi-side publisher must exist.
-
-`er1 deploy full` mirrors the entire `pi-runtime/` tree with the same safeguards.
-
-If services need a bounce after copying, restart them manually, e.g.:
-
-```
-ssh rudyy@100.108.1.80 "sudo systemctl restart er1-runtime.service"
-```
-
----
-
-# 5. OTA Workflow
-
-OTA tool:
-
-```
-firmware/ota.ps1
-```
-
-Correct usage:
-
-```
-pwsh ota.ps1 -Target <target>
-```
-
-Example:
-
-```
-pwsh ota.ps1 -Target images_piano
-```
-
-OTA steps:
-
-1. Resolve target via the canonical map (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames, VerifyNodes). Build the PlatformIO env unless `-NoBuild` is set.
-2. Upload `.pio/build/<Env>/firmware.bin` to `/home/rudyy/er1/node_firmware/<FirmwareName>` on the Pi and create any `LegacyFirmwareNames` copies (e.g., `maglock_ctrl.bin`).
-3. From the Pi, verify `http://192.168.0.10/node_firmware/<FirmwareName>` responds with HTTP 200 + Content-Length.
-4. Run `~/er1/scripts/ota_publish.py --dev <Dev> --cmd-node <CmdNode>/sys --version <FW_VERSION> --target <NodeId> --url http://192.168.0.10/node_firmware/<FirmwareName> --file /home/rudyy/er1/node_firmware/<FirmwareName>` so `UPDATE {json}` is published to `<CmdNode>/sys/cmd` with sha256 + size computed on the Pi (no PSK/HMAC).
-5. ESP32 downloads OTA over HTTP, reboots, and resumes heartbeats. `ota_publish.py` verifies the deployment node returns with the announced firmware version.
-
----
-
-# 6. Logging System (MQTT → File)
-
-Logging is centralized on ER1 Pi.
-
-Logs stored at:
-
-```
-/home/rudyy/er1/logs/er1-DD.MM.YYYY.log
-```
-
-Format:
-
-```
-YYYY.MM.DD HH:MM:SS.mmm topic payload
-```
-
-Timestamp generated by:
-
-```
-date +"%Y.%m.%d %H:%M:%S.%3N"
-```
-
-Logging controller script:
-
-```
-/home/rudyy/er1/scripts/mqtt_logs.sh
-```
-
-Commands:
-
-```
-mqtt_logs.sh daemon
-mqtt_logs.sh live
-mqtt_logs.sh tail
-mqtt_logs.sh grep <pattern>
-```
-
-Systemd unit:
-
-```
-er1-mqtt-log.service
-```
-
----
-
-# 7. Runtime Systemd Unit
-
-ER1 runtime service:
-
-```
-/home/rudyy/er1/systemd/er1-runtime.service
-```
-
-Starts the runtime binary and supervises it.
-
-After deployment, this unit is restarted automatically.
-
----
-
-# 8. Adding a New Device
-
-Steps:
-
-1. Add a PlatformIO environment to `er1/firmware/platformio.ini`
-2. Add the deployment to the OTA map in `er1/firmware/ota.ps1` (Env, Dev, CmdNode, FirmwareName, optional LegacyFirmwareNames + VerifyNodes)
-3. Add lock or diagnostic helpers in `er1_profile.ps1` if needed
-4. Deploy Pi runtime if systemd scripts or config change
-5. Perform OTA with:
-
-```
-er1 ota <Dev>
-```
-
----
-
-# 9. Troubleshooting
-
-### Profile not loading
-- VS Code using PowerShell 5.1
-- Wrong repo path
-- Wrong profile path
-
-### `er1 push` not found
-`er1_profile.ps1` didn't load - fix VS Code profile.
-
-### `er1 deploy` fails
-- Pi unreachable
-- Wrong SSH key or password
-- Use scp fallback on laptop (rsync missing)
-
-### OTA fails
-- Wrong target name (must match OTA map keys)
-- Missing `/home/rudyy/er1/node_firmware/<FirmwareName>` on the Pi
-- Firmware path not copied or legacy alias missing
-- ESP offline
-
-### Logs missing
-- MQTT broker not running
-- er1-mqtt-log.service not running
-- Wrong date format in log script
-
----
-
-## Manual update on Pi: MQTT logging runtime files
-
-Use these steps after the log path move to `/home/rudyy/er1/logs/` when you need to refresh only the logging runtime files (no deploy helpers used).
-
-1) Copy updated files from this repo to the Pi (from Windows/dev box, repo root):
-
-```bash
-scp er1/pi-runtime/scripts/mqtt_logs.sh rudyy@100.108.1.80:/home/rudyy/er1/scripts/mqtt_logs.sh
-scp er1/pi-runtime/systemd/er1-mqtt-log.service rudyy@100.108.1.80:/home/rudyy/er1/systemd/er1-mqtt-log.service
-ssh rudyy@100.108.1.80 "chmod +x /home/rudyy/er1/scripts/mqtt_logs.sh && sudo cp /home/rudyy/er1/systemd/er1-mqtt-log.service /etc/systemd/system/er1-mqtt-log.service"
-```
-
-Optional if rsync is available on both ends (behaves like deploy tooling):
-
-```bash
-rsync -avz er1/pi-runtime/scripts/mqtt_logs.sh rudyy@100.108.1.80:/home/rudyy/er1/scripts/
-rsync -avz er1/pi-runtime/systemd/er1-mqtt-log.service rudyy@100.108.1.80:/home/rudyy/er1/systemd/
-ssh rudyy@100.108.1.80 "chmod +x /home/rudyy/er1/scripts/mqtt_logs.sh && sudo cp /home/rudyy/er1/systemd/er1-mqtt-log.service /etc/systemd/system/er1-mqtt-log.service"
-```
-
-Notes:
-- `er1-mqtt-log.service` must land in `/etc/systemd/system/er1-mqtt-log.service` (sudo required).
-- Script path must stay `/home/rudyy/er1/scripts/mqtt_logs.sh` to match `ExecStart`.
-- `chmod +x` keeps the service runnable.
-
-2) Reload + restart systemd service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart er1-mqtt-log.service
-sudo systemctl status er1-mqtt-log.service --no-pager
-```
-
-3) Validate log directory and output:
-
-```bash
-ls -lah /home/rudyy/er1/logs
-journalctl -u er1-mqtt-log.service -n 200 --no-pager
-```
-
-Expected:
-- service is active/running
-- /home/rudyy/er1/logs exists
-- log files appear/rotate
-
-If broken:
-- permission errors → check ownership and mkdir pre-start
-- wrong paths → check ExecStart and script location
-- missing directory → ensure mkdir -p step exists / ExecStartPre used
-
-# 10. Best Practices
-# 10. Best Practices
-
-- Commit before deploying.
-- Increase FW_VERSION on each firmware change.
-- Use `er1 log -live` right after OTA.
-- Avoid manual edits on the Pi runtime folder — always deploy.
-- Keep repo paths consistent on PC and laptop.
-
----
-
-_End of document._
+- Commit, review, test, and push before any runtime update.
+- Always run `er1 update -DryRun` immediately before `er1 update`.
+- Never update or restart while a game is active.
+- Do not edit managed runtime files directly on the Pi.
+- Never overwrite `.env`, databases, logs, or virtual environments during a
+  source update.
+- Keep firmware OTA and Python/web runtime updates separate.
+- Preserve the printed rollback path in the release record.

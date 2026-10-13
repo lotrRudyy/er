@@ -67,6 +67,7 @@ Raw logging excludes `time/state` by default; the pretty view subscribes to it f
 
 - Daily logging helpers live in `scripts/mqtt_logs.sh`. Use `daemon`, `live`, `tail`, or `grep` subcommands.
   - `pretty` renders the human dashboard (hb/time + OTA merge).
-- Lock helpers live in `scripts/mqtt_locks.sh` with `open`/`close` actions.
-- Source `scripts/aliases_er1.sh` to load the `log_*` and `lock_*` aliases (`log_live`, `log_tail`, `log_grep`, `log_help`, `lock_open`, `lock_close`).
-- For Pi-side file refresh (log path now `/home/rudyy/er1/logs/`), see the manual steps in `docs/workflow.md#manual-update-on-pi-mqtt-logging-runtime-files`.
+- Use the developer-profile commands `er1 lock <id> open|close` for lock control
+  and `er1 log`/`er1 logs pretty` for log access.
+- Logger or systemd changes require a separate reviewed deployment; `er1 update`
+  intentionally manages only Game Master and Dashboard files.

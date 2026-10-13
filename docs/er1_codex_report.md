@@ -1,5 +1,9 @@
 # ER1 Codex Report - 2025-12-05 08:45
 
+> Historical report. Paths, aliases, and commands below describe the repository
+> at that date and are not current operational instructions. Use
+> `docs/workflow.md` and `er1 help` for the active workflow.
+
 ## Markdownlint Scope + Fixes
 
 - Scoped markdownlint to only `.md` files via `.markdownlint.json` (`default: true`, MD013/MD033/MD041 disabled, ignore all non-Markdown).
