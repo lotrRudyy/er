@@ -351,14 +351,21 @@ bootstrap: both services active, phase 0, no timer/run, all 8 nodes online,
 Dashboard endpoints HTTP 200, and no error-priority journal entries. Next: normal
 operational monitoring; use `er1 update --dry-run` before any future update.
 
-Local Dashboard follow-up (`2026-10-13`, not committed, pushed, or deployed):
-live timers now remain fresh across retained state, polling, and phase-8 parallel
-riddles; Stars uses the exact firmware position DTO; and the approved control-room,
-Preparation, Stars, readability, and mobile layout changes are implemented. All
-186 Python tests and 16 JavaScript client tests pass, along with Python/JavaScript
-syntax and diff checks. An isolated local headless-Chrome review covered
-Preparation and Stars at 1440x900 and 393x659, timer refresh, scrolling, and the
-final lighting geometry. It found no remaining clipping, overlap, document
-overflow, browser error, failed request, or external request. All owned browser,
-server, profile, database, runner, and screenshot artifacts were removed. Next:
-commit, push, deploy, and verify production health through the safe update flow.
+Dashboard follow-up deployment (`2026-10-13`, commit `0b55284b`): live timers
+remain fresh across retained state, polling, and phase-8 parallel riddles; Stars
+uses the exact firmware position DTO; and the approved control-room, Preparation,
+Stars, readability, and mobile layout changes are deployed. All 186 Python tests
+and 16 JavaScript client tests pass, along with Python/JavaScript syntax and diff
+checks. The isolated local headless-Chrome review covered Preparation and Stars at
+1440x900 and 393x659, timer refresh, scrolling, and final lighting geometry without
+remaining clipping, overlap, document overflow, browser error, failed request, or
+external request. `er1 update -DryRun` identified exactly five managed runtime
+changes; the verified update advanced the production marker to `0b55284b` and
+created rollback archive
+`/home/rudyy/er1/deploy-backups/pre-0b55284b-20261013T152041Z-ac323902.tar.gz`.
+The post-update Dry-Run reports no runtime changes. Both services are active with
+zero service restarts, Dashboard `/`, `/games`, `/admin`, and `/api/state` return
+200, persistence is healthy, the room is idle in Maintenance with no run or timer,
+all 8 nodes are online, and no error-priority journal entry occurred after update.
+All owned browser, server, profile, database, runner, and screenshot artifacts were
+removed. Next: normal operational monitoring.
