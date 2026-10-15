@@ -441,8 +441,8 @@ checks. ER1 Admin content and clean routing also loaded, but its original asset 
 used the invalid fixture. Spielkontrolle desktop/mobile therefore remains covered by
 the 188 Python and 19 JavaScript tests rather than a final corrected browser render.
 No external HTTP(S) request occurred, and all owned browser/server/profile/fixture
-artifacts were removed. Commit/push, runtime update, and production checks have not
-been performed. A separately approved three-load follow-up loaded Spielleitung at
+artifacts were removed. A separately approved three-load follow-up loaded
+Spielleitung at
 1440x700 and 393x659 plus ER1 Admin at 1440x700 exactly once. All documents, actual
 ER1 CSS/JavaScript, favicon, and read-only APIs returned 200 through the clean prefix;
 all 23 browser requests stayed on loopback under `/admin/game-master`, and every
@@ -453,3 +453,16 @@ runner's computed-style evaluator failed because its helper was outside the
 serialized browser scope. The fixed three-load limit prohibited retry, so exact
 desktop/mobile geometry remains offline-verified rather than finally confirmed by
 computed browser values. All follow-up processes and artifacts were removed.
+
+Release status (`2026-10-15`): committed as `eb06da98`, marked with the shared
+`snapshot-2026-10-15-booking-admin-er1` tag, pushed, and deployed before the website.
+The mandatory dry run identified exactly the nine managed Dashboard writes. The
+verified update ran only while ER1 was idle in phase 0 without a timer or run and
+with healthy persistence, advanced the production marker to `eb06da98`, and created
+rollback archive
+`/home/rudyy/er1/deploy-backups/pre-eb06da98-20261015T124130Z-eb7bbdef.tar.gz`.
+The post-update dry run reports no runtime changes. Both services are active;
+Dashboard `/`, `/games`, `/admin`, `/api/state`, and `/static/url-prefix.js` return
+200; staging is clean; and the deployed website reaches ER1 state with 200. No
+firmware, secrets, databases, logs, or virtual environments were deployed. Next:
+normal operational monitoring.
