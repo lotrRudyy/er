@@ -137,27 +137,107 @@ def website_api_config() -> tuple[str, str]:
     return base, token
 
 
-WEBSITE_ADMIN_ROUTES = (
-    ("overview", "Übersicht", "/admin"),
-    ("bookings", "Buchungen", "/admin/bookings"),
-    ("vouchers", "Gutscheine", "/admin/vouchers"),
-    ("emails", "E-Mails", "/admin/emails"),
-    ("statistics", "Statistiken", "/admin/statistiken"),
-    ("game-statistics", "Spielstatistiken", "/admin/spielstatistiken"),
-    ("game-master", "Spielleitung", "/admin/game-master"),
-    ("users", "Benutzer", "/admin/users"),
-    ("rate-limits", "Anfragelimits", "/admin/rate-limits"),
-    ("profile", "Profil", "/admin/profile"),
+LEGACY_DASHBOARD_PREFIX = "/admin/game-master/proxy"
+WEBSITE_DASHBOARD_PREFIX = "/admin/game-master"
+WEBSITE_DASHBOARD_TAB_PATHS = {
+    "control": WEBSITE_DASHBOARD_PREFIX,
+    "games": f"{WEBSITE_DASHBOARD_PREFIX}/games",
+    "admin": f"{WEBSITE_DASHBOARD_PREFIX}/admin",
+}
+WEBSITE_ADMIN_ROUTE_GROUPS = (
+    ("Spielleitung", (
+        ("game-master", "Spielkontrolle", "/admin/game-master"),
+        ("game-master-games", "Alle Spiele", "/admin/game-master/games"),
+        ("game-master-admin", "Admin", "/admin/game-master/admin"),
+    )),
+    ("Buchungen", (
+        ("bookings", "Kalender", "/admin/bookings"),
+        ("vouchers", "Gutscheine", "/admin/vouchers"),
+        ("booking-settings", "Einstellungen", "/admin/bookings#settings"),
+    )),
+    ("Marketing", (
+        ("statistics", "Statistiken", "/admin/marketing/statistiken"),
+        ("game-statistics", "Spielstatistiken", "/admin/marketing/spielstatistiken"),
+        ("marketing-post", "IG Post", "/admin/marketing/ig-post"),
+        ("marketing-stories", "Top-10 Story", "/admin/marketing/top10-story"),
+        ("marketing-insights", "IG Statistik", "/admin/marketing/instagram-statistik"),
+    )),
+    ("Admin", (
+        ("users", "Benutzer", "/admin/users"),
+        ("emails", "E-Mails", "/admin/emails"),
+        ("rate-limits", "Anfragelimits", "/admin/rate-limits"),
+        ("profile", "Profil", "/admin/profile"),
+    )),
 )
 
 
-def website_admin_navigation() -> list[dict[str, str]]:
+def _normalise_forwarded_prefix(value: Any) -> str:
+    prefix = str(value or "").strip().rstrip("/")
+    if not prefix or prefix == "/":
+        return ""
+    if (
+        not prefix.startswith("/")
+        or prefix.startswith("//")
+        or "//" in prefix
+        or any(character in prefix for character in ("?", "#", "\\", "\r", "\n", "\0"))
+        or any(segment in {".", ".."} for segment in prefix.split("/"))
+    ):
+        return ""
+    return prefix
+
+
+def _request_url_prefix() -> str:
+    return _normalise_forwarded_prefix(request.headers.get("X-Forwarded-Prefix", ""))
+
+
+def _prefix_url(path: str, prefix: str) -> str:
+    value = str(path or "")
+    normalized_prefix = _normalise_forwarded_prefix(prefix)
+    # The existing website proxy still rewrites response bodies and Location
+    # headers itself. Leave legacy responses root-relative to avoid two prefixes.
+    if normalized_prefix == LEGACY_DASHBOARD_PREFIX:
+        return value
+    if not normalized_prefix or not value.startswith("/") or value.startswith("//"):
+        return value
+    pathname = re.split(r"[?#]", value, maxsplit=1)[0]
+    known_prefixes = {normalized_prefix, LEGACY_DASHBOARD_PREFIX, WEBSITE_DASHBOARD_PREFIX}
+    if any(pathname == item or pathname.startswith(f"{item}/") for item in known_prefixes):
+        return value
+    return f"{normalized_prefix}{value}"
+
+
+def dashboard_url_for(endpoint: str, **values: Any) -> str:
+    return _prefix_url(url_for(endpoint, **values), _request_url_prefix())
+
+
+def dashboard_tab_navigation(prefix: str) -> dict[str, str]:
+    normalized_prefix = _normalise_forwarded_prefix(prefix)
+    if not normalized_prefix:
+        return {"control": "/", "games": "/games", "admin": "/admin"}
+    if normalized_prefix == LEGACY_DASHBOARD_PREFIX:
+        return {"control": "/", "games": "/games", "admin": "/admin"}
+    if normalized_prefix == WEBSITE_DASHBOARD_PREFIX:
+        return dict(WEBSITE_DASHBOARD_TAB_PATHS)
+    return {
+        "control": _prefix_url("/", normalized_prefix),
+        "games": _prefix_url("/games", normalized_prefix),
+        "admin": _prefix_url("/admin", normalized_prefix),
+    }
+
+
+def website_admin_navigation() -> list[dict[str, Any]]:
     base, _token = website_api_config()
     parsed = urllib.parse.urlsplit(base or "https://escapeschenna.com")
     origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://escapeschenna.com"
     return [
-        {"id": item_id, "label": label, "url": f"{origin}{path}"}
-        for item_id, label, path in WEBSITE_ADMIN_ROUTES
+        {
+            "label": group_label,
+            "items": [
+                {"id": item_id, "label": label, "url": f"{origin}{path}"}
+                for item_id, label, path in items
+            ],
+        }
+        for group_label, items in WEBSITE_ADMIN_ROUTE_GROUPS
     ]
 
 
@@ -3066,6 +3146,18 @@ _last_requested_log_levels_lock = threading.RLock()
 _log_level_publish_locks = {node: threading.Lock() for node in LOG_NODE_IDS}
 _default_log_levels_published = False
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"), static_folder=str(BASE_DIR / "static"))
+
+
+@app.context_processor
+def dashboard_template_urls() -> dict[str, Any]:
+    prefix = _request_url_prefix()
+    return {
+        "dashboard_url": dashboard_url_for,
+        "dashboard_url_prefix": prefix,
+        "dashboard_tab_urls": dashboard_tab_navigation(prefix),
+    }
+
+
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
 if hasattr(mqtt_client, "suppress_exceptions"):
     mqtt_client.suppress_exceptions = True
@@ -6439,7 +6531,7 @@ def index() -> str:
         diagnostic_nodes=LOG_NODE_LABELS.items(),
         log_node_labels=LOG_NODE_LABELS,
         log_capabilities=LOG_NODE_CAPABILITIES,
-        website_admin_links=website_admin_navigation(),
+        website_admin_groups=website_admin_navigation(),
     )
 
 
@@ -6451,7 +6543,7 @@ def admin_dashboard() -> str:
         diagnostic_nodes=LOG_NODE_LABELS.items(),
         log_node_labels=LOG_NODE_LABELS,
         log_capabilities=LOG_NODE_CAPABILITIES,
-        website_admin_links=website_admin_navigation(),
+        website_admin_groups=website_admin_navigation(),
     )
 
 
@@ -6510,7 +6602,7 @@ def game_viewer() -> str:
         serialize_db_value=serialize_db_value,
         editable_tables=EDITABLE_TABLES,
         raw_rows=raw_rows,
-        website_admin_links=website_admin_navigation(),
+        website_admin_groups=website_admin_navigation(),
     )
 
 
@@ -6521,16 +6613,16 @@ def delete_game(game_id: str) -> Any:
     if not game_id:
         if fetch_request:
             return jsonify({"ok": False, "error": "Spiel-ID fehlt."}), 400
-        return redirect(url_for("game_viewer", error="Spiel-ID fehlt."))
+        return redirect(dashboard_url_for("game_viewer", error="Spiel-ID fehlt."))
     try:
         move_game_to_removed(game_id)
         if fetch_request:
             return jsonify({"ok": True, "message": "Spiel wurde gelöscht und in die Ablage verschoben."})
-        return redirect(url_for("game_viewer", message=f"Spiel {game_id} wurde nach {REMOVED_GAMES_DIR} verschoben."))
+        return redirect(dashboard_url_for("game_viewer", message=f"Spiel {game_id} wurde nach {REMOVED_GAMES_DIR} verschoben."))
     except Exception as exc:
         if fetch_request:
             return jsonify({"ok": False, "error": str(exc)}), 400
-        return redirect(url_for("game_viewer", error=str(exc), game_id=game_id))
+        return redirect(dashboard_url_for("game_viewer", error=str(exc), game_id=game_id))
 
 @app.post("/api/db/update")
 def api_db_update() -> Any:

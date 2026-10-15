@@ -216,6 +216,23 @@ textarea {
   background: rgba(188, 111, 17, 0.17);
 }
 
+.operator-admin-group {
+  min-width: 0;
+}
+
+.operator-admin-group-label {
+  margin: 0 0 5px;
+  color: #a98b5e;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.operator-admin-group-links {
+  display: grid;
+  gap: 5px;
+}
+
 .operator-brand {
   min-width: 0;
   display: inline-flex;
@@ -2073,6 +2090,10 @@ textarea {
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
+}
+
+.dashboard-sticky-top {
+  display: contents;
 }
 
 .global-feedback-v6,
@@ -5261,6 +5282,155 @@ button:disabled {
   }
 
   .current-riddle-facts {
+    overflow: visible;
+  }
+}
+
+/* ER1 integration/readability fence: these rules must remain after compact layout rules. */
+.images-buttons .status-badge {
+  min-width: 76px;
+  min-height: 32px;
+  display: inline-grid;
+  place-items: center;
+  text-align: center;
+}
+
+.hint-template-list p {
+  font-size: 22px;
+}
+
+.current-riddles-grid:has(> :nth-child(2)) .hint-template-list p {
+  font-size: 20px;
+}
+
+.hint-card-meta span {
+  font-size: 16px;
+}
+
+.hint-template-empty {
+  font-size: 20px;
+  line-height: 1.45;
+}
+
+.node-status-button {
+  font-size: 14px;
+}
+
+.node-status-button strong {
+  font-size: 14px;
+}
+
+.current-riddle-action-section > .solve-btn,
+.current-riddle-action-section > .skip-btn {
+  min-height: 54px;
+  font-size: 20px;
+}
+
+@media (min-width: 1101px) and (min-height: 801px) {
+  body.dashboard-v6[data-initial-view="control"] .control-workspace {
+    grid-template-rows: minmax(315px, 1fr) max-content;
+  }
+
+  .all-riddles-panel,
+  .all-riddles-panel .table-scroll-wrap {
+    overflow: visible;
+  }
+
+  .all-riddles-panel .table-scroll-wrap {
+    overflow-x: clip;
+  }
+
+  .riddles-table-v6 th,
+  .riddles-table-v6 td {
+    height: 27px;
+  }
+
+  .riddles-table-v6 {
+    font-size: 14px;
+  }
+
+  .riddles-table-v6 th {
+    font-size: 12px;
+  }
+}
+
+@media (min-width: 1101px) and (max-height: 800px) {
+  .all-riddles-panel {
+    overflow: hidden;
+  }
+
+  .all-riddles-panel .table-scroll-wrap {
+    max-height: max(160px, calc(100dvh - 390px));
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .riddles-table-v6 {
+    font-size: 14px;
+  }
+
+  .riddles-table-v6 th {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 1100px) {
+  html:has(body.dashboard-v6) {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: auto;
+  }
+
+  body.dashboard-v6,
+  body.dashboard-v6[data-initial-view="control"],
+  body.dashboard-v6[data-initial-view="admin"] {
+    height: auto;
+    min-height: 100%;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow: visible;
+    overscroll-behavior-y: auto;
+  }
+
+  .dashboard-page-v6 {
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .dashboard-sticky-top {
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 80;
+  }
+
+  .dashboard-sticky-top .operator-header {
+    position: relative;
+    top: auto;
+  }
+
+  .feedback-stack {
+    width: auto;
+    position: sticky;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    padding: 0 8px;
+  }
+
+  .control-workspace {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .current-riddle-action-section > .solve-btn,
+  .current-riddle-action-section > .skip-btn {
+    min-height: 56px;
+  }
+
+  .all-riddles-panel,
+  .all-riddles-panel .table-scroll-wrap {
+    max-height: none;
     overflow: visible;
   }
 }

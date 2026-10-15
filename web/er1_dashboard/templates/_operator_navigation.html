@@ -1,16 +1,23 @@
-{% macro admin_menu(website_admin_links) -%}
+{% macro admin_menu(website_admin_groups, active_tab) -%}
 <details class="operator-admin-navigation">
   <summary class="operator-menu" aria-label="Website-Verwaltung öffnen"><span aria-hidden="true">&#9776;</span> Menü</summary>
   <nav class="operator-admin-menu" aria-label="Website-Verwaltung">
-    {% for item in website_admin_links %}<a class="operator-admin-link{% if item.id == 'game-master' %} is-active{% endif %}" href="{{ item.url }}" target="_top"{% if item.id == 'game-master' %} aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+    {% for group in website_admin_groups %}
+    <section class="operator-admin-group" aria-labelledby="operatorAdminGroup{{ loop.index }}">
+      <h2 id="operatorAdminGroup{{ loop.index }}" class="operator-admin-group-label">{{ group["label"] }}</h2>
+      <div class="operator-admin-group-links">
+        {% for item in group["items"] %}{% set item_tab = {'game-master': 'control', 'game-master-games': 'games', 'game-master-admin': 'admin'}.get(item.id) %}<a class="operator-admin-link{% if item_tab == active_tab %} is-active{% endif %}" href="{{ item.url }}" target="_top"{% if item_tab == active_tab %} aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+      </div>
+    </section>
+    {% endfor %}
   </nav>
 </details>
 {%- endmacro %}
 
-{% macro dashboard_tabs(active_tab) -%}
+{% macro dashboard_tabs(active_tab, dashboard_tab_urls) -%}
 <nav id="operatorTabs" class="operator-tabs" aria-label="Spielleitungsbereiche">
-  <a class="operator-tab{% if active_tab == 'control' %} is-active{% endif %}" href="{{ url_for('index') }}"{% if active_tab == 'control' %} aria-current="page"{% endif %}>Spielkontrolle</a>
-  <a class="operator-tab{% if active_tab == 'games' %} is-active{% endif %}" href="{{ url_for('game_viewer') }}"{% if active_tab == 'games' %} aria-current="page"{% endif %}>Alle Spiele</a>
-  <a class="operator-tab{% if active_tab == 'admin' %} is-active{% endif %}" href="{{ url_for('admin_dashboard') }}"{% if active_tab == 'admin' %} aria-current="page"{% endif %}>Admin</a>
+  <a class="operator-tab{% if active_tab == 'control' %} is-active{% endif %}" href="{{ dashboard_tab_urls.control }}"{% if active_tab == 'control' %} aria-current="page"{% endif %}>Spielkontrolle</a>
+  <a class="operator-tab{% if active_tab == 'games' %} is-active{% endif %}" href="{{ dashboard_tab_urls.games }}"{% if active_tab == 'games' %} aria-current="page"{% endif %}>Alle Spiele</a>
+  <a class="operator-tab{% if active_tab == 'admin' %} is-active{% endif %}" href="{{ dashboard_tab_urls.admin }}"{% if active_tab == 'admin' %} aria-current="page"{% endif %}>Admin</a>
 </nav>
 {%- endmacro %}

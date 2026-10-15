@@ -5,6 +5,10 @@ const deleteGameDialogMessage = document.getElementById('deleteGameDialogMessage
 const confirmDeleteGameButton = document.getElementById('confirmDeleteGame');
 let pendingDeleteForm = null;
 
+function dashboardUrl(path) {
+  return window.ER1Urls.withPrefix(path);
+}
+
 function showStatus(message, kind = 'info') {
   if (!editorStatus) return;
   editorStatus.hidden = false;
@@ -137,7 +141,7 @@ async function deleteGame(form) {
   }
 
   try {
-    const response = await fetch(form.action, {
+    const response = await fetch(dashboardUrl(form.action), {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -149,7 +153,7 @@ async function deleteGame(form) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || `Löschen fehlgeschlagen (HTTP ${response.status})`);
     }
-    window.location.assign('/games?message=Spiel%20wurde%20gel%C3%B6scht%20und%20in%20die%20Ablage%20verschoben.');
+    window.location.assign(dashboardUrl('/games?message=Spiel%20wurde%20gel%C3%B6scht%20und%20in%20die%20Ablage%20verschoben.'));
   } catch (error) {
     form.dataset.busy = 'false';
     if (button) {
@@ -243,7 +247,7 @@ async function saveRow(row) {
   }
 
   try {
-    const res = await fetch('/api/db/update', {
+    const res = await fetch(dashboardUrl('/api/db/update'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ table, rowid, updates }),

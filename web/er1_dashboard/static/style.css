@@ -4013,6 +4013,10 @@ body.dashboard-v6 .confirm-dialog #confirmDialogMessage { white-space: pre-line;
 .operator-admin-link:hover,
 .operator-admin-link.is-active { border-color: rgba(231, 157, 39, 0.5); color: #ffe1a5; background: rgba(188, 111, 17, 0.17); }
 
+.operator-admin-group { min-width: 0; }
+.operator-admin-group-label { margin: 0 0 5px; color: #a98b5e; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.operator-admin-group-links { display: grid; gap: 5px; }
+
 @media (max-width: 900px) {
   .operator-admin-navigation { grid-column: 1; }
   .operator-admin-menu { width: min(360px, calc(100vw - 18px)); grid-template-columns: minmax(0, 1fr); }

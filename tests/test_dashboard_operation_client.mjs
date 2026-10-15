@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../web/er1_dashboard/static/app.js', import.meta.url), 'utf8');
+const urlPrefixSource = fs.readFileSync(new URL('../web/er1_dashboard/static/url-prefix.js', import.meta.url), 'utf8');
 const clientSource = source.slice(
   source.indexOf('function delay('),
   source.indexOf('\nfunction escapeHtml('),
@@ -67,7 +68,7 @@ function createStorage(initial = []) {
   };
 }
 
-function createClient(fetchHandler, { initial = [], randomUUID } = {}) {
+function createClient(fetchHandler, { initial = [], randomUUID, urlPrefix = '' } = {}) {
   const storage = createStorage(initial);
   const crypto = {
     getRandomValues(bytes) {
@@ -76,9 +77,11 @@ function createClient(fetchHandler, { initial = [], randomUUID } = {}) {
     },
   };
   if (randomUUID) crypto.randomUUID = randomUUID;
+  const document = { body: { dataset: { urlPrefix } } };
   const context = vm.createContext({
     AbortController,
     Date,
+    document,
     Error,
     JSON,
     Math,
@@ -91,6 +94,7 @@ function createClient(fetchHandler, { initial = [], randomUUID } = {}) {
       setTimeout,
     },
   });
+  vm.runInContext(urlPrefixSource, context);
   vm.runInContext(`
     const MUTATION_ATTEMPT_TIMEOUT_MS = 1500;
     const MUTATION_RESOLUTION_TIMEOUT_MS = 10000;
@@ -108,6 +112,45 @@ function createClient(fetchHandler, { initial = [], randomUUID } = {}) {
   `, context);
   return { client: context.operationClient, storage };
 }
+
+test('URL prefix helper keeps direct paths and avoids supported double prefixes', () => {
+  const document = { body: { dataset: { urlPrefix: '' } } };
+  const context = vm.createContext({ document, window: {} });
+  vm.runInContext(urlPrefixSource, context);
+
+  assert.equal(context.window.ER1Urls.withPrefix('/api/state?poll=1'), '/api/state?poll=1');
+  document.body.dataset.urlPrefix = '/admin/game-master/';
+  assert.equal(context.window.ER1Urls.currentPrefix(), '/admin/game-master');
+  assert.equal(
+    context.window.ER1Urls.withPrefix('/api/state?poll=1'),
+    '/admin/game-master/api/state?poll=1',
+  );
+  assert.equal(
+    context.window.ER1Urls.withPrefix('/admin/game-master/api/state?poll=1'),
+    '/admin/game-master/api/state?poll=1',
+  );
+  assert.equal(
+    context.window.ER1Urls.withPrefix('/admin/game-master/proxy/api/state?poll=1'),
+    '/admin/game-master/proxy/api/state?poll=1',
+  );
+  assert.equal(
+    context.window.ER1Urls.canonicalApiPath('/admin/game-master/proxy/api/hints'),
+    '/api/hints',
+  );
+  assert.equal(
+    context.window.ER1Urls.canonicalApiPath('/admin/game-master/api/hints'),
+    '/api/hints',
+  );
+  document.body.dataset.urlPrefix = '/admin/game-master/proxy';
+  assert.equal(
+    context.window.ER1Urls.withPrefix('/api/state'),
+    '/admin/game-master/proxy/api/state',
+  );
+  assert.equal(
+    context.window.ER1Urls.withPrefix('/admin/game-master/proxy/api/state'),
+    '/admin/game-master/proxy/api/state',
+  );
+});
 
 test('a lost mutation response is recovered from its durable receipt', async () => {
   let postCount = 0;
@@ -213,6 +256,25 @@ test('proxied requests prepare the canonical Pi path but send through the proxy 
   assert.equal(sentPath, '/admin/game-master/proxy/api/hints');
 });
 
+test('forwarded clean prefix applies to operation preparation, status and mutation URLs', async () => {
+  const requests = [];
+  const { client } = createClient(async (path, options = {}) => {
+    requests.push([String(path), options.method || 'GET', options.body || '']);
+    if (options.method === 'PUT') return response(201, { ok: true, operation_status: 'prepared' });
+    if (options.method === 'POST') return response(200, { ok: true });
+    throw new Error(`unexpected request ${options.method || 'GET'} ${path}`);
+  }, {
+    randomUUID: () => '57a969ff-7c14-4f3d-9faa-b9b5c6307df3',
+    urlPrefix: '/admin/game-master',
+  });
+
+  await client.executeIdempotentMutation('/api/hints', { method: 'POST', body: '{}' });
+
+  assert.equal(requests[0][0], '/admin/game-master/api/operations/57a969ff-7c14-4f3d-9faa-b9b5c6307df3');
+  assert.equal(JSON.parse(requests[0][2]).path, '/api/hints');
+  assert.equal(requests[1][0], '/admin/game-master/api/hints');
+});
+
 test('a definitive preparation rejection does not poison later mutations', async () => {
   let mutationCount = 0;
   const { client } = createClient(async (_path, options = {}) => {
@@ -240,7 +302,17 @@ test('a recovered completion is surfaced and blocks the current click', async ()
     createdAt: Date.now(),
   };
   let mutationCount = 0;
+  const requests = [];
   const { client } = createClient(async (path, options = {}) => {
+    requests.push([String(path), options.method || 'GET', options.body || '']);
+    if (options.method === 'PUT') {
+      assert.deepEqual(JSON.parse(options.body), {
+        method: pending.method,
+        path: pending.path,
+        body: pending.body,
+      });
+      return response(200, { ok: true, operation_status: 'completed' });
+    }
     if (!options.method || options.method === 'GET') {
       return response(200, {
         ok: true,
@@ -258,10 +330,14 @@ test('a recovered completion is surfaced and blocks the current click', async ()
     (error) => error.data?.operation_status === 'recovered' && /send-summary-email/.test(error.message),
   );
   assert.equal(mutationCount, 0);
+  assert.deepEqual(requests.map((request) => request.slice(0, 2)), [
+    ['/api/operations/57a969ff-7c14-4f3d-9faa-b9b5c6307df3', 'PUT'],
+    ['/api/operations/57a969ff-7c14-4f3d-9faa-b9b5c6307df3', 'GET'],
+  ]);
   assert.deepEqual(client.storedPendingOperations(), []);
 });
 
-test('a missing receipt is never replayed and requires explicit inspection before release', async () => {
+test('a pre-upgrade pending operation is prepared before status and resumed only interactively', async () => {
   const pending = {
     id: '57a969ff-7c14-4f3d-9faa-b9b5c6307df3',
     path: '/api/lock',
@@ -269,21 +345,65 @@ test('a missing receipt is never replayed and requires explicit inspection befor
     body: '{}',
     createdAt: Date.now(),
   };
-  const { client } = createClient(async () => response(404, {
-    ok: false,
-    operation_status: 'not_found',
-  }), { initial: [pending] });
+  const requests = [];
+  const { client } = createClient(async (path, options = {}) => {
+    requests.push([String(path), options.method || 'GET', options.body || '']);
+    if (options.method === 'PUT') {
+      assert.deepEqual(JSON.parse(options.body), {
+        method: pending.method,
+        path: pending.path,
+        body: pending.body,
+      });
+      return response(201, { ok: true, operation_status: 'prepared' });
+    }
+    if (options.method === 'POST') {
+      assert.equal(options.headers['Idempotency-Key'], pending.id);
+      return response(200, { ok: true, locked: true });
+    }
+    return response(202, { ok: true, operation_status: 'prepared' });
+  }, { initial: [pending] });
 
   await assert.rejects(
     client.reconcileStoredOperations(false),
     (error) => error.data?.operation_status === 'uncertain',
   );
   assert.equal(client.storedPendingOperations().length, 1);
+  assert.deepEqual(requests.map((request) => request[1]), ['PUT', 'GET']);
   await assert.rejects(
     client.reconcileStoredOperations(true),
     (error) => error.data?.operation_status === 'recovered',
   );
+  assert.equal(requests.filter((request) => request[1] === 'POST').length, 1);
   assert.deepEqual(client.storedPendingOperations(), []);
+});
+
+test('recovery preparation collisions and errors remain pending and never send the mutation', async () => {
+  const pending = {
+    id: '57a969ff-7c14-4f3d-9faa-b9b5c6307df3',
+    path: '/api/hints',
+    method: 'POST',
+    body: '{"riddle":"images","delta":1}',
+    createdAt: Date.now(),
+  };
+  const scenarios = [
+    [409, { ok: false, operation_status: 'conflict', error: 'operation collision' }],
+    [503, { ok: false, operation_status: 'unavailable', error: 'preparation unavailable' }],
+  ];
+
+  for (const [status, data] of scenarios) {
+    const methods = [];
+    const { client } = createClient(async (_path, options = {}) => {
+      const method = options.method || 'GET';
+      methods.push(method);
+      if (method === 'POST') throw new Error('mutation must not be sent');
+      return response(status, data);
+    }, { initial: [pending] });
+
+    await assert.rejects(client.reconcileStoredOperations(true));
+    assert.equal(methods[0], 'PUT');
+    assert.equal(methods.includes('POST'), false);
+    assert.equal(client.storedPendingOperations().length, 1);
+  }
 });
 
 test('diagnostics auto-scroll defaults on, synchronizes controls, and persists explicit choices', () => {
@@ -638,6 +758,7 @@ test('Stars renders sorted fixed rows and canonical numbered attempts', () => {
   const context = vm.createContext({});
   vm.runInContext(`
     const STAR_SIGN_SYMBOLS = { scorpio: 'S', aquarius: 'A', libra: 'L', gemini: 'G', leo: 'O', sagittarius: 'T', pisces: 'P', none: '-' };
+    const STAR_SIGN_LABELS = { scorpio: 'Skorpion', aquarius: 'Wassermann', libra: 'Waage', gemini: 'Zwillinge', leo: 'Löwe', sagittarius: 'Schütze', pisces: 'Fische', none: 'Kein Sternzeichen' };
     function escapeAttr(value) { return String(value); }
     function escapeHtml(value) { return String(value); }
     ${starSummarySource}
@@ -650,7 +771,7 @@ test('Stars renders sorted fixed rows and canonical numbered attempts', () => {
       { number: 2, values: ['scorpio', 'aquarius', 'libra'] },
     ],
   });
-  const orderedNames = ['Gemini', 'Libra', 'Leo', 'Sagittarius', 'Scorpio', 'Aquarius', 'Pisces'];
+  const orderedNames = ['Zwillinge', 'Waage', 'Löwe', 'Schütze', 'Skorpion', 'Wassermann', 'Fische'];
   for (let index = 1; index < orderedNames.length; index += 1) {
     assert.ok(html.indexOf(orderedNames[index - 1]) < html.indexOf(orderedNames[index]));
   }
@@ -660,4 +781,7 @@ test('Stars renders sorted fixed rows and canonical numbered attempts', () => {
   assert.equal((html.match(/star-attempt-separator/g) || []).length, 1);
   assert.match(html, /star-attempt-separator" aria-hidden="true">,<\/span>/);
   assert.match(html, /star-attempt-symbol/);
+  assert.match(html, /title="Skorpion" aria-label="Skorpion"/);
+  assert.match(html, /title="Wassermann" aria-label="Wassermann"/);
+  assert.doesNotMatch(html, /title="(?:scorpio|aquarius|libra)"/);
 });

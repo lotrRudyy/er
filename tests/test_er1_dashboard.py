@@ -130,7 +130,7 @@ class JsonResponse(dict):
 class GameDeletionTests(unittest.TestCase):
     def test_delete_form_posts_without_browser_native_confirmation(self) -> None:
         html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
-        form_start = html.index('<form method="post" action="{{ url_for(\'delete_game\'')
+        form_start = html.index('<form method="post" action="{{ dashboard_url(\'delete_game\'')
         form_end = html.index("</form>", form_start)
         delete_form = html[form_start:form_end]
         self.assertIn('type="submit"', delete_form)
@@ -148,11 +148,11 @@ class GameDeletionTests(unittest.TestCase):
         self.assertIn("event.preventDefault()", javascript)
         self.assertIn("deleteGameDialog?.showModal()", javascript)
         self.assertIn("if (form) deleteGame(form)", javascript)
-        self.assertIn("fetch(form.action", javascript)
+        self.assertIn("fetch(dashboardUrl(form.action)", javascript)
         self.assertIn("credentials: 'same-origin'", javascript)
         self.assertIn("Accept: 'application/json'", javascript)
         self.assertIn("!response.ok || !data.ok", javascript)
-        self.assertIn("window.location.assign('/games?message=", javascript)
+        self.assertIn("window.location.assign(dashboardUrl('/games?message=", javascript)
         self.assertNotRegex(html, r"\{%\s*if game\s*%\}\s*<script[^>]+game_viewer\.js")
 
         app_source = APP_PATH.read_text(encoding="utf-8")
@@ -1861,15 +1861,22 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         source = APP_PATH.read_text(encoding="utf-8")
         css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
         self.assertNotIn("wireOperatorMenu", javascript)
-        self.assertIn("admin_menu(website_admin_links)", html)
-        self.assertIn("dashboard_tabs(initial_view|default('control'))", html)
+        self.assertIn("admin_menu(website_admin_groups, initial_view|default('control'))", html)
+        self.assertIn("dashboard_tabs(initial_view|default('control'), dashboard_tab_urls)", html)
         self.assertIn('<details class="operator-admin-navigation">', navigation)
+        self.assertIn('class="operator-admin-group"', navigation)
         self.assertIn('target="_top"', navigation)
         self.assertIn('id="operatorTabs"', navigation)
         self.assertIn("website_admin_navigation()", source)
+        for group in ("Spielleitung", "Buchungen", "Marketing", "Admin"):
+            self.assertIn(f'("{group}"', source)
         for route in (
-            "/admin", "/admin/bookings", "/admin/vouchers", "/admin/emails", "/admin/statistiken",
-            "/admin/spielstatistiken", "/admin/game-master", "/admin/users", "/admin/rate-limits", "/admin/profile",
+            "/admin/game-master", "/admin/game-master/games", "/admin/game-master/admin",
+            "/admin/bookings", "/admin/vouchers", "/admin/bookings#settings",
+            "/admin/marketing/statistiken", "/admin/marketing/spielstatistiken",
+            "/admin/marketing/ig-post", "/admin/marketing/top10-story",
+            "/admin/marketing/instagram-statistik", "/admin/users", "/admin/emails",
+            "/admin/rate-limits", "/admin/profile",
         ):
             self.assertIn(f'"{route}"', source)
         self.assertRegex(css, r"(?s)@media \(max-width: 1100px\).*?\.operator-tabs\s*\{[^}]*display: flex;")
@@ -1881,10 +1888,103 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         )
         self.assertRegex(css, r"(?s)\.operator-brand\s*\{[^}]*overflow:\s*hidden;")
 
+    def test_forwarded_prefix_helpers_cover_lan_current_proxy_and_clean_routes(self) -> None:
+        namespace = extracted(
+            "_normalise_forwarded_prefix",
+            "_prefix_url",
+            "dashboard_tab_navigation",
+        )
+        namespace.update({
+            "LEGACY_DASHBOARD_PREFIX": "/admin/game-master/proxy",
+            "WEBSITE_DASHBOARD_PREFIX": "/admin/game-master",
+            "WEBSITE_DASHBOARD_TAB_PATHS": {
+                "control": "/admin/game-master",
+                "games": "/admin/game-master/games",
+                "admin": "/admin/game-master/admin",
+            },
+        })
+        normalize = namespace["_normalise_forwarded_prefix"]
+        prefix_url = namespace["_prefix_url"]
+        tabs = namespace["dashboard_tab_navigation"]
+
+        self.assertEqual(normalize(""), "")
+        self.assertEqual(normalize("/admin/game-master/"), "/admin/game-master")
+        for invalid in ("https://example.invalid/admin", "//example.invalid/admin", "/admin//game-master", "/admin/../game-master"):
+            self.assertEqual(normalize(invalid), "")
+
+        self.assertEqual(prefix_url("/api/state?restart_check=1", ""), "/api/state?restart_check=1")
+        self.assertEqual(
+            prefix_url("/api/state?restart_check=1", "/admin/game-master"),
+            "/admin/game-master/api/state?restart_check=1",
+        )
+        self.assertEqual(
+            prefix_url("/admin/game-master/api/state?restart_check=1", "/admin/game-master"),
+            "/admin/game-master/api/state?restart_check=1",
+        )
+        self.assertEqual(
+            prefix_url("/admin/game-master/proxy/api/state", "/admin/game-master"),
+            "/admin/game-master/proxy/api/state",
+        )
+
+        self.assertEqual(tabs(""), {"control": "/", "games": "/games", "admin": "/admin"})
+        self.assertEqual(tabs("/admin/game-master"), namespace["WEBSITE_DASHBOARD_TAB_PATHS"])
+        # The current website proxy rewrites legacy responses, so ER1 must not
+        # add that same prefix before the response reaches the rewriter.
+        self.assertEqual(prefix_url("/api/state", "/admin/game-master/proxy"), "/api/state")
+        self.assertEqual(tabs("/admin/game-master/proxy"), {"control": "/", "games": "/games", "admin": "/admin"})
+
+        source = APP_PATH.read_text(encoding="utf-8")
+        html = HTML_PATH.read_text(encoding="utf-8")
+        viewer_html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
+        self.assertIn('request.headers.get("X-Forwarded-Prefix", "")', source)
+        self.assertIn('"dashboard_url": dashboard_url_for', source)
+        self.assertIn('data-url-prefix="{{ dashboard_url_prefix }}"', html)
+        self.assertIn('data-url-prefix="{{ dashboard_url_prefix }}"', viewer_html)
+        self.assertIn("filename='url-prefix.js'", html)
+        self.assertIn("filename='url-prefix.js'", viewer_html)
+        self.assertNotIn("url_for(", html + viewer_html + (HTML_PATH.parent / "_operator_navigation.html").read_text(encoding="utf-8"))
+
+    def test_mobile_root_scroll_feedback_and_desktop_table_height_contracts(self) -> None:
+        html = HTML_PATH.read_text(encoding="utf-8")
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+        self.assertIn('<div class="dashboard-sticky-top">', html)
+        self.assertNotIn("overscroll-behavior-y: contain", css)
+        self.assertRegex(
+            css,
+            r'(?s)@media \(max-width: 1100px\).*?html:has\(body\.dashboard-v6\)\s*\{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: auto;',
+        )
+        self.assertRegex(
+            css,
+            r'(?s)@media \(max-width: 1100px\).*?\.dashboard-sticky-top\s*\{[^}]*position: sticky;[^}]*top: 0;',
+        )
+        self.assertRegex(
+            css,
+            r'(?s)@media \(max-width: 1100px\).*?\.feedback-stack\s*\{[^}]*position: sticky;[^}]*bottom: auto;',
+        )
+        self.assertIn("calc(8px + env(safe-area-inset-bottom, 0px))", css)
+        self.assertRegex(
+            css,
+            r'(?s)@media \(min-width: 1101px\) and \(min-height: 801px\).*?\.all-riddles-panel \.table-scroll-wrap\s*\{[^}]*overflow-x: clip;',
+        )
+        self.assertRegex(
+            css,
+            r'(?s)@media \(min-width: 1101px\) and \(min-height: 801px\).*?\.riddles-table-v6\s*\{[^}]*font-size: 14px;',
+        )
+        self.assertRegex(
+            css,
+            r'(?s)@media \(min-width: 1101px\) and \(max-height: 800px\).*?\.all-riddles-panel \.table-scroll-wrap\s*\{[^}]*max-height:[^;]+;[^}]*overflow-x: hidden;[^}]*overflow-y: auto;',
+        )
+        self.assertRegex(
+            css,
+            r'(?s)@media \(min-width: 1101px\) and \(max-height: 800px\).*?\.riddles-table-v6\s*\{[^}]*font-size: 14px;',
+        )
+        self.assertRegex(css, r"(?s)\.images-buttons \.status-badge\s*\{[^}]*place-items: center;[^}]*text-align: center;")
+        self.assertRegex(css, r"(?s)\.current-riddle-action-section > \.solve-btn,[^{]+\{[^}]*font-size: 20px;")
+
     def test_game_viewer_header_is_responsive_at_compact_desktop_widths(self) -> None:
         css = CSS_PATH.read_text(encoding="utf-8")
         html = GAME_VIEWER_HTML_PATH.read_text(encoding="utf-8")
-        self.assertIn("style.css') }}?v=20261013-dashboard-v10", html)
+        self.assertIn("style.css') }}?v=20261014-er1-prefix-v1", html)
         self.assertRegex(
             css,
             r"(?s)@media \(min-width: 901px\) and \(max-width: 1016px\).*?"
@@ -1979,7 +2079,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertNotIn("bookingBusy", javascript[start_begin:start_end])
         self.assertIn("if (!await refreshPhaseActionView()) return;", javascript[phase_begin:phase_end])
         self.assertIn("clearRecoverableStateFeedback();", javascript)
-        self.assertIn("app.js') }}?v=20261013-dashboard-v21", html)
+        self.assertIn("app.js') }}?v=20261014-er1-prefix-v1", html)
 
     def test_time_popover_stars_and_hint_threshold_contracts(self) -> None:
         javascript = JS_PATH.read_text(encoding="utf-8")
@@ -1990,13 +2090,20 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertIn("selectDurationSegment(input, 'seconds')", javascript)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", css)
         for row in (
-            "['Libra', 'libra', 7]", "['Aquarius', 'aquarius', 13]",
-            "['Scorpio', 'scorpio', 10]", "['Gemini', 'gemini', 7]",
-            "['Sagittarius', 'sagittarius', 10]", "['Leo', 'leo', 10]",
-            "['Pisces', 'pisces', 13]",
+            "['Waage', 'libra', 7]", "['Wassermann', 'aquarius', 13]",
+            "['Skorpion', 'scorpio', 10]", "['Zwillinge', 'gemini', 7]",
+            "['Schütze', 'sagittarius', 10]", "['Löwe', 'leo', 10]",
+            "['Fische', 'pisces', 13]",
         ):
             self.assertIn(row, javascript)
+        for key, label in (
+            ("gemini", "Zwillinge"), ("libra", "Waage"), ("leo", "Löwe"),
+            ("sagittarius", "Schütze"), ("scorpio", "Skorpion"),
+            ("aquarius", "Wassermann"), ("pisces", "Fische"),
+        ):
+            self.assertIn(f"{key}: '{label}'", javascript)
         self.assertIn("const expected = ['scorpio', 'aquarius', 'libra'];", javascript)
+        self.assertIn('title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"', javascript)
         self.assertIn('class="star-attempts-scroll" tabindex="0"', javascript)
         self.assertIn("correct ? 'is-correct'", javascript)
         self.assertIn('<div class="candles-solution"><b>Lösung:</b><strong>2413</strong>', javascript)
@@ -2057,7 +2164,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261013-dashboard-v21", html)
+        self.assertIn("dashboard.css') }}?v=20261014-er1-prefix-v1", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
@@ -2088,7 +2195,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertNotIn("openHintTemplateDialog", javascript)
         self.assertIn('data-service-restart="game_master"', html)
         self.assertIn('data-service-restart="dashboard"', html)
-        self.assertIn("href=\"{{ url_for('game_viewer') }}\"", navigation)
+        self.assertIn('href="{{ dashboard_tab_urls.games }}"', navigation)
         restart_start = javascript.index("async function restartSystemService")
         restart_end = javascript.index("async function", restart_start + 20)
         self.assertIn("confirmAction", javascript[restart_start:restart_end])
@@ -2176,11 +2283,13 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
         self.assertRegex(css, rf"(?s)\.current-riddle-body\s*\{{[^}}]*{re.escape(aligned_columns)}")
         self.assertRegex(css, rf"(?s)\.riddle-actions-card\s*\{{[^}}]*{re.escape(aligned_columns)}")
 
-        self.assertRegex(css, r"(?s)\.hint-template-list p\s*\{[^}]*font-size: 18px;")
-        self.assertRegex(css, r"(?s)\.hint-card-meta span\s*\{[^}]*font-size: 10px;")
+        self.assertRegex(css, r"(?s)\.hint-template-list p\s*\{[^}]*font-size: 22px;")
+        self.assertRegex(css, r"(?s)\.current-riddles-grid:has\(> :nth-child\(2\)\) \.hint-template-list p\s*\{[^}]*font-size: 20px;")
+        self.assertRegex(css, r"(?s)\.hint-card-meta span[^{]*\{[^}]*font-size: 16px;")
+        self.assertRegex(css, r"(?s)\.hint-template-empty\s*\{[^}]*font-size: 20px;")
         self.assertRegex(css, r"(?s)\.riddles-table-v6\s*\{[^}]*font-size: 13px;")
         self.assertRegex(css, r"(?s)\.riddles-table-v6 th\s*\{[^}]*font-size: 11px;")
-        self.assertRegex(css, r"(?s)\.node-status-button\s*\{[^}]*font-size: 12px;")
+        self.assertRegex(css, r"(?s)\.node-status-button\s*\{[^}]*font-size: 14px;")
 
         locks_start = javascript.index("function renderLocks")
         locks_end = javascript.index("function resolveDimValue", locks_start)

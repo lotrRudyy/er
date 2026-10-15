@@ -2,25 +2,25 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+      <link rel="icon" type="image/x-icon" href="{{ dashboard_url('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ dashboard_url('static', filename='favicon.png') }}">
+    <link rel="apple-touch-icon" href="{{ dashboard_url('static', filename='apple-touch-icon.png') }}">
 <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ER1 Spielübersicht</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20261013-dashboard-v10" />
+  <link rel="stylesheet" href="{{ dashboard_url('static', filename='style.css') }}?v=20261014-er1-prefix-v1" />
   <style>html, body.game-viewer-body { min-width: 0; width: auto; }</style>
 </head>
-<body class="game-viewer-body" data-game-id="{{ game_id }}">
+<body class="game-viewer-body" data-game-id="{{ game_id }}" data-url-prefix="{{ dashboard_url_prefix }}">
   <header class="operator-header operator-header-viewer">
     <div class="operator-leading">
-      {{ admin_menu(website_admin_links) }}
-      <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung">
+      {{ admin_menu(website_admin_groups, 'games') }}
+      <a class="operator-brand" href="{{ dashboard_tab_urls.control }}" aria-label="Escape Room Schenna Spielleitung">
         <span class="operator-brand-mark" aria-hidden="true">ER</span>
         <span><strong>Escape Room Schenna</strong><small>Spielleitung</small></span>
       </a>
     </div>
-    {{ dashboard_tabs('games') }}
+    {{ dashboard_tabs('games', dashboard_tab_urls) }}
   </header>
   <div class="game-viewer-page game-viewer-page-wide">
     <section class="panel game-viewer-panel compact-viewer-panel">
@@ -32,7 +32,7 @@
           <div class="subline">Tipp: Auf eine Zelle klicken, Text ändern und dann pro Zeile auf „Speichern“ drücken.</div>
         </div>
         <div class="top-nav-links">
-          <a class="nav-button" href="{{ url_for('index') }}">Zurück zur Spielleitung</a>
+          <a class="nav-button" href="{{ dashboard_tab_urls.control }}">Zurück zur Spielleitung</a>
         </div>
       </div>
 
@@ -75,8 +75,8 @@
             <td>{{ row.leaderboard_code_display or "—" }}</td>
             <td>
               <div class="game-actions-cell">
-                <a class="nav-button" href="{{ url_for('game_viewer', game_id=row.id) }}">Öffnen</a>
-                <form method="post" action="{{ url_for('delete_game', game_id=row.id) }}" data-delete-game data-game-id="{{ row.id }}">
+                <a class="nav-button" href="{{ dashboard_url('game_viewer', game_id=row.id) }}">Öffnen</a>
+                <form method="post" action="{{ dashboard_url('delete_game', game_id=row.id) }}" data-delete-game data-game-id="{{ row.id }}">
                   <button type="submit" class="danger-button">Löschen</button>
                 </form>
               </div>
@@ -209,6 +209,7 @@
     </div>
   </dialog>
 
-  <script src="{{ url_for('static', filename='game_viewer.js') }}?v=20261011-delete-confirm-v3"></script>
+  <script src="{{ dashboard_url('static', filename='url-prefix.js') }}?v=20261014-er1-prefix-v1"></script>
+  <script src="{{ dashboard_url('static', filename='game_viewer.js') }}?v=20261014-er1-prefix-v1"></script>
 </body>
 </html>

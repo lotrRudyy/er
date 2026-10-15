@@ -42,6 +42,11 @@ const STAR_SIGN_SYMBOLS = Object.freeze({
   scorpio: '♏', gemini: '♊', libra: '♎', sagittarius: '♐',
   aquarius: '♒', pisces: '♓', leo: '♌', none: '—', empty: '—',
 });
+const STAR_SIGN_LABELS = Object.freeze({
+  gemini: 'Zwillinge', libra: 'Waage', leo: 'Löwe', sagittarius: 'Schütze',
+  scorpio: 'Skorpion', aquarius: 'Wassermann', pisces: 'Fische',
+  none: 'Kein Sternzeichen', empty: 'Kein Sternzeichen',
+});
 const HINT_RIDDLE_ORDER = Object.freeze([
   'images', 'piano', 'prison', 'wheel', 'chains', 'tangram',
   'magnet', 'chess', 'knocking', 'candles', 'stars', 'sissi',
@@ -192,6 +197,14 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function dashboardUrl(path) {
+  return window.ER1Urls.withPrefix(path);
+}
+
+function canonicalOperationPath(path) {
+  return window.ER1Urls.canonicalApiPath(path);
+}
+
 async function readApiResponse(response) {
   const text = await response.text();
   let data = {};
@@ -260,7 +273,7 @@ async function fetchWithDeadline(path, options, timeoutMs) {
 }
 
 async function operationStatus(operationId) {
-  const response = await fetchWithDeadline(`/api/operations/${encodeURIComponent(operationId)}`, {
+  const response = await fetchWithDeadline(dashboardUrl(`/api/operations/${encodeURIComponent(operationId)}`), {
     cache: 'no-store',
     headers: { Accept: 'application/json' },
   }, OPERATION_STATUS_TIMEOUT_MS);
@@ -312,14 +325,11 @@ function operationRequestOptions(operation) {
   };
 }
 
-function canonicalOperationPath(path) {
-  const proxyPrefix = '/admin/game-master/proxy';
-  const value = String(path || '');
-  return value.startsWith(`${proxyPrefix}/api/`) ? value.slice(proxyPrefix.length) : value;
-}
-
-async function prepareOperation(operation) {
-  const path = `/api/operations/${encodeURIComponent(operation.id)}`;
+async function prepareOperation(operation, {
+  preservePending = false,
+  acceptExistingTerminal = false,
+} = {}) {
+  const path = dashboardUrl(`/api/operations/${encodeURIComponent(operation.id)}`);
   const body = JSON.stringify({
     method: operation.method,
     path: operation.path,
@@ -338,11 +348,14 @@ async function prepareOperation(operation) {
       if (response.ok && ['prepared', 'in_progress', 'completed'].includes(result.data.operation_status)) {
         return result.data.operation_status;
       }
+      if (acceptExistingTerminal && ['uncertain', 'acknowledged'].includes(result.data.operation_status)) {
+        return result.data.operation_status;
+      }
       return apiResult(result);
     } catch (error) {
       lastError = error;
       if (error?.status && error.status < 500) {
-        forgetPendingOperation(operation.id);
+        if (!preservePending) forgetPendingOperation(operation.id);
         throw error;
       }
       try {
@@ -356,7 +369,7 @@ async function prepareOperation(operation) {
       }
     }
   }
-  forgetPendingOperation(operation.id);
+  if (!preservePending) forgetPendingOperation(operation.id);
   const error = new Error('Die Aktion wurde nicht ausgeführt, weil ihre Befehls-ID nicht dauerhaft vorbereitet werden konnte.');
   error.cause = lastError;
   error.data = { operation_id: operation.id, operation_status: 'not_prepared' };
@@ -365,7 +378,7 @@ async function prepareOperation(operation) {
 
 async function sendOperation(operation) {
   const response = await fetchWithDeadline(
-    operation.requestPath || operation.path,
+    dashboardUrl(operation.requestPath || operation.path),
     operationRequestOptions(operation),
     MUTATION_ATTEMPT_TIMEOUT_MS,
   );
@@ -423,7 +436,7 @@ async function executeIdempotentMutation(path, options) {
   const pending = {
     id: operationId,
     path: canonicalOperationPath(path),
-    requestPath: path,
+    requestPath: dashboardUrl(path),
     method: String(options.method || 'POST').toUpperCase(),
     body: typeof options.body === 'string' ? options.body : '',
     headers: { ...(options.headers || {}) },
@@ -457,7 +470,7 @@ function recoveredOperationError(operation, message) {
 }
 
 async function acknowledgeUncertainOperation(operation) {
-  const response = await fetchWithDeadline(`/api/operations/${encodeURIComponent(operation.id)}/acknowledge`, {
+  const response = await fetchWithDeadline(dashboardUrl(`/api/operations/${encodeURIComponent(operation.id)}/acknowledge`), {
     cache: 'no-store',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -468,6 +481,10 @@ async function acknowledgeUncertainOperation(operation) {
 async function reconcileStoredOperations(interactive = false) {
   const pending = storedPendingOperations();
   for (const operation of pending) {
+    await prepareOperation(operation, {
+      preservePending: true,
+      acceptExistingTerminal: true,
+    });
     let statusResult;
     try {
       statusResult = await operationStatus(operation.id);
@@ -605,7 +622,7 @@ async function api(path, options = {}) {
     return queued;
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(dashboardUrl(path), {
     cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
     ...options,
@@ -1877,7 +1894,7 @@ async function waitForDashboardRestart() {
   await delay(1500);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
-      const response = await fetch(`/api/state?restart_check=${Date.now()}`, { cache: 'no-store' });
+      const response = await fetch(dashboardUrl(`/api/state?restart_check=${Date.now()}`), { cache: 'no-store' });
       if (response.ok) {
         window.location.reload();
         return;
@@ -2166,18 +2183,19 @@ function renderKnockingSummary(summary) {
 function renderStarSliderSummary(summary) {
   if (!summary) return '';
   const signs = [
-    ['Gemini', 'gemini', 7],
-    ['Libra', 'libra', 7],
-    ['Leo', 'leo', 10],
-    ['Sagittarius', 'sagittarius', 10],
-    ['Scorpio', 'scorpio', 10],
-    ['Aquarius', 'aquarius', 13],
-    ['Pisces', 'pisces', 13],
+    ['Zwillinge', 'gemini', 7],
+    ['Waage', 'libra', 7],
+    ['Löwe', 'leo', 10],
+    ['Schütze', 'sagittarius', 10],
+    ['Skorpion', 'scorpio', 10],
+    ['Wassermann', 'aquarius', 13],
+    ['Fische', 'pisces', 13],
   ];
   const symbol = (value, extraClass = '') => {
     const key = String(value || 'none').trim().toLowerCase();
     const glyph = STAR_SIGN_SYMBOLS[key] || '?';
-    return `<span class="star-sign-symbol ${extraClass}" title="${escapeAttr(key)}" aria-label="${escapeAttr(key)}">${glyph}</span>`;
+    const label = STAR_SIGN_LABELS[key] || STAR_SIGN_LABELS.none;
+    return `<span class="star-sign-symbol ${extraClass}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${glyph}</span>`;
   };
   const expected = ['scorpio', 'aquarius', 'libra'];
   const current = (summary.current?.values || []).map((value, index) => {
@@ -3238,7 +3256,7 @@ function renderLogArchiveSegments(payload) {
     const actions = document.createElement('td');
     actions.className = 'log-archive-actions';
     const download = document.createElement('a');
-    download.href = `/api/log-archive/segments/${encodeURIComponent(segment.id)}/download`;
+    download.href = dashboardUrl(`/api/log-archive/segments/${encodeURIComponent(segment.id)}/download`);
     download.textContent = 'Download';
     download.className = 'secondary-button';
     actions.appendChild(download);

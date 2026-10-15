@@ -369,3 +369,87 @@ zero service restarts, Dashboard `/`, `/games`, `/admin`, and `/api/state` retur
 all 8 nodes are online, and no error-priority journal entry occurred after update.
 All owned browser, server, profile, database, runner, and screenshot artifacts were
 removed. Next: normal operational monitoring.
+
+## 11. Top-level Website Integration And Readability (Approved 2026-10-14)
+
+### Goal And Scope
+
+Make ER1 work as protected top-level website documents instead of an iframe while
+preserving direct-LAN operation, local game-control independence, signed website
+audit identity, and backward compatibility with the old proxy prefix. Improve the
+remaining mobile viewport, riddle-label, hint readability, and low-height table
+issues without changing firmware, puzzle keys, or game rules.
+
+### Approved Behavior
+
+- ER1 consumes the website's forwarded prefix and generates prefix-aware fetch,
+  navigation, download, and operation URLs. Direct LAN access keeps an empty prefix
+  and remains functional.
+- Website-visible routes are `/admin/game-master`,
+  `/admin/game-master/games`, and `/admin/game-master/admin`. The old proxy path
+  remains temporarily usable for stored/in-flight operations.
+- Website authorization distinguishes `game_master.use` from
+  `game_master.admin`. Normal control and read-only saved-game viewing require
+  `game_master.use`; ER1 administration and saved-game/database mutation require
+  `game_master.admin`. Generic prepared operations are classified by their nested
+  target so they cannot bypass the stronger permission.
+- ER1's menu mirrors the approved grouped website navigation while its three local
+  tabs remain permanently available. Website route/API guards are authoritative.
+- Mobile uses one native root scroller and browser pull-to-refresh. The start/
+  booking-assignment status is sticky below the header instead of fixed beneath
+  browser chrome. Desktop keeps the status stack at the lower right.
+- Image tile labels are centered. Constellation display names, titles, and accessible
+  names are German; internal firmware keys and the solution remain unchanged.
+- Hint text and metadata plus Solve/Skip controls become operationally readable.
+  Late compact CSS rules must not undo the effective sizes.
+- The all-riddles table shows all entries without an internal scrollbar at normal
+  desktop height. Below approximately 800 CSS pixels it receives a bounded internal
+  scroll region.
+
+### Implementation And Verification
+
+1. Add prefix-aware server/template context and one client URL helper, convert all
+   root-absolute fetch/download/navigation call sites, and retain idempotent legacy
+   proxy compatibility.
+2. Add route/operation permission classification in the website before switching
+   entry pages from iframe wrappers to top-level proxy documents.
+3. Apply final-cascade mobile feedback, root-scroll, image-label, constellation,
+   hint/action typography, and height-query table rules.
+4. Update Python and JavaScript tests for direct and prefixed URLs, immutable puzzle
+   keys, German accessibility text, mobile behavior, and low-height desktop layout.
+5. Run all ER1 and website offline suites. Browser and production actions remain a
+   separately approved boundary.
+
+Success requires direct LAN and both proxy prefixes to function, native mobile root
+scrolling without clipped feedback, permission-safe mutation paths, unchanged game
+logic and keys, and passing full offline suites.
+
+Status: implemented locally on 2026-10-14. Prefix-aware direct, clean-proxy, and
+legacy-proxy paths, recovery preparation, grouped navigation, sticky mobile status,
+German constellation display labels, readability, and height-dependent riddle-table
+behavior are covered offline. Internal puzzle keys and solutions remain unchanged.
+The final ER1 suite passes all 188 Python and 19 JavaScript tests; the integrated
+website suite passes all 353 tests. Syntax/diff checks pass, and independent final
+reviews report no remaining concrete findings. The approved local headless-Chrome
+review exhausted its fixed 12-load budget. The first synthetic ER1 fixture failed
+to honor `X-Forwarded-Prefix`, so its
+Spielleitung desktop/mobile renderings are not valid product-layout evidence. After
+correcting the fixture, `/admin/game-master/games` loaded the real prefix-aware CSS
+and scripts, generated `/admin/game-master/api/db/update`, rendered as one document
+without iframe or horizontal overflow, and passed its detail-placement and styling
+checks. ER1 Admin content and clean routing also loaded, but its original asset load
+used the invalid fixture. Spielkontrolle desktop/mobile therefore remains covered by
+the 188 Python and 19 JavaScript tests rather than a final corrected browser render.
+No external HTTP(S) request occurred, and all owned browser/server/profile/fixture
+artifacts were removed. Commit/push, runtime update, and production checks have not
+been performed. A separately approved three-load follow-up loaded Spielleitung at
+1440x700 and 393x659 plus ER1 Admin at 1440x700 exactly once. All documents, actual
+ER1 CSS/JavaScript, favicon, and read-only APIs returned 200 through the clean prefix;
+all 23 browser requests stayed on loopback under `/admin/game-master`, and every
+upstream request carried `X-Forwarded-Prefix: /admin/game-master`. Twelve riddle rows,
+two current-riddle cards, eight admin node rows, and archive status rendered without
+console/page/request errors, external requests, iframe requests, or mutations. The
+runner's computed-style evaluator failed because its helper was outside the
+serialized browser scope. The fixed three-load limit prohibited retry, so exact
+desktop/mobile geometry remains offline-verified rather than finally confirmed by
+computed browser values. All follow-up processes and artifacts were removed.

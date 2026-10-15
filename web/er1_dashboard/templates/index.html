@@ -5,12 +5,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ER1 Spielleitung</title>
-  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}?v=20261013-dashboard-v21" />
+  <link rel="icon" type="image/x-icon" href="{{ dashboard_url('static', filename='favicon.ico') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ dashboard_url('static', filename='favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ dashboard_url('static', filename='apple-touch-icon.png') }}">
+  <link rel="stylesheet" href="{{ dashboard_url('static', filename='dashboard.css') }}?v=20261014-er1-prefix-v1" />
 </head>
-<body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}">
+<body class="dashboard-body dashboard-v6" data-initial-view="{{ initial_view|default('control') }}" data-url-prefix="{{ dashboard_url_prefix }}">
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.25"></circle><path d="M12.25 12H22m-3 0v3m-3-3v2"></path></symbol>
     <symbol id="icon-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"></path><circle cx="4" cy="6" r="1"></circle><circle cx="4" cy="12" r="1"></circle><circle cx="4" cy="18" r="1"></circle></symbol>
@@ -41,13 +41,14 @@
   ] %}
 
   <div class="dashboard-page-v6">
+    <div class="dashboard-sticky-top">
     <header class="operator-header">
       <div class="operator-leading">
-        {{ admin_menu(website_admin_links) }}
-        <a class="operator-brand" href="{{ url_for('index') }}" aria-label="Escape Room Schenna Spielleitung"><svg class="operator-brand-mark ui-icon" aria-hidden="true"><use href="#icon-key"></use></svg><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
+        {{ admin_menu(website_admin_groups, initial_view|default('control')) }}
+        <a class="operator-brand" href="{{ dashboard_tab_urls.control }}" aria-label="Escape Room Schenna Spielleitung"><svg class="operator-brand-mark ui-icon" aria-hidden="true"><use href="#icon-key"></use></svg><span><strong class="brand-desktop">Escape Room – Spielleitung</strong><strong class="brand-mobile">Spielleitung</strong></span></a>
         <div class="operator-connection" aria-live="polite"><span class="connection-dot"></span><span id="connectionLabel">Verbinde...</span></div>
       </div>
-      {{ dashboard_tabs(initial_view|default('control')) }}
+      {{ dashboard_tabs(initial_view|default('control'), dashboard_tab_urls) }}
       <div class="operator-clock"><span id="operatorDate"></span><strong id="operatorTime"></strong></div>
     </header>
 
@@ -55,6 +56,7 @@
       <div id="globalFeedback" class="global-feedback global-feedback-v6" aria-live="polite"><span id="globalFeedbackMessage"></span><button id="globalFeedbackClose" class="feedback-close" type="button" aria-label="Meldung schließen">&#215;</button></div>
       <div id="startAssignmentStatus" class="start-assignment-status hidden" aria-live="polite"><span id="startAssignmentMessage"></span><button id="startAssignmentClose" class="feedback-close" type="button" aria-label="Zuordnungsmeldung schließen">&#215;</button></div>
       <div id="summaryEmailFeedback" class="summary-email-feedback header-feedback"></div>
+    </div>
     </div>
 
     {% if initial_view|default('control') == 'control' %}
@@ -284,6 +286,7 @@
       <div class="confirm-shortcuts">Enter zum Bestätigen · Esc zum Abbrechen</div>
     </dialog>
   </div>
-  <script src="{{ url_for('static', filename='app.js') }}?v=20261013-dashboard-v21"></script>
+  <script src="{{ dashboard_url('static', filename='url-prefix.js') }}?v=20261014-er1-prefix-v1"></script>
+  <script src="{{ dashboard_url('static', filename='app.js') }}?v=20261014-er1-prefix-v1"></script>
 </body>
 </html>
