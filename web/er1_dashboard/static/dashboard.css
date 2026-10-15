@@ -5327,10 +5327,6 @@ button:disabled {
 }
 
 @media (min-width: 1101px) and (min-height: 801px) {
-  body.dashboard-v6[data-initial-view="control"] .control-workspace {
-    grid-template-rows: minmax(315px, 1fr) max-content;
-  }
-
   .all-riddles-panel,
   .all-riddles-panel .table-scroll-wrap {
     overflow: visible;

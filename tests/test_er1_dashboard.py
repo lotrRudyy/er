@@ -1970,6 +1970,8 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
             css,
             r'(?s)@media \(min-width: 1101px\) and \(min-height: 801px\).*?\.riddles-table-v6\s*\{[^}]*font-size: 14px;',
         )
+        self.assertNotIn("grid-template-rows: minmax(315px, 1fr) max-content;", css)
+        self.assertIn("grid-template-rows: clamp(368px, 43dvh, 404px) minmax(0, 1fr);", css)
         self.assertRegex(
             css,
             r'(?s)@media \(min-width: 1101px\) and \(max-height: 800px\).*?\.all-riddles-panel \.table-scroll-wrap\s*\{[^}]*max-height:[^;]+;[^}]*overflow-x: hidden;[^}]*overflow-y: auto;',
@@ -2164,7 +2166,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261014-er1-prefix-v1", html)
+        self.assertIn("dashboard.css') }}?v=20261015-er1-desktop-layout-v2", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):
