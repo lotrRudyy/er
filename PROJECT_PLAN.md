@@ -20,7 +20,21 @@ with no active run/timer and healthy persistence. The user explicitly approved t
 updater's controlled stop/start of `er1-web.service` and `game_master.service` and
 read-only post-deploy checks. Stop on drift or any failed safety gate; do not touch
 firmware, secrets, databases or logs. Production baseline marker: `26af5720`.
-Status: final source review/tests passed; publication in progress.
+Release completed 2026-11-18: functional commit `2426022d` is pushed and deployed.
+The first mandatory dry run refused phase 3 with a timer/live run; nothing on ER1
+was changed. After the user set ER1 to Aus and explicitly approved resuming, the
+fresh dry run confirmed idle state, exact baseline hashes and exactly two managed
+writes: `web/static/dashboard.css` and `web/templates/index.html`. The updater
+staged/validated those files, created rollback archive
+`/home/rudyy/er1/deploy-backups/pre-2426022d-20261118T073301Z-925c8303.tar.gz`,
+performed the approved service stop/start and passed its service/HTTP/state/
+persistence/hash/journal checks. The source marker is `2426022d`; post-deployment
+dry run reports no runtime changes. Website-to-ER1 verification returns 200 with
+phase 0/no timer/run and the corrected CSS. Staging and the owned lock were cleaned
+normally; firmware, secrets, databases, logs and environments were untouched.
+Website functional release `ebc7237` is also deployed and verified. Documentation-
+only release-record commits do not change these functional deployed revisions.
+Next: normal operational monitoring; no further deployment action is pending.
 
 ## 1. Project Goal
 
