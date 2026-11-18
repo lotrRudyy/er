@@ -2158,6 +2158,13 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
             self.assertIn(f"'{riddle}'", maintenance_source)
         self.assertNotIn("'chess'", maintenance_source)
 
+    def test_hint_cards_keep_their_content_height_in_scrollable_laptop_lists(self) -> None:
+        css = DASHBOARD_CSS_PATH.read_text(encoding="utf-8")
+        card_rules = "\n".join(re.findall(r"\.hint-template-list li\s*\{([^}]+)\}", css))
+        self.assertRegex(card_rules, r"flex-shrink:\s*0")
+        self.assertRegex(card_rules, r"overflow-wrap:\s*anywhere")
+        self.assertRegex(css, r"\.hint-panel\s*\{[^}]*min-width:\s*0")
+
     def test_control_room_layout_contract_is_present(self) -> None:
         html = HTML_PATH.read_text(encoding="utf-8")
         navigation = (HTML_PATH.parent / "_operator_navigation.html").read_text(encoding="utf-8")
@@ -2166,7 +2173,7 @@ function confirmAction() {{ confirmCalls += 1; return Promise.resolve(false); }}
 
         self.assertIn('class="dashboard-body dashboard-v6"', html)
         self.assertIn("filename='dashboard.css'", html)
-        self.assertIn("dashboard.css') }}?v=20261015-er1-desktop-layout-v2", html)
+        self.assertIn("dashboard.css') }}?v=20261117-hint-card-overlap-v1", html)
         self.assertNotIn("filename='style.css'", html)
         self.assertIn('class="operator-tabs"', navigation)
         for label in ("Spielkontrolle", "Alle Spiele", "Admin"):

@@ -1,5 +1,27 @@
 # ER1 Dashboard Reliability And Operations Plan
 
+## Admin Hint Layout Repair (Approved 2026-11-17)
+
+Website follow-up section 14 requests repair of overlapping hint suggestions on
+laptop Game Control. Preserve the existing layout and controls, maintain readable
+hint text and static due markers, and let excess cards scroll without shrinking
+into one another. No gameplay, hint inventory, firmware, production phase or
+automatic hint delivery change is authorized. Add focused offline regression
+coverage and run the full ER1 suite at completion. Browser/profile inspection and
+deployment require separate action approval. Status: fixed locally; 189 Python and
+19 JavaScript tests pass. The separately authorized isolated browser review proved
+overlap with the original CSS and none with the repair at 1366x768, 1440x900,
+1536x864 and 1280x720, including parallel riddles and long hint text. No horizontal
+overflow or dashboard JavaScript error occurred. Its owned browser/profile and
+fixture data were removed. No ER1 browser repeat or gameplay change is needed;
+Publication approved 2026-11-18: commit/push the reviewed changes and use the normal
+mandatory `er1 update -DryRun` followed by `er1 update`, only at confirmed phase 0
+with no active run/timer and healthy persistence. The user explicitly approved the
+updater's controlled stop/start of `er1-web.service` and `game_master.service` and
+read-only post-deploy checks. Stop on drift or any failed safety gate; do not touch
+firmware, secrets, databases or logs. Production baseline marker: `26af5720`.
+Status: final source review/tests passed; publication in progress.
+
 ## 1. Project Goal
 
 Keep ER1 game control fully usable on the local LAN, make operator actions and

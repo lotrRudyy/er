@@ -819,6 +819,7 @@ textarea {
 }
 
 .hint-panel {
+  min-width: 0;
   min-height: 0;
   padding-left: 10px;
   overflow: hidden;
@@ -860,6 +861,9 @@ textarea {
 }
 
 .hint-template-list li {
+  flex-shrink: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   min-height: 72px;
   padding: 12px 14px;
   border: 1px solid rgba(227, 169, 67, 0.25);
